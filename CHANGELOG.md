@@ -5,6 +5,12 @@
 - Added a watchdog loop in addition to one-shot due timers, so recurring jobs keep checking due work even if OpenCode misses an idle event or a due timeout gets effectively stuck behind a stale busy state.
 - Added stronger stale-active-run recovery. If a plugin-injected run is still marked active after the recovery window, the scheduler treats it as finished, finalizes it, and continues without waiting for another manual command such as `/loop-status`.
 - Fixed local plugin installs to write `opencode-loop.ts`, matching OpenCode local plugin discovery.
+- Removed stale `opencode-loop.js` local plugin copies during install to avoid duplicate or outdated local plugin loads.
+- Made the PowerShell source installer honor `OPENCODE_CONFIG_DIR`, matching the npm and shell installers.
+- Fixed `opencode-loopd` to pass the prompt to `opencode run` as the positional message instead of the non-existent `--prompt` flag.
+- Added a short retry backoff for failing `opencode-loopd --every 0s` runs.
+- Normalized command arguments from array/object forms so `opencode run --command loop ...` can schedule jobs like TUI slash commands.
+- Stripped whole-argument quote wrappers before parsing loop durations, fixing quoted `opencode run --command loop "1h ..."` invocations.
 - Fixed a goal finalization reassignment so the generated local TypeScript plugin parses under Bun.
 - Fixed the Windows Task Scheduler helper script path used by `opencode-loopd install-task`.
 - Tried current OpenCode SDK `{ path, body }` and `{ query }` argument shapes before older fallback shapes.

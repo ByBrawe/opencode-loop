@@ -8,6 +8,7 @@ ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 
 mkdir -p "$PLUGIN_DIR" "$COMMAND_DIR"
 cp "$ROOT_DIR/src/index.js" "$PLUGIN_DIR/opencode-loop.ts"
+rm -f "$PLUGIN_DIR/opencode-loop.js"
 cp "$ROOT_DIR/commands"/*.md "$COMMAND_DIR/"
 
 echo "Installed OpenCode Loop plugin."

@@ -5,6 +5,7 @@ import { spawn, spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
 const args = process.argv.slice(2)
+const FAILED_RUN_RETRY_MS = 5_000
 
 function arg(name, fallback = null) {
   const i = args.indexOf(name)
@@ -98,11 +99,14 @@ async function daemon() {
     console.log("")
     console.log(`[opencode-loopd] run #${count} ${new Date().toISOString()}`)
 
-    const command = `opencode run --continue --prompt ${JSON.stringify(prompt)}`
+    const command = `opencode run --continue ${JSON.stringify(prompt)}`
     const code = await run(command, project)
 
     if (code !== 0) {
       console.log(`[opencode-loopd] opencode exited with code ${code}`)
+      if (delay === 0) {
+        await sleep(FAILED_RUN_RETRY_MS)
+      }
     }
 
     if (maxRuns > 0 && count >= maxRuns) {

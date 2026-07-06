@@ -148,7 +148,7 @@ function parseCompactEvery(value) {
 }
 
 function parseLoopArgs(raw, defaults = {}) {
-  let input = String(raw || "").trim()
+  let input = stripOuterQuotes(String(raw || "").trim())
   let first = ""
   let rest = input
   let intervalMs = defaults.intervalMs ?? null
@@ -466,6 +466,18 @@ function normalizeArgsForKey(args) {
   if (typeof args === "string") return args.trim().replace(/\s+/g, " ")
   if (Array.isArray(args)) return args.map(normalizeArgsForKey).join(" ").trim().replace(/\s+/g, " ")
   try { return JSON.stringify(args) } catch { return String(args) }
+}
+
+function commandArgsText(args) {
+  if (args === undefined || args === null) return ""
+  if (typeof args === "string") return args
+  if (Array.isArray(args)) return args.map(commandArgsText).join(" ")
+  if (typeof args === "object") {
+    for (const key of ["arguments", "args", "message", "text", "value"]) {
+      if (args[key] !== undefined) return commandArgsText(args[key])
+    }
+  }
+  return String(args)
 }
 
 function rememberSession(directory, client, sessionID) {
@@ -1588,7 +1600,7 @@ async function exportLoop(directory, client, sessionID) {
 async function handleCommand(directory, client, input, fallbackName, fallbackArgs, output) {
   const name = commandName(input?.command ?? input?.name ?? fallbackName)
   const sessionID = input?.sessionID
-  const args = input?.arguments ?? fallbackArgs ?? ""
+  const args = commandArgsText(input?.arguments ?? fallbackArgs ?? "")
   if (!sessionID || !name) return false
   rememberSession(directory, client, sessionID)
   if (wasHandled(sessionID, name, args)) return true

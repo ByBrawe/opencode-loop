@@ -178,6 +178,7 @@ npx -y @bybrawe/opencode-loop
 ```
 
 The installer copies the plugin and slash command files into your OpenCode config directory.
+It also removes the old local `opencode-loop.js` copy from earlier releases so only the current local `opencode-loop.ts` plugin remains.
 
 Windows target paths:
 
