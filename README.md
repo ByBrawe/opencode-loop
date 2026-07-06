@@ -182,14 +182,14 @@ The installer copies the plugin and slash command files into your OpenCode confi
 Windows target paths:
 
 ```text
-%USERPROFILE%\.config\opencode\plugins\opencode-loop.js
+%USERPROFILE%\.config\opencode\plugins\opencode-loop.ts
 %USERPROFILE%\.config\opencode\commands\loop*.md
 ```
 
 macOS / Linux target paths:
 
 ```text
-~/.config/opencode/plugins/opencode-loop.js
+~/.config/opencode/plugins/opencode-loop.ts
 ~/.config/opencode/commands/loop*.md
 ```
 
@@ -273,7 +273,7 @@ Windows PowerShell:
 ```powershell
 mkdir "$env:USERPROFILE\.config\opencode\plugins" -Force
 mkdir "$env:USERPROFILE\.config\opencode\commands" -Force
-copy .\src\index.js "$env:USERPROFILE\.config\opencode\plugins\opencode-loop.js"
+copy .\src\index.js "$env:USERPROFILE\.config\opencode\plugins\opencode-loop.ts"
 copy .\commands\*.md "$env:USERPROFILE\.config\opencode\commands\"
 ```
 
@@ -281,7 +281,7 @@ macOS / Linux:
 
 ```bash
 mkdir -p ~/.config/opencode/plugins ~/.config/opencode/commands
-cp ./src/index.js ~/.config/opencode/plugins/opencode-loop.js
+cp ./src/index.js ~/.config/opencode/plugins/opencode-loop.ts
 cp ./commands/*.md ~/.config/opencode/commands/
 ```
 
@@ -291,7 +291,7 @@ Use this when you want the plugin to be available only inside one repository.
 
 ```bash
 mkdir -p .opencode/plugins .opencode/commands
-cp ./src/index.js .opencode/plugins/opencode-loop.js
+cp ./src/index.js .opencode/plugins/opencode-loop.ts
 cp ./commands/*.md .opencode/commands/
 ```
 
@@ -300,7 +300,7 @@ On Windows PowerShell:
 ```powershell
 mkdir .opencode\plugins -Force
 mkdir .opencode\commands -Force
-copy .\src\index.js .opencode\plugins\opencode-loop.js
+copy .\src\index.js .opencode\plugins\opencode-loop.ts
 copy .\commands\*.md .opencode\commands\
 ```
 
@@ -316,7 +316,7 @@ After restarting OpenCode, run:
 If the commands do not appear:
 
 1. Make sure OpenCode was fully restarted.
-2. Check that `opencode-loop.js` exists in the OpenCode plugin directory.
+2. Check that `opencode-loop.ts` exists in the OpenCode plugin directory.
 3. Check that `loop.md`, `loop-help.md`, and the other command files exist in the OpenCode commands directory.
 4. Run `npx -y @bybrawe/opencode-loop` again to reinstall the command files.
 

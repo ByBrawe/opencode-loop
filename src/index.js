@@ -390,8 +390,8 @@ async function executeTuiCommand(client, command) {
   if (!client?.tui?.executeCommand) throw new Error("client.tui.executeCommand is not available")
   return await sdkCall(
     client.tui.executeCommand.bind(client.tui),
-    { command },
     { body: { command } },
+    { command },
   )
 }
 
@@ -415,7 +415,7 @@ async function compactSession(client, sessionID) {
     }
   }
   try {
-    await sdkCall(client.session.summarize.bind(client.session), { sessionID }, { path: { id: sessionID }, body: {} })
+    await sdkCall(client.session.summarize.bind(client.session), { path: { id: sessionID }, body: {} }, { sessionID })
     return true
   } catch (error) {
     await log(client, "warn", "session.summarize fallback failed", { error: sdkErrorMessage(error) })
@@ -428,22 +428,22 @@ async function log(client, level, message, extra) {
   try {
     await sdkCall(
       client.app.log.bind(client.app),
-      extra === undefined ? { service: SERVICE, level, message } : { service: SERVICE, level, message, extra },
       { body: extra === undefined ? { service: SERVICE, level, message } : { service: SERVICE, level, message, extra } },
+      extra === undefined ? { service: SERVICE, level, message } : { service: SERVICE, level, message, extra },
     )
   } catch {}
 }
 
 async function toast(client, message, variant = "info") {
-  try { await sdkCall(client.tui.showToast.bind(client.tui), { message, variant }, { body: { message, variant } }) } catch {}
+  try { await sdkCall(client.tui.showToast.bind(client.tui), { body: { message, variant } }, { message, variant }) } catch {}
 }
 
 async function say(client, sessionID, text) {
   try {
     await sdkCall(
       client.session.prompt.bind(client.session),
-      { sessionID, noReply: true, parts: [{ type: "text", text }] },
       { path: { id: sessionID }, body: { noReply: true, parts: [{ type: "text", text }] } },
+      { sessionID, noReply: true, parts: [{ type: "text", text }] },
     )
   } catch {}
 }
@@ -809,7 +809,7 @@ function staleActiveRun(sessionID) {
 
 async function readLiveSessionStatus(client, sessionID, directory) {
   const argsList = []
-  if (directory) argsList.push({ workspace: directory }, { directory })
+  if (directory) argsList.push({ query: { directory } }, { workspace: directory }, { directory })
   argsList.push({})
   for (const args of argsList) {
     try {
@@ -1140,7 +1140,7 @@ async function finalizeActiveRun(directory, client, sessionID) {
   if (!active) return
   clearActiveRun(sessionID)
   const state = await readState(directory, sessionID)
-  const job = (state.jobs || []).find((candidate) => candidate.id === active.jobId)
+  let job = (state.jobs || []).find((candidate) => candidate.id === active.jobId)
   if (!job) return
   job.lastFinishedAt = now()
 
@@ -1209,7 +1209,7 @@ async function fireAction(directory, client, sessionID, job) {
       await compactSession(client, sessionID)
       return { startsAssistantTurn: true }
     }
-    await sdkCall(client.session.command.bind(client.session), { sessionID, command, arguments: argumentsText }, { path: { id: sessionID }, body: { command, arguments: argumentsText } })
+    await sdkCall(client.session.command.bind(client.session), { path: { id: sessionID }, body: { command, arguments: argumentsText } }, { sessionID, command, arguments: argumentsText })
     return { startsAssistantTurn: true }
   }
   if (kind === "shell") {
@@ -1219,18 +1219,18 @@ async function fireAction(directory, client, sessionID, job) {
       await appendLoopLog(directory, "blocked", { sessionID, job: job.name || job.id, command })
       return { startsAssistantTurn: false }
     }
-    fireSdk(client, "session.shell", client.session.shell.bind(client.session), { sessionID, command }, { path: { id: sessionID }, body: { command } })
+    fireSdk(client, "session.shell", client.session.shell.bind(client.session), { path: { id: sessionID }, body: { command } }, { sessionID, command })
     return { startsAssistantTurn: true }
   }
   const prompt = await buildPrompt(directory, job)
   const prefix = kind === "goal"
     ? "EXPERIMENTAL GOAL MODE CONTINUATION. Continue pursuing the active goal. Do not explain the /loop-goal command. Use the goal tools only when progress/completion/block state is real."
     : "AUTONOMOUS OPENCODE LOOP ITERATION. Continue the configured task now. Do not explain the /loop command. Do not search for documentation about this plugin. Do not create scheduler files. Do not ask questions. Make reasonable assumptions and work directly."
-  fireSdk(client, "session.prompt", client.session.prompt.bind(client.session), { sessionID, parts: [{ type: "text", text: `${prefix}
+  fireSdk(client, "session.prompt", client.session.prompt.bind(client.session), { path: { id: sessionID }, body: { parts: [{ type: "text", text: `${prefix}
 
-${prompt}` }] }, { path: { id: sessionID }, body: { parts: [{ type: "text", text: `${prefix}
+${prompt}` }] } }, { sessionID, parts: [{ type: "text", text: `${prefix}
 
-${prompt}` }] } })
+${prompt}` }] })
   return { startsAssistantTurn: true }
 }
 
@@ -1346,7 +1346,7 @@ async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
         return
       }
       let timer
-      if (job.timeoutMs > 0) timer = setTimeout(() => { fireSdk(client, "session.abort", client.session.abort.bind(client.session), { sessionID }, { path: { id: sessionID }, body: {} }); toast(client, `Loop timeout fired: ${job.name || job.id}`, "warning").catch(() => {}) }, job.timeoutMs)
+      if (job.timeoutMs > 0) timer = setTimeout(() => { fireSdk(client, "session.abort", client.session.abort.bind(client.session), { path: { id: sessionID }, body: {} }, { sessionID }); toast(client, `Loop timeout fired: ${job.name || job.id}`, "warning").catch(() => {}) }, job.timeoutMs)
       activeRuns.set(sessionID, { jobId: job.id, job, startedAt: now(), timer })
       await reschedule(BUSY_RETRY_MS)
     } catch (error) {

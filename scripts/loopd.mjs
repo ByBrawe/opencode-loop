@@ -2,6 +2,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
+import { fileURLToPath } from "node:url"
 
 const args = process.argv.slice(2)
 
@@ -127,7 +128,7 @@ function installTask() {
   const promptFile = arg("--prompt-file")
   const promptArg = arg("--prompt")
   const node = process.execPath
-  const script = path.resolve(new URL(import.meta.url).pathname)
+  const script = fileURLToPath(import.meta.url)
 
   const commandParts = [
     `"${node}"`,
