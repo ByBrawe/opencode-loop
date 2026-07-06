@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.13
+
+- Wrapped experimental goal tools with `tool()` and Zod schemas for current OpenCode tool validation.
+- Added `@opencode-ai/plugin` as a dev dependency so fresh clones can resolve the tool helper during local development.
+
 ## 0.5.12
 
 - Fixed local plugin installs to write `opencode-loop.ts`, matching OpenCode local plugin discovery.

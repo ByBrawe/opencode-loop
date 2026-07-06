@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs"
 import path from "node:path"
 import { spawn } from "node:child_process"
+import { tool } from "@opencode-ai/plugin/tool"
 
 const SERVICE = "opencode-loop"
 const STATE_DIR = ".opencode/opencode-loop"
@@ -1640,39 +1641,39 @@ async function handleCommand(directory, client, input, fallbackName, fallbackArg
 
 function goalTools(defaultDirectory) {
   return {
-    opencode_loop_goal_complete: {
+    opencode_loop_goal_complete: tool({
       description: "Mark the current OpenCode Loop experimental goal as completed. Use only after acceptance criteria are satisfied and you have evidence from tests, typecheck, build, or code inspection.",
       args: {
-        summary: { type: "string", description: "Short human-readable summary of what was completed." },
-        evidence: { type: "string", description: "Concrete evidence that the goal is complete, such as commands run, passing checks, files changed, and important results." },
+        summary: tool.schema.string().describe("Short human-readable summary of what was completed."),
+        evidence: tool.schema.string().describe("Concrete evidence that the goal is complete, such as commands run, passing checks, files changed, and important results."),
       },
       execute: async (args, context) => {
         const result = await setGoalComplete(context.directory || defaultDirectory, context.sessionID, args)
         return { title: result.ok ? "Goal completed" : "Goal not found", output: result.message }
       },
-    },
-    opencode_loop_goal_blocked: {
+    }),
+    opencode_loop_goal_blocked: tool({
       description: "Mark the current OpenCode Loop experimental goal as blocked when user input or manual intervention is required.",
       args: {
-        reason: { type: "string", description: "Why the goal is blocked." },
-        needed: { type: "string", description: "What user input, credential, decision, or manual action is needed to continue." },
+        reason: tool.schema.string().describe("Why the goal is blocked."),
+        needed: tool.schema.string().describe("What user input, credential, decision, or manual action is needed to continue."),
       },
       execute: async (args, context) => {
         const result = await setGoalBlocked(context.directory || defaultDirectory, context.sessionID, args)
         return { title: result.ok ? "Goal blocked" : "Goal not found", output: result.message }
       },
-    },
-    opencode_loop_goal_progress: {
+    }),
+    opencode_loop_goal_progress: tool({
       description: "Record meaningful progress on the current OpenCode Loop experimental goal without completing it.",
       args: {
-        summary: { type: "string", description: "What useful progress was made." },
-        next: { type: "string", description: "The next step toward completing the goal." },
+        summary: tool.schema.string().describe("What useful progress was made."),
+        next: tool.schema.string().describe("The next step toward completing the goal."),
       },
       execute: async (args, context) => {
         const result = await setGoalProgress(context.directory || defaultDirectory, context.sessionID, args)
         return { title: result.ok ? "Goal progress" : "Goal not found", output: result.message }
       },
-    },
+    }),
   }
 }
 
