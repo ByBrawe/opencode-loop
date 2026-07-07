@@ -151,30 +151,10 @@ OpenCode Loop is designed for developers searching for:
 
 ### Recommended: install from npm
 
-For a clean reinstall or upgrade, use the latest published package:
+Use the npm installer from any shell: Windows PowerShell, Windows CMD, macOS, or Linux.
 
 ```bash
 npx -y @bybrawe/opencode-loop@latest
-```
-
-Then fully restart OpenCode.
-
-Install from npm with `npx`:
-
-```bash
-npx -y @bybrawe/opencode-loop
-```
-
-On Windows CMD:
-
-```bat
-npx -y @bybrawe/opencode-loop
-```
-
-On Windows PowerShell:
-
-```powershell
-npx -y @bybrawe/opencode-loop
 ```
 
 The installer copies the plugin and slash command files into your OpenCode config directory.
@@ -217,6 +197,7 @@ The `npx` installer installs both parts:
 - the `/loop-*` command markdown files
 
 Use the OpenCode config-only method only if you already installed the command files separately or you are only testing plugin loading.
+Do not use the config package entry and the local `npx`-installed plugin at the same time unless you intentionally want to test duplicate plugin loading.
 
 ### Optional: OpenCode config package entry
 
@@ -238,6 +219,8 @@ If `/loop` does not appear after using only the config method, run the installer
 ```bash
 npx -y @bybrawe/opencode-loop
 ```
+
+If you later switch back to the recommended `npx` local install, remove `@bybrawe/opencode-loop` from the `plugin` array to avoid loading the package plugin and local plugin together.
 
 ### Install from GitHub
 
@@ -1113,6 +1096,16 @@ Improve the application in small safe steps.
 
 ## Changelog highlights
 
+### v0.5.13
+
+- Wrapped experimental goal tools with OpenCode's `tool()` helper and Zod schemas for current OpenCode tool validation.
+- Added `@opencode-ai/plugin` as a development dependency so fresh clones can resolve the tool helper.
+
+### v0.5.12
+
+- Changed local installs to write `opencode-loop.ts` and remove stale `opencode-loop.js` copies.
+- Fixed OpenCode CLI command argument parsing, current SDK call shapes, and `opencode-loopd` prompt passing.
+
 ### v0.5.7
 
 - Added experimental Goal Mode with `/loop-goal <objective>`.
@@ -1127,11 +1120,11 @@ Improve the application in small safe steps.
 - Stabilized `/loop-command 200m /compact` by routing compact/summarize through OpenCode TUI compact handling instead of treating it as a custom prompt command.
 - Clarified that command loops wait for idle and should be used for slash commands such as `/compact`.
 
-## v0.5.5
+### v0.5.5
 
 - Added explicit loop action types: prompt, scheduled question, OpenCode slash command, and shell command.
 - Added `/loop-command` / `/loop-cmd` for commands such as `/compact`; these wait for the first interval by default.
-- Added `/loop-ask` for recurring checks such as “did you run tests, tsc --noEmit, and build?”; it waits for the first interval by default.
+- Added `/loop-ask` for recurring checks such as "did you run tests, tsc --noEmit, and build?"; it waits for the first interval by default.
 - Added `/loop-shell` for recurring shell commands.
 - Added `--prompt`, `--ask`, `--command`, `--cmd`, `--slash`, `--shell`, and `--compact` type flags for `/loop`.
 - Clarified idle behavior: if a job becomes due while OpenCode is busy, it waits and runs on the next idle event.
