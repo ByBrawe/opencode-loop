@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.15
+
+- Hardened experimental Goal Mode completion: agent tool completion now requires concrete evidence instead of accepting empty or generic claims.
+- Required configured goal `--check` commands to pass before agent-tool completion, unless the user explicitly opts out or manually marks the goal done.
+- Added a no-progress guard for goals. Goals pause after 3 turns without recorded meaningful progress by default, configurable with `--max-no-progress`.
+- Paused active goals when a real user message arrives, so new user intent wins before the next automatic continuation.
+- Preferred current OpenCode 1.17-style flat SDK arguments for session, TUI, and log calls while keeping older SDK fallbacks.
+- Updated local installers to create or update config `package.json` with `@opencode-ai/plugin`, needed by local `.ts` plugins that import `tool()`.
+- Updated Goal Mode status/report output and README guidance for the new guards.
+
 ## 0.5.14
 
 - Guarded active-run finalization so heartbeat and retry checks do not treat a still-running assistant turn as finished.

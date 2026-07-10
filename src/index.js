@@ -17,9 +17,12 @@ const MAX_SCAN_FILES = 200
 const MAX_SCAN_BYTES = 2_000_000
 const GOAL_REPORT_DIR = "goals"
 const GOAL_PROMPT_PREFIX = "EXPERIMENTAL OPENCODE GOAL MODE ITERATION"
+const DEFAULT_GOAL_MAX_NO_PROGRESS = 3
+const LOOP_OWNED_USER_MESSAGE_GUARD_MS = 10_000
 
 const activeRuns = new Map()
 const handledCommands = new Map()
+const loopOwnedUserMessageGuards = new Map()
 const idleTimers = new Map()
 const dueTimers = new Map()
 const watchdogTimers = new Map()
@@ -142,6 +145,11 @@ function parsePositiveInt(value, fallback = 0) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
+function parseNonNegativeInt(value, fallback = 0) {
+  const parsed = Number.parseInt(String(value || ""), 10)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback
+}
+
 function parseCompactEvery(value) {
   const duration = parseDuration(value)
   if (duration !== null) return { compactEveryMs: duration }
@@ -203,11 +211,16 @@ function parseLoopArgs(raw, defaults = {}) {
     goalAcceptance: Array.isArray(defaults.goalAcceptance) ? [...defaults.goalAcceptance] : [],
     goalChecks: Array.isArray(defaults.goalChecks) ? [...defaults.goalChecks] : [],
     goalCompleteWhenChecksPass: defaults.goalCompleteWhenChecksPass ?? false,
+    goalRequireEvidence: defaults.goalRequireEvidence,
+    goalRequireChecksPass: defaults.goalRequireChecksPass,
     goalEvidenceFile: defaults.goalEvidenceFile,
     goalSummary: defaults.goalSummary || "",
     goalEvidence: defaults.goalEvidence || "",
     goalBlockedReason: defaults.goalBlockedReason || "",
     goalProgress: Array.isArray(defaults.goalProgress) ? [...defaults.goalProgress] : [],
+    maxNoProgress: defaults.maxNoProgress,
+    noProgressCount: defaults.noProgressCount ?? 0,
+    lastProgressAt: defaults.lastProgressAt ?? 0,
     noOverlap: defaults.noOverlap ?? true,
     safe: defaults.safe ?? false,
     quiet: defaults.quiet ?? false,
@@ -255,10 +268,16 @@ function parseLoopArgs(raw, defaults = {}) {
   ;[found, rest] = takeFlag(rest, "--goal"); if (found) job.kind = "goal"
   ;[found, rest] = takeFlag(rest, "--complete-when-checks-pass"); if (found) job.goalCompleteWhenChecksPass = true
   ;[found, rest] = takeFlag(rest, "--no-complete-when-checks-pass"); if (found) job.goalCompleteWhenChecksPass = false
+  ;[found, rest] = takeFlag(rest, "--require-evidence"); if (found) job.goalRequireEvidence = true
+  ;[found, rest] = takeFlag(rest, "--allow-weak-evidence"); if (found) job.goalRequireEvidence = false
+  ;[found, rest] = takeFlag(rest, "--require-checks-pass"); if (found) job.goalRequireChecksPass = true
+  ;[found, rest] = takeFlag(rest, "--allow-complete-without-checks"); if (found) job.goalRequireChecksPass = false
+  ;[found, rest] = takeFlag(rest, "--allow-complete-with-failing-checks"); if (found) job.goalRequireChecksPass = false
 
   ;[value, rest] = takeFlagValue(rest, "--name"); if (value !== undefined) job.name = value.trim()
   ;[value, rest] = takeFlagValue(rest, "--max-runs"); if (value !== undefined) job.maxRuns = parsePositiveInt(value, 0)
   ;[value, rest] = takeFlagValue(rest, "--max-turns"); if (value !== undefined) job.maxRuns = parsePositiveInt(value, 0)
+  ;[value, rest] = takeFlagValue(rest, "--max-no-progress"); if (value !== undefined) job.maxNoProgress = parseNonNegativeInt(value, DEFAULT_GOAL_MAX_NO_PROGRESS)
   ;[value, rest] = takeFlagValue(rest, "--timeout"); if (value !== undefined) job.timeoutMs = parseDuration(value) ?? 0
   ;[value, rest] = takeFlagValue(rest, "--max-runtime"); if (value !== undefined) job.maxRuntimeMs = parseDuration(value) ?? 0
   ;[value, rest] = takeFlagValue(rest, "--max-failures"); if (value !== undefined) job.maxFailures = parsePositiveInt(value, 0)
@@ -309,6 +328,9 @@ function parseLoopArgs(raw, defaults = {}) {
     job.safe = job.safe !== false
     job.askNever = job.askNever !== false
     job.noOverlap = job.noOverlap !== false
+    job.goalRequireEvidence = job.goalRequireEvidence !== false
+    job.goalRequireChecksPass = job.goalRequireChecksPass ?? job.goalChecks.length > 0
+    job.maxNoProgress = job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS
   }
   job.lastRunAt = job.immediate ? 0 : now()
 
@@ -399,32 +421,25 @@ function sdkErrorMessage(error) {
   return String(error)
 }
 
-async function sdkCall(method, modernArgs, legacyArgs) {
+async function sdkCall(method, ...argsList) {
   let firstError
-  try {
-    const result = await method(modernArgs)
-    const error = sdkError(result)
-    if (!error) return sdkData(result)
-    firstError = new Error(sdkErrorMessage(error))
-  } catch (error) {
-    firstError = error
-  }
-  if (legacyArgs !== undefined) {
+  for (const args of argsList) {
+    if (args === undefined) continue
     try {
-      const result = await method(legacyArgs)
+      const result = await method(args)
       const error = sdkError(result)
       if (!error) return sdkData(result)
-      throw new Error(sdkErrorMessage(error))
+      firstError = firstError || new Error(sdkErrorMessage(error))
     } catch (error) {
-      throw error
+      firstError = firstError || error
     }
   }
-  throw firstError
+  throw firstError || new Error("SDK call failed without arguments")
 }
 
-function fireSdk(client, label, method, modernArgs, legacyArgs) {
+function fireSdk(client, label, method, ...argsList) {
   Promise.resolve()
-    .then(() => sdkCall(method, modernArgs, legacyArgs))
+    .then(() => sdkCall(method, ...argsList))
     .catch((error) => log(client, "warn", `${label} failed`, { error: sdkErrorMessage(error) }))
 }
 
@@ -432,6 +447,7 @@ async function executeTuiCommand(client, command) {
   if (!client?.tui?.executeCommand) throw new Error("client.tui.executeCommand is not available")
   return await sdkCall(
     client.tui.executeCommand.bind(client.tui),
+    { command },
     { body: { command } },
     { command },
   )
@@ -457,7 +473,13 @@ async function compactSession(client, sessionID) {
     }
   }
   try {
-    await sdkCall(client.session.summarize.bind(client.session), { path: { id: sessionID }, body: {} }, { sessionID })
+    await sdkCall(
+      client.session.summarize.bind(client.session),
+      { sessionID },
+      { path: { sessionID }, body: {} },
+      { path: { id: sessionID }, body: {} },
+      { sessionID },
+    )
     return true
   } catch (error) {
     await log(client, "warn", "session.summarize fallback failed", { error: sdkErrorMessage(error) })
@@ -470,6 +492,7 @@ async function log(client, level, message, extra) {
   try {
     await sdkCall(
       client.app.log.bind(client.app),
+      extra === undefined ? { service: SERVICE, level, message } : { service: SERVICE, level, message, extra },
       { body: extra === undefined ? { service: SERVICE, level, message } : { service: SERVICE, level, message, extra } },
       extra === undefined ? { service: SERVICE, level, message } : { service: SERVICE, level, message, extra },
     )
@@ -477,13 +500,32 @@ async function log(client, level, message, extra) {
 }
 
 async function toast(client, message, variant = "info") {
-  try { await sdkCall(client.tui.showToast.bind(client.tui), { body: { message, variant } }, { message, variant }) } catch {}
+  try { await sdkCall(client.tui.showToast.bind(client.tui), { message, variant }, { body: { message, variant } }, { message, variant }) } catch {}
+}
+
+function guardLoopOwnedUserMessage(sessionID) {
+  if (!sessionID) return
+  loopOwnedUserMessageGuards.set(sessionID, now() + LOOP_OWNED_USER_MESSAGE_GUARD_MS)
+  for (const [key, time] of loopOwnedUserMessageGuards.entries()) if (time < now()) loopOwnedUserMessageGuards.delete(key)
+}
+
+function loopOwnedUserMessageGuardActive(sessionID) {
+  const until = loopOwnedUserMessageGuards.get(sessionID)
+  if (typeof until !== "number") return false
+  if (until < now()) {
+    loopOwnedUserMessageGuards.delete(sessionID)
+    return false
+  }
+  return true
 }
 
 async function say(client, sessionID, text) {
+  guardLoopOwnedUserMessage(sessionID)
   try {
     await sdkCall(
       client.session.prompt.bind(client.session),
+      { sessionID, noReply: true, parts: [{ type: "text", text }] },
+      { path: { sessionID }, body: { noReply: true, parts: [{ type: "text", text }] } },
       { path: { id: sessionID }, body: { noReply: true, parts: [{ type: "text", text }] } },
       { sessionID, noReply: true, parts: [{ type: "text", text }] },
     )
@@ -502,6 +544,9 @@ function wasHandled(sessionID, name, args) {
 
 function commandName(name) { return String(name || "") }
 function isPreset(name) { return ["loop-dev", "loop-testfix", "loop-compact", "loop-progress", "loop-safe-dev", "loop-command", "loop-cmd", "loop-prompt", "loop-ask", "loop-shell"].includes(name) }
+function isLoopCommandName(name) {
+  return name === "loop" || name === "loop-stop" || name === "loop-remove" || name === "loop-clear" || name === "loop-status" || name === "loop-logs" || name === "loop-help" || name === "loop-now" || name === "loop-pause" || name === "loop-resume" || name === "loop-doctor" || name === "loop-init" || name === "loop-export" || name === "loop-goal" || name === "loop-goal-status" || name === "loop-goal-pause" || name === "loop-goal-resume" || name === "loop-goal-clear" || name === "loop-goal-done" || name === "loop-goal-complete" || name === "loop-goal-blocked" || isPreset(name)
+}
 
 function normalizeArgsForKey(args) {
   if (args === undefined || args === null) return ""
@@ -575,10 +620,11 @@ function jobLabel(job) {
   const verify = job.verifyCommand ? ", verify" : ""
   const preflight = job.preflightCommand ? ", preflight" : ""
   const failures = job.maxFailures > 0 ? `, max failures ${job.maxFailures}` : ""
+  const noProgress = isGoalJob(job) && (job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0 ? `, max no-progress ${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS}` : ""
   const stopFile = job.stopFile ? ", stop-file" : ""
   const watch = job.watchPaths?.length ? `, watch ${job.watchPaths.join(",")}` : ""
   const paused = job.paused ? ", paused" : ""
-  return `${title}${durationToText(job.intervalMs)}${kind} -> ${job.action || `[prompt-file: ${job.promptFile}]`}${limit}${runtime}${timeout}${compact}${verify}${preflight}${failures}${stopFile}${watch}${paused}`
+  return `${title}${durationToText(job.intervalMs)}${kind} -> ${job.action || `[prompt-file: ${job.promptFile}]`}${limit}${runtime}${timeout}${compact}${verify}${preflight}${failures}${noProgress}${stopFile}${watch}${paused}`
 }
 
 function matchJob(job, target, index) {
@@ -698,6 +744,8 @@ async function buildGoalPrompt(directory, job) {
   if (job.verifyCommand) sections.push(`Post-turn verify command configured by the loop: ${job.verifyCommand}`)
   if (job.lastGoalChecks?.length) sections.push("Latest goal check results:\n" + job.lastGoalChecks.map((item) => `- ${item.command}: exit ${item.code}`).join("\n"))
   if (job.lastVerifyFailure) sections.push("Previous verify/check failure summary:\n" + String(job.lastVerifyFailure).slice(0, 1600))
+  if (job.goalCompletionRejectedReason) sections.push(`Previous completion attempt was rejected:\n${job.goalCompletionRejectedReason}`)
+  if ((job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0) sections.push(`No-progress guard:\n${job.noProgressCount || 0}/${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS} recent turn(s) without recorded meaningful progress.`)
   if (job.goalProgress?.length) sections.push("Recent goal progress:\n" + job.goalProgress.slice(-5).map((item) => `- ${item.time}: ${item.summary}`).join("\n"))
   for (const file of job.includeFiles || []) {
     const text = await readSmallTextFile(path.resolve(directory, file), 80_000)
@@ -712,9 +760,12 @@ Rules:
 - Work on the next smallest useful step toward the goal.
 - Prefer direct code changes, tests, typechecks, builds, and evidence over discussion.
 - Do not claim the goal is complete unless the acceptance criteria are satisfied and verification evidence supports it.
+- If verification commands are configured, do not call opencode_loop_goal_complete until the latest relevant checks have passed unless the user explicitly overrides the goal.
+- Completion evidence must be concrete: mention commands, files, checks, results, or code inspection details.
 - When the goal is complete, call the tool opencode_loop_goal_complete with a summary and evidence.
 - If you are truly blocked and need user input, call the tool opencode_loop_goal_blocked with the reason and what is needed.
 - If you made meaningful progress but the goal is not complete, call the tool opencode_loop_goal_progress with the summary and next step.
+- If you cannot make meaningful progress for this turn, call opencode_loop_goal_blocked instead of repeating the same attempt.
 - Do not call completion tools just to be polite; only call them when the state is real.
 - Do not ask the user questions unless blocked; make reasonable assumptions and continue.
 - Follow safety rules: no destructive commands, force pushes, production deploys, production database resets, or deleting user data.
@@ -852,6 +903,39 @@ function updateSessionStatusFromEvent(event) {
   return undefined
 }
 
+function userInterruptSessionFromEvent(event) {
+  if (!["message.updated", "message.created"].includes(String(event?.type || ""))) return undefined
+  const props = event?.properties || {}
+  const info = props.info || props.message || props
+  const role = info?.role
+  const sessionID = info?.sessionID || props.sessionID
+  if (role !== "user" || typeof sessionID !== "string") return undefined
+  if (loopOwnedUserMessageGuardActive(sessionID)) return undefined
+  return sessionID
+}
+
+async function pauseGoalsForUserInterrupt(directory, client, sessionID) {
+  const state = await readState(directory, sessionID)
+  const interruptedAt = now()
+  let count = 0
+  state.jobs = (state.jobs || []).map((job) => {
+    if (!isGoalJob(job) || job.paused || job.enabled === false || ["completed", "blocked", "cleared"].includes(job.goalStatus)) return job
+    count++
+    return {
+      ...job,
+      paused: true,
+      lastUserInterruptAt: interruptedAt,
+      goalInterruptedReason: "Paused because the user sent a new message while the experimental goal was active.",
+    }
+  })
+  if (!count) return false
+  await writeState(directory, sessionID, state)
+  await toast(client, `Paused ${count} experimental goal(s) because a new user message arrived. Resume with /loop-goal-resume.`, "warning")
+  await appendLoopLog(directory, "goal-user-interrupt", { sessionID, count })
+  await scheduleDueWork(directory, client, sessionID)
+  return true
+}
+
 function staleActiveRun(sessionID) {
   const active = activeRuns.get(sessionID)
   if (!active) return false
@@ -876,7 +960,7 @@ async function canFinalizeActiveRun(directory, client, sessionID, active, option
 
 async function readLiveSessionStatus(client, sessionID, directory) {
   const argsList = []
-  if (directory) argsList.push({ query: { directory } }, { workspace: directory }, { directory })
+  if (directory) argsList.push({ directory }, { query: { directory } }, { workspace: directory }, { directory })
   argsList.push({})
   for (const args of argsList) {
     try {
@@ -1075,11 +1159,17 @@ function goalReportText(job) {
   lines.push(`Created: ${job.createdAt || ""}`)
   if (job.goalCompletedAt) lines.push(`Completed: ${new Date(job.goalCompletedAt).toISOString()}`)
   if (job.goalBlockedAt) lines.push(`Blocked: ${new Date(job.goalBlockedAt).toISOString()}`)
+  if (job.lastUserInterruptAt) lines.push(`Paused by user message: ${new Date(job.lastUserInterruptAt).toISOString()}`)
+  if (job.goalNoProgressPausedAt) lines.push(`Paused by no-progress guard: ${new Date(job.goalNoProgressPausedAt).toISOString()}`)
   if (job.runCount) lines.push(`Turns: ${job.runCount}`)
+  if ((job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0) lines.push(`No-progress: ${job.noProgressCount || 0}/${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS}`)
   lines.push("")
   if (job.goalSummary) lines.push("## Summary", "", String(job.goalSummary), "")
   if (job.goalEvidence) lines.push("## Evidence", "", String(job.goalEvidence), "")
   if (job.goalBlockedReason) lines.push("## Blocked reason", "", String(job.goalBlockedReason), "")
+  if (job.goalCompletionRejectedReason) lines.push("## Last completion rejection", "", String(job.goalCompletionRejectedReason), "")
+  if (job.goalInterruptedReason) lines.push("## Interrupt", "", String(job.goalInterruptedReason), "")
+  if (job.goalNoProgressReason) lines.push("## No-progress guard", "", String(job.goalNoProgressReason), "")
   if (job.goalAcceptance?.length) lines.push("## Acceptance criteria", "", ...job.goalAcceptance.map((item) => `- ${item}`), "")
   if (job.lastGoalChecks?.length) {
     lines.push("## Latest checks", "")
@@ -1115,17 +1205,101 @@ function parseGoalToolText(args, fields) {
   return result
 }
 
+function hasConcreteGoalEvidence(value) {
+  const text = String(value || "").trim()
+  if (text.length < 24) return false
+  const normalized = text.toLowerCase().replace(/\s+/g, " ")
+  const weak = new Set(["done", "complete", "completed", "ok", "looks good", "n/a", "none", "no evidence", "no evidence provided", "goal completed", "marked complete"])
+  if (weak.has(normalized) || normalized.startsWith("marked complete by /loop-goal-done")) return false
+  return /(\b(npm|pnpm|yarn|bun|node|pytest|cargo|dotnet|go test|tsc|typecheck|test|tests|lint|build|check|checks|exit\s*\d|passed|verified|changed|updated|created|fixed|file|files|diff|commit)\b|[`\\/][\w./:-]+)/i.test(text) || text.length >= 80
+}
+
+function goalChecksPassed(job) {
+  return Array.isArray(job?.lastGoalChecks) && job.lastGoalChecks.length > 0 && job.lastGoalChecks.every((item) => Number(item?.code) === 0)
+}
+
+function goalRequiresPassingChecks(job) {
+  return job?.goalRequireChecksPass !== false && Array.isArray(job?.goalChecks) && job.goalChecks.length > 0
+}
+
+async function rejectGoalCompletion(directory, sessionID, state, job, reason) {
+  job.goalCompletionRejectedAt = now()
+  job.goalCompletionRejectedReason = reason
+  job.goalCompletionRejectedCount = (job.goalCompletionRejectedCount || 0) + 1
+  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate)
+  await writeState(directory, sessionID, state)
+  await writeGoalReport(directory, sessionID, job)
+  await appendLoopLog(directory, "goal-complete-rejected", { sessionID, job: job.name || job.id, reason })
+  return { ok: false, job, rejected: true, message: `Goal completion rejected: ${reason}` }
+}
+
+function goalProgressSnapshot(job) {
+  return {
+    status: job?.goalStatus || "",
+    progressCount: Array.isArray(job?.goalProgress) ? job.goalProgress.length : 0,
+    evidence: String(job?.goalEvidence || ""),
+    checksPassedAt: Number(job?.goalChecksPassedAt || 0),
+    lastGoalCheckAt: Number(job?.lastGoalCheckAt || 0),
+    lastVerifyAt: Number(job?.lastVerifyAt || 0),
+    lastVerifyCode: Number.isFinite(Number(job?.lastVerifyCode)) ? Number(job.lastVerifyCode) : undefined,
+  }
+}
+
+function goalMadeMeaningfulProgress(beforeJob, afterJob) {
+  const before = goalProgressSnapshot(beforeJob || {})
+  const after = goalProgressSnapshot(afterJob || {})
+  if (["completed", "blocked"].includes(after.status) && after.status !== before.status) return true
+  if (after.progressCount > before.progressCount) return true
+  if (after.evidence !== before.evidence && hasConcreteGoalEvidence(after.evidence)) return true
+  if (after.checksPassedAt > before.checksPassedAt || goalChecksPassed(afterJob) && after.lastGoalCheckAt > before.lastGoalCheckAt) return true
+  if (after.lastVerifyAt > before.lastVerifyAt && after.lastVerifyCode === 0) return true
+  return false
+}
+
+async function applyGoalNoProgressGuard(directory, client, sessionID, job, beforeJob) {
+  if (!isGoalJob(job) || ["completed", "blocked"].includes(job.goalStatus) || job.paused || job.enabled === false) return job
+  const limit = Number(job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS)
+  if (!Number.isFinite(limit) || limit <= 0) return job
+  if (goalMadeMeaningfulProgress(beforeJob, job)) {
+    job.noProgressCount = 0
+    job.lastProgressAt = now()
+    return job
+  }
+  job.noProgressCount = (job.noProgressCount || 0) + 1
+  job.lastNoProgressAt = now()
+  await appendLoopLog(directory, "goal-no-progress", { sessionID, job: job.name || job.id, count: job.noProgressCount, limit })
+  if (job.noProgressCount >= limit) {
+    job.paused = true
+    job.goalNoProgressPausedAt = now()
+    job.goalNoProgressReason = `Paused after ${job.noProgressCount} turn(s) without recorded progress. Resume with /loop-goal-resume after adjusting the goal or evidence.`
+    await toast(client, job.goalNoProgressReason, "warning")
+    await appendLoopLog(directory, "goal-no-progress-paused", { sessionID, job: job.name || job.id, count: job.noProgressCount, limit })
+  }
+  return job
+}
+
 async function setGoalComplete(directory, sessionID, args = {}) {
   const state = await readState(directory, sessionID)
   const job = pickGoalJob(state, args.target)
   if (!job) return { ok: false, message: "No active experimental goal was found." }
   const parsed = parseGoalToolText(args, ["summary", "evidence"])
+  const manualOverride = args.manual === true || args.manualOverride === true
+  const completionEvidence = parsed.evidence || job.goalEvidence || ""
+  const skipEvidenceGate = manualOverride || args.allowWeakEvidence === true || job.goalRequireEvidence === false
+  const skipCheckGate = manualOverride || args.allowFailingChecks === true || job.goalRequireChecksPass === false
+  if (!skipEvidenceGate && !hasConcreteGoalEvidence(completionEvidence)) {
+    return await rejectGoalCompletion(directory, sessionID, state, job, "concrete evidence is required before the goal tool can complete the goal")
+  }
+  if (!skipCheckGate && goalRequiresPassingChecks(job) && !goalChecksPassed(job)) {
+    return await rejectGoalCompletion(directory, sessionID, state, job, "configured goal checks have not passed yet")
+  }
   job.goalStatus = "completed"
   job.enabled = false
   job.paused = true
   job.goalCompletedAt = now()
   job.goalSummary = parsed.summary || job.goalSummary || "Goal completed."
-  job.goalEvidence = parsed.evidence || job.goalEvidence || "No evidence provided."
+  job.goalEvidence = completionEvidence || "No evidence provided."
+  job.noProgressCount = 0
   state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate)
   await writeState(directory, sessionID, state)
   await writeGoalReport(directory, sessionID, job)
@@ -1159,6 +1333,8 @@ async function setGoalProgress(directory, sessionID, args = {}) {
   const item = { time: new Date().toISOString(), summary: parsed.summary || "Progress recorded.", next: parsed.next || "", evidence: parsed.evidence || "" }
   job.goalProgress = [...(job.goalProgress || []), item].slice(-30)
   if (parsed.evidence) job.goalEvidence = parsed.evidence
+  job.noProgressCount = 0
+  job.lastProgressAt = now()
   state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate)
   await writeState(directory, sessionID, state)
   await writeGoalReport(directory, sessionID, job)
@@ -1252,7 +1428,10 @@ async function finalizeActiveRun(directory, client, sessionID, options = {}) {
     }
   }
 
-  if (isGoalJob(job)) job = await runGoalChecks(directory, sessionID, job, client)
+  if (isGoalJob(job)) {
+    job = await runGoalChecks(directory, sessionID, job, client)
+    job = await applyGoalNoProgressGuard(directory, client, sessionID, job, active.job)
+  }
   state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate).filter((candidate) => candidate.enabled !== false || isGoalJob(candidate))
   await writeState(directory, sessionID, state)
   if (isGoalJob(job)) await writeGoalReport(directory, sessionID, job)
@@ -1277,10 +1456,18 @@ async function fireAction(directory, client, sessionID, job) {
     }
     const tuiCommand = compactTuiCommandName(command)
     if (tuiCommand) {
+      guardLoopOwnedUserMessage(sessionID)
       await compactSession(client, sessionID)
       return { startsAssistantTurn: true }
     }
-    await sdkCall(client.session.command.bind(client.session), { path: { id: sessionID }, body: { command, arguments: argumentsText } }, { sessionID, command, arguments: argumentsText })
+    guardLoopOwnedUserMessage(sessionID)
+    await sdkCall(
+      client.session.command.bind(client.session),
+      { sessionID, command, arguments: argumentsText },
+      { path: { sessionID }, body: { command, arguments: argumentsText } },
+      { path: { id: sessionID }, body: { command, arguments: argumentsText } },
+      { sessionID, command, arguments: argumentsText },
+    )
     return { startsAssistantTurn: true }
   }
   if (kind === "shell") {
@@ -1290,18 +1477,35 @@ async function fireAction(directory, client, sessionID, job) {
       await appendLoopLog(directory, "blocked", { sessionID, job: job.name || job.id, command })
       return { startsAssistantTurn: false }
     }
-    fireSdk(client, "session.shell", client.session.shell.bind(client.session), { path: { id: sessionID }, body: { command } }, { sessionID, command })
+    guardLoopOwnedUserMessage(sessionID)
+    fireSdk(
+      client,
+      "session.shell",
+      client.session.shell.bind(client.session),
+      { sessionID, command },
+      { path: { sessionID }, body: { command } },
+      { path: { id: sessionID }, body: { command } },
+      { sessionID, command },
+    )
     return { startsAssistantTurn: true }
   }
   const prompt = await buildPrompt(directory, job)
   const prefix = kind === "goal"
     ? "EXPERIMENTAL GOAL MODE CONTINUATION. Continue pursuing the active goal. Do not explain the /loop-goal command. Use the goal tools only when progress/completion/block state is real."
     : "AUTONOMOUS OPENCODE LOOP ITERATION. Continue the configured task now. Do not explain the /loop command. Do not search for documentation about this plugin. Do not create scheduler files. Do not ask questions. Make reasonable assumptions and work directly."
-  fireSdk(client, "session.prompt", client.session.prompt.bind(client.session), { path: { id: sessionID }, body: { parts: [{ type: "text", text: `${prefix}
+  const promptText = `${prefix}
 
-${prompt}` }] } }, { sessionID, parts: [{ type: "text", text: `${prefix}
-
-${prompt}` }] })
+${prompt}`
+  guardLoopOwnedUserMessage(sessionID)
+  fireSdk(
+    client,
+    "session.prompt",
+    client.session.prompt.bind(client.session),
+    { sessionID, parts: [{ type: "text", text: promptText }] },
+    { path: { sessionID }, body: { parts: [{ type: "text", text: promptText }] } },
+    { path: { id: sessionID }, body: { parts: [{ type: "text", text: promptText }] } },
+    { sessionID, parts: [{ type: "text", text: promptText }] },
+  )
   return { startsAssistantTurn: true }
 }
 
@@ -1417,7 +1621,7 @@ async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
         return
       }
       let timer
-      if (job.timeoutMs > 0) timer = setTimeout(() => { fireSdk(client, "session.abort", client.session.abort.bind(client.session), { path: { id: sessionID }, body: {} }, { sessionID }); toast(client, `Loop timeout fired: ${job.name || job.id}`, "warning").catch(() => {}) }, job.timeoutMs)
+      if (job.timeoutMs > 0) timer = setTimeout(() => { fireSdk(client, "session.abort", client.session.abort.bind(client.session), { sessionID }, { path: { sessionID }, body: {} }, { path: { id: sessionID }, body: {} }, { sessionID }); toast(client, `Loop timeout fired: ${job.name || job.id}`, "warning").catch(() => {}) }, job.timeoutMs)
       activeRuns.set(sessionID, { jobId: job.id, job, startedAt: now(), timer })
       sessionStatuses.set(sessionID, "busy")
       sessionStatusSeenAt.set(sessionID, now())
@@ -1516,7 +1720,9 @@ async function statusGoal(directory, client, sessionID) {
     const checks = job.goalChecks?.length ? ` | checks=${job.goalChecks.length}` : ""
     const acceptance = job.goalAcceptance?.length ? ` | acceptance=${job.goalAcceptance.length}` : ""
     const progress = job.goalProgress?.length ? ` | progress=${job.goalProgress.length}` : ""
-    return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${status} | turns=${job.runCount || 0} | objective=${String(job.action || job.goalFile || "").slice(0, 220)}${checks}${acceptance}${progress}`
+    const noProgress = (job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0 ? ` | no-progress=${job.noProgressCount || 0}/${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS}` : ""
+    const rejected = job.goalCompletionRejectedReason ? " | completion-rejected" : ""
+    return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${status} | turns=${job.runCount || 0} | objective=${String(job.action || job.goalFile || "").slice(0, 220)}${checks}${acceptance}${progress}${noProgress}${rejected}`
   }) : ["No experimental goal jobs."]
   await toast(client, goals.length ? `${goals.length} experimental goal(s).` : "No experimental goal jobs.", goals.length ? "info" : "warning")
   await say(client, sessionID, "OpenCode Loop experimental goal status:\n" + lines.join("\n"))
@@ -1539,7 +1745,7 @@ async function resumeGoal(directory, client, sessionID, args) {
   state.jobs = (state.jobs || []).map((job, index) => {
     if (!isGoalJob(job) || !matchJob(job, target, index)) return job
     count++
-    return { ...job, paused: false, enabled: true, goalStatus: job.goalStatus === "blocked" ? "active" : (job.goalStatus || "active"), lastRunAt: 0 }
+    return { ...job, paused: false, enabled: true, goalStatus: job.goalStatus === "blocked" ? "active" : (job.goalStatus || "active"), lastRunAt: 0, noProgressCount: 0, goalNoProgressReason: "", goalInterruptedReason: "" }
   })
   await writeState(directory, sessionID, state)
   await toast(client, `Resumed ${count} experimental goal(s).`, count ? "success" : "warning")
@@ -1560,7 +1766,7 @@ async function clearGoal(directory, client, sessionID, args) {
 }
 
 async function completeGoalCommand(directory, client, sessionID, args) {
-  const result = await setGoalComplete(directory, sessionID, { summary: String(args || "").trim() || "Goal manually marked complete.", evidence: "Marked complete by /loop-goal-done." })
+  const result = await setGoalComplete(directory, sessionID, { summary: String(args || "").trim() || "Goal manually marked complete.", evidence: "Marked complete by /loop-goal-done.", manual: true })
   await toast(client, result.message, result.ok ? "success" : "warning")
 }
 
@@ -1666,6 +1872,7 @@ async function handleCommand(directory, client, input, fallbackName, fallbackArg
   rememberSession(directory, client, sessionID)
   if (wasHandled(sessionID, name, args)) return true
   markHandled(sessionID, name, args)
+  if (isLoopCommandName(name)) guardLoopOwnedUserMessage(sessionID)
 
   const handled = () => {
     if (output && Array.isArray(output.parts)) {
@@ -1709,7 +1916,7 @@ function goalTools(defaultDirectory) {
       },
       execute: async (args, context) => {
         const result = await setGoalComplete(context.directory || defaultDirectory, context.sessionID, args)
-        return { title: result.ok ? "Goal completed" : "Goal not found", output: result.message }
+        return { title: result.ok ? "Goal completed" : result.rejected ? "Goal completion rejected" : "Goal not found", output: result.message }
       },
     }),
     opencode_loop_goal_blocked: tool({
@@ -1746,6 +1953,11 @@ export const OpenCodeLoopPlugin = async ({ client, directory }) => {
       if (event.type === "command.executed") {
         const props = event.properties || {}
         await handleCommand(directory, client, props, props.name, props.arguments)
+      }
+      const interruptedSessionID = userInterruptSessionFromEvent(event)
+      if (interruptedSessionID) {
+        rememberSession(directory, client, interruptedSessionID)
+        await pauseGoalsForUserInterrupt(directory, client, interruptedSessionID)
       }
       const statusUpdate = updateSessionStatusFromEvent(event)
       if (statusUpdate?.sessionID) rememberSession(directory, client, statusUpdate.sessionID)

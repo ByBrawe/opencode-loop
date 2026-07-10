@@ -16,7 +16,7 @@ v0.5.11 includes a referenced heartbeat scheduler. This is important in OpenCode
 
 ## Current status
 
-**v0.5.11 is a reliability hotfix for recurring timers that only continued after manual activity.** It keeps the real due timer from v0.5.8 and the stale-busy recovery from v0.5.9, then adds a watchdog checker and stronger stale-active-run recovery. This targets the case where `/loop 1m ...` reaches its due time but does not fire until you run `/loop-status` or type another command. Scheduled `/compact` still routes through OpenCode's current TUI alias first, with fallback paths for older builds.
+**v0.5.15 is a Goal Mode and SDK compatibility hardening release.** It keeps the timer/watchdog reliability fixes from v0.5.11-v0.5.14, then tightens experimental goals with evidence-gated completion, passing-check requirements, no-progress pausing, and user-message interruption. It also prefers the current OpenCode SDK argument shape while keeping fallbacks for older builds.
 
 The known update-related symptoms from older builds are fixed:
 
@@ -26,13 +26,13 @@ The known update-related symptoms from older builds are fixed:
 - prompt, shell, or toast calls silently fail after OpenCode SDK changes
 - `/compact` accidentally being treated as a normal agent prompt
 - intermittent `Tool execution aborted` behavior caused by triggering a new turn too early
-- experimental `/loop-goal` support for goal-driven work that continues until complete, blocked, paused, or cleared
+- experimental `/loop-goal` support for goal-driven work that continues until complete, blocked, paused, cleared, or paused by no-progress/user-interrupt guards
 - `--no-now` interval jobs not waking until another OpenCode event happens
 - `/loop-ask`, `/loop-command`, and `/loop-shell` being configured but not reliably firing on their own
 
 The TUI loop is still intentionally session-bound: it runs while OpenCode is open and the current session emits status/idle events. For long-running background work after closing the terminal or OpenCode, use `opencode-loopd`.
 
-## v0.5.11 quick behavior guide
+## v0.5.15 quick behavior guide
 
 OpenCode Loop has two triggers now:
 
@@ -157,7 +157,7 @@ Use the npm installer from any shell: Windows PowerShell, Windows CMD, macOS, or
 npx -y @bybrawe/opencode-loop@latest
 ```
 
-The installer copies the plugin and slash command files into your OpenCode config directory.
+The installer copies the plugin and slash command files into your OpenCode config directory. It also ensures that the config directory has a `package.json` dependency on `@opencode-ai/plugin`, which local `.ts` plugins need for the `tool()` helper.
 It also removes the old local `opencode-loop.js` copy from earlier releases so only the current local `opencode-loop.ts` plugin remains.
 
 Windows target paths:
@@ -408,6 +408,14 @@ What happens:
 
 Goal Mode is idle-safe. If OpenCode is busy, it waits. It does not intentionally start another turn on top of a running turn.
 
+Completion guards:
+
+- The agent tool cannot mark a goal complete with empty or generic evidence. Evidence should mention commands, files, checks, results, or code inspection details.
+- If a goal has `--check` commands, agent-tool completion requires the latest configured checks to pass by default.
+- `/loop-goal-done` is still a manual user override when you want to mark the goal complete yourself.
+- Goal Mode pauses when a real user message arrives, so a new instruction can take control before the next automatic continuation.
+- Goal Mode pauses after 3 turns without recorded meaningful progress by default. Change this with `--max-no-progress <n>`, or disable it with `--max-no-progress 0`.
+
 Simple status and control commands:
 
 ```text
@@ -449,6 +457,12 @@ Goal that automatically stops when all configured checks pass:
 
 ```text
 /loop-goal --check "npm run typecheck" --check "npm run build" --complete-when-checks-pass make the project build cleanly
+```
+
+Goal that gives the agent more attempts before the no-progress guard pauses it:
+
+```text
+/loop-goal --max-no-progress 6 --check "npm test" fix the failing tests and keep evidence in the goal report
 ```
 
 Goal with a safety/runtime limit:
@@ -1095,6 +1109,11 @@ Improve the application in small safe steps.
 ```
 
 ## Changelog highlights
+
+### v0.5.15
+
+- Hardened experimental Goal Mode completion with concrete evidence, passing-check requirements, no-progress pausing, and user-message interruption.
+- Preferred current OpenCode SDK argument shapes and made local installers add the `@opencode-ai/plugin` dependency needed by local `.ts` plugins.
 
 ### v0.5.13
 
