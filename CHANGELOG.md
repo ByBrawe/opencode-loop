@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.14
+
+- Guarded active-run finalization so heartbeat and retry checks do not treat a still-running assistant turn as finished.
+- Made loop state writes atomic and backed up corrupt state files before falling back to an empty state.
+- Changed `opencode-loopd` to pass prompts as process arguments instead of shell strings, preserving quotes in inline prompts.
+- Stripped UTF-8 BOMs from daemon prompt files before sending them to OpenCode.
+- Removed the package plugin entry from the example config to avoid duplicate loading after the recommended local installer path.
+
 ## 0.5.13
 
 - Wrapped experimental goal tools with `tool()` and Zod schemas for current OpenCode tool validation.

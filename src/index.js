@@ -25,6 +25,7 @@ const dueTimers = new Map()
 const watchdogTimers = new Map()
 const runLocks = new Map()
 const knownSessions = new Map()
+const stateWriteLocks = new Map()
 let heartbeatTimer
 const sessionStatuses = new Map()
 const sessionStatusSeenAt = new Map()
@@ -320,21 +321,61 @@ function statePath(directory, sessionID) { return path.join(stateDir(directory),
 async function ensureDir(directory) { await fs.mkdir(directory, { recursive: true }) }
 async function pathExists(filePath) { try { await fs.access(filePath); return true } catch { return false } }
 
-async function readState(directory, sessionID) {
+function stateLockKey(directory, sessionID) {
+  return `${path.resolve(directory)}:${safeID(sessionID)}`
+}
+
+async function withStateWriteLock(directory, sessionID, fn) {
+  const key = stateLockKey(directory, sessionID)
+  const previous = stateWriteLocks.get(key) || Promise.resolve()
+  let release
+  const current = new Promise((resolve) => { release = resolve })
+  const next = previous.catch(() => {}).then(() => current)
+  stateWriteLocks.set(key, next)
+  await previous.catch(() => {})
   try {
-    const parsed = JSON.parse(await fs.readFile(statePath(directory, sessionID), "utf8"))
+    return await fn()
+  } finally {
+    release()
+    if (stateWriteLocks.get(key) === next) stateWriteLocks.delete(key)
+  }
+}
+
+async function readState(directory, sessionID) {
+  const target = statePath(directory, sessionID)
+  try {
+    const parsed = JSON.parse(await fs.readFile(target, "utf8"))
     return { version: 4, jobs: Array.isArray(parsed.jobs) ? parsed.jobs : [] }
-  } catch {
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      try {
+        await ensureDir(stateDir(directory))
+        await fs.copyFile(target, `${target}.corrupt-${Date.now()}`)
+      } catch {}
+    }
     return { version: 4, jobs: [] }
   }
 }
 
 async function writeState(directory, sessionID, state) {
-  await ensureDir(stateDir(directory))
-  await fs.writeFile(statePath(directory, sessionID), JSON.stringify({ version: 4, jobs: state.jobs || [] }, null, 2))
+  await withStateWriteLock(directory, sessionID, async () => {
+    await ensureDir(stateDir(directory))
+    const target = statePath(directory, sessionID)
+    const temp = `${target}.${process.pid}.${Date.now()}.tmp`
+    try {
+      await fs.writeFile(temp, JSON.stringify({ version: 4, jobs: state.jobs || [] }, null, 2))
+      await fs.rename(temp, target)
+    } finally {
+      try { await fs.rm(temp, { force: true }) } catch {}
+    }
+  })
 }
 
-async function removeState(directory, sessionID) { try { await fs.unlink(statePath(directory, sessionID)) } catch {} }
+async function removeState(directory, sessionID) {
+  await withStateWriteLock(directory, sessionID, async () => {
+    try { await fs.unlink(statePath(directory, sessionID)) } catch {}
+  })
+}
 
 function sdkError(result) {
   if (!result || typeof result !== "object") return undefined
@@ -497,7 +538,7 @@ function startHeartbeat() {
       }
       Promise.resolve()
         .then(async () => {
-          await finalizeActiveRun(info.directory, info.client, sessionID, { forceStale: true })
+          await finalizeActiveRun(info.directory, info.client, sessionID, { requireIdle: true, forceStale: true })
           await maybeRunDueJobs(info.directory, info.client, sessionID, { heartbeat: true })
         })
         .catch((error) => appendLoopLog(info.directory, "heartbeat-error", { sessionID, error: sdkErrorMessage(error) }).catch(() => {}))
@@ -818,6 +859,19 @@ function staleActiveRun(sessionID) {
   const configured = Number(active.job?.staleActiveRecoveryMs || active.job?.activeRecoveryMs || 0)
   const threshold = Number.isFinite(configured) && configured > 0 ? configured : STALE_ACTIVE_RECOVERY_MS
   return age >= threshold
+}
+
+async function canFinalizeActiveRun(directory, client, sessionID, active, options = {}) {
+  if (!options.requireIdle && !options.forceStale) return true
+  if (options.forceStale && staleActiveRun(sessionID)) return true
+  if (!options.requireIdle) return false
+
+  const live = await readLiveSessionStatus(client, sessionID, directory)
+  if (live?.type) return live.type === "idle"
+
+  const cached = sessionStatuses.get(sessionID)
+  const seenAt = sessionStatusSeenAt.get(sessionID) || 0
+  return cached === "idle" && seenAt > (active.startedAt || 0)
 }
 
 async function readLiveSessionStatus(client, sessionID, directory) {
@@ -1148,14 +1202,17 @@ async function runGoalChecks(directory, sessionID, job, client) {
   return job
 }
 
-async function finalizeActiveRun(directory, client, sessionID) {
+async function finalizeActiveRun(directory, client, sessionID, options = {}) {
   const active = activeRuns.get(sessionID)
   if (!active) return
+  if (!await canFinalizeActiveRun(directory, client, sessionID, active, options)) return false
+  const recoveredStale = staleActiveRun(sessionID)
   clearActiveRun(sessionID)
   const state = await readState(directory, sessionID)
   let job = (state.jobs || []).find((candidate) => candidate.id === active.jobId)
   if (!job) return
   job.lastFinishedAt = now()
+  if (recoveredStale) await appendLoopLog(directory, "active-stale-recovery", { sessionID, job: job.name || job.id, startedAt: active.startedAt })
 
   if (job.verifyCommand) {
     const verify = await runShellCommand(job.verifyCommand, directory, job.timeoutMs || 300_000)
@@ -1201,6 +1258,7 @@ async function finalizeActiveRun(directory, client, sessionID) {
   if (isGoalJob(job)) await writeGoalReport(directory, sessionID, job)
   await createCheckpoint(directory, sessionID, job, client)
   await scheduleDueWork(directory, client, sessionID)
+  return true
 }
 
 async function fireAction(directory, client, sessionID, job) {
@@ -1258,7 +1316,7 @@ async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
   runLocks.set(sessionID, now())
   let job
   try {
-    await finalizeActiveRun(directory, client, sessionID, { forceStale: true })
+    await finalizeActiveRun(directory, client, sessionID, { requireIdle: true, forceStale: true })
     if (!await sessionIsIdle(client, sessionID, directory)) {
       if (options.force) await toast(client, "Loop queued: session is busy; it will run on the next idle check.", "info")
       await reschedule(BUSY_RETRY_MS)
@@ -1361,6 +1419,8 @@ async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
       let timer
       if (job.timeoutMs > 0) timer = setTimeout(() => { fireSdk(client, "session.abort", client.session.abort.bind(client.session), { path: { id: sessionID }, body: {} }, { sessionID }); toast(client, `Loop timeout fired: ${job.name || job.id}`, "warning").catch(() => {}) }, job.timeoutMs)
       activeRuns.set(sessionID, { jobId: job.id, job, startedAt: now(), timer })
+      sessionStatuses.set(sessionID, "busy")
+      sessionStatusSeenAt.set(sessionID, now())
       await reschedule(BUSY_RETRY_MS)
     } catch (error) {
       clearActiveRun(sessionID)

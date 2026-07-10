@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url"
 
 const args = process.argv.slice(2)
 const FAILED_RUN_RETRY_MS = 5_000
+const OPENCODE_BIN = process.env.OPENCODE_BIN || "opencode"
 
 function arg(name, fallback = null) {
   const i = args.indexOf(name)
@@ -39,17 +40,52 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function run(command, cwd) {
+function spawnOnce(command, commandArgs, cwd) {
   return new Promise((resolve) => {
-    const child = spawn(command, {
-      cwd,
-      shell: true,
-      stdio: "inherit",
-      env: process.env,
-    })
+    let settled = false
+    const done = (result) => {
+      if (settled) return
+      settled = true
+      resolve(result)
+    }
 
-    child.on("exit", (code) => resolve(code ?? 0))
+    let child
+    try {
+      child = spawn(command, commandArgs, {
+        cwd,
+        shell: false,
+        stdio: "inherit",
+        env: process.env,
+        windowsHide: true,
+      })
+    } catch (error) {
+      done({ code: -1, error })
+      return
+    }
+
+    child.on("error", (error) => done({ code: -1, error }))
+    child.on("exit", (code) => done({ code: code ?? 0 }))
   })
+}
+
+function quoteWindowsArg(value) {
+  const text = String(value ?? "")
+  return `"${text.replace(/(\\*)"/g, '$1$1\\"').replace(/\\+$/g, "$&$&")}"`
+}
+
+function stripBom(text) {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
+}
+
+async function run(command, commandArgs, cwd) {
+  const direct = await spawnOnce(command, commandArgs, cwd)
+  if (direct.code !== -1 || process.platform !== "win32" || !["ENOENT", "EINVAL"].includes(direct.error?.code)) return direct.code
+
+  const fallback = await spawnOnce("cmd.exe", ["/d", "/s", "/c", command, ...commandArgs], cwd)
+  if (fallback.code === -1) {
+    console.error(`[opencode-loopd] failed to start ${command}: ${fallback.error?.message || direct.error?.message || "unknown error"}`)
+  }
+  return fallback.code
 }
 
 function readPrompt(project) {
@@ -57,7 +93,7 @@ function readPrompt(project) {
   const promptArg = arg("--prompt")
 
   if (promptFile) {
-    return fs.readFileSync(path.resolve(project, promptFile), "utf8")
+    return stripBom(fs.readFileSync(path.resolve(project, promptFile), "utf8"))
   }
 
   if (promptArg) return promptArg
@@ -99,8 +135,7 @@ async function daemon() {
     console.log("")
     console.log(`[opencode-loopd] run #${count} ${new Date().toISOString()}`)
 
-    const command = `opencode run --continue ${JSON.stringify(prompt)}`
-    const code = await run(command, project)
+    const code = await run(OPENCODE_BIN, ["run", "--continue", prompt], project)
 
     if (code !== 0) {
       console.log(`[opencode-loopd] opencode exited with code ${code}`)
@@ -135,25 +170,25 @@ function installTask() {
   const script = fileURLToPath(import.meta.url)
 
   const commandParts = [
-    `"${node}"`,
-    `"${script}"`,
+    quoteWindowsArg(node),
+    quoteWindowsArg(script),
     "daemon",
     "--project",
-    `"${project}"`,
+    quoteWindowsArg(project),
     "--every",
     "0s",
     "--max-runs",
     "1",
   ]
 
-  if (promptFile) commandParts.push("--prompt-file", `"${promptFile}"`)
-  if (promptArg) commandParts.push("--prompt", `"${promptArg.replaceAll('"', '\\"')}"`)
+  if (promptFile) commandParts.push("--prompt-file", quoteWindowsArg(promptFile))
+  if (promptArg) commandParts.push("--prompt", quoteWindowsArg(promptArg))
 
   const taskCommand = commandParts.join(" ")
-  const schtasks = `schtasks /Create /F /SC MINUTE /MO ${minutes} /TN "${name}" /TR ${JSON.stringify(taskCommand)}`
+  const taskArgs = ["/Create", "/F", "/SC", "MINUTE", "/MO", String(minutes), "/TN", name, "/TR", taskCommand]
 
-  console.log(schtasks)
-  const result = spawnSync(schtasks, { shell: true, stdio: "inherit" })
+  console.log(["schtasks", ...taskArgs.map((part) => JSON.stringify(part))].join(" "))
+  const result = spawnSync("schtasks", taskArgs, { shell: false, stdio: "inherit" })
   process.exit(result.status ?? 0)
 }
 
@@ -163,7 +198,7 @@ function uninstallTask() {
   }
 
   const name = arg("--name", "OpenCodeLoop")
-  const result = spawnSync(`schtasks /Delete /F /TN "${name}"`, { shell: true, stdio: "inherit" })
+  const result = spawnSync("schtasks", ["/Delete", "/F", "/TN", name], { shell: false, stdio: "inherit" })
   process.exit(result.status ?? 0)
 }
 
