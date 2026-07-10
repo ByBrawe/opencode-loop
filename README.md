@@ -16,7 +16,7 @@ v0.5.11 includes a referenced heartbeat scheduler. This is important in OpenCode
 
 ## Current status
 
-**v0.5.15 is a Goal Mode and SDK compatibility hardening release.** It keeps the timer/watchdog reliability fixes from v0.5.11-v0.5.14, then tightens experimental goals with evidence-gated completion, passing-check requirements, no-progress pausing, and user-message interruption. It also prefers the current OpenCode SDK argument shape while keeping fallbacks for older builds.
+**v0.5.15 is a Goal Mode and SDK compatibility hardening release.** It keeps the timer/watchdog reliability fixes from v0.5.11-v0.5.14, then tightens experimental goals with evidence-gated completion, passing-check requirements, no-progress pausing, user-message interruption, explicit workspace paths, and safer active-turn recovery. It also prefers the OpenCode plugin SDK argument shape while keeping fallbacks for older builds.
 
 The known update-related symptoms from older builds are fixed:
 
@@ -390,7 +390,7 @@ That can look like a chat prompt in older versions or unclear setups. Prefer `/l
 
 ### Experimental Goal Mode
 
-Goal Mode is experimental. Use it when you do **not** want a timer such as “every 5 minutes”. Use it when you want OpenCode to keep pursuing a result until it is complete or blocked.
+Goal Mode is experimental. Use it when you do **not** want a timer such as "every 5 minutes". Use it when you want OpenCode to keep pursuing a result until it is complete or blocked.
 
 Basic goal:
 
@@ -415,6 +415,8 @@ Completion guards:
 - `/loop-goal-done` is still a manual user override when you want to mark the goal complete yourself.
 - Goal Mode pauses when a real user message arrives, so a new instruction can take control before the next automatic continuation.
 - Goal Mode pauses after 3 turns without recorded meaningful progress by default. Change this with `--max-no-progress <n>`, or disable it with `--max-no-progress 0`.
+- Each Goal Mode prompt includes the resolved project directory and requires workspace-relative file paths.
+- A running goal turn gets 3 minutes by default before stale-run recovery can finalize it. This avoids overlapping or prematurely closing slower model/tool turns.
 
 Simple status and control commands:
 
@@ -1113,7 +1115,9 @@ Improve the application in small safe steps.
 ### v0.5.15
 
 - Hardened experimental Goal Mode completion with concrete evidence, passing-check requirements, no-progress pausing, and user-message interruption.
-- Preferred current OpenCode SDK argument shapes and made local installers add the `@opencode-ai/plugin` dependency needed by local `.ts` plugins.
+- Preferred OpenCode plugin SDK `{ body }`, `{ path: { id }, body }`, and `{ query }` shapes before compatibility fallbacks.
+- Added explicit workspace path guidance, safer 3-minute active-turn recovery, timer disposal cleanup, and an automated Goal Mode smoke test.
+- Made local installers add the `@opencode-ai/plugin` dependency needed by local `.ts` plugins.
 
 ### v0.5.13
 

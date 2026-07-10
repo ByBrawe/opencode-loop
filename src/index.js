@@ -18,6 +18,7 @@ const MAX_SCAN_BYTES = 2_000_000
 const GOAL_REPORT_DIR = "goals"
 const GOAL_PROMPT_PREFIX = "EXPERIMENTAL OPENCODE GOAL MODE ITERATION"
 const DEFAULT_GOAL_MAX_NO_PROGRESS = 3
+const DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180_000
 const LOOP_OWNED_USER_MESSAGE_GUARD_MS = 10_000
 
 const activeRuns = new Map()
@@ -447,7 +448,6 @@ async function executeTuiCommand(client, command) {
   if (!client?.tui?.executeCommand) throw new Error("client.tui.executeCommand is not available")
   return await sdkCall(
     client.tui.executeCommand.bind(client.tui),
-    { command },
     { body: { command } },
     { command },
   )
@@ -475,9 +475,8 @@ async function compactSession(client, sessionID) {
   try {
     await sdkCall(
       client.session.summarize.bind(client.session),
-      { sessionID },
-      { path: { sessionID }, body: {} },
       { path: { id: sessionID }, body: {} },
+      { path: { sessionID }, body: {} },
       { sessionID },
     )
     return true
@@ -492,7 +491,6 @@ async function log(client, level, message, extra) {
   try {
     await sdkCall(
       client.app.log.bind(client.app),
-      extra === undefined ? { service: SERVICE, level, message } : { service: SERVICE, level, message, extra },
       { body: extra === undefined ? { service: SERVICE, level, message } : { service: SERVICE, level, message, extra } },
       extra === undefined ? { service: SERVICE, level, message } : { service: SERVICE, level, message, extra },
     )
@@ -500,7 +498,7 @@ async function log(client, level, message, extra) {
 }
 
 async function toast(client, message, variant = "info") {
-  try { await sdkCall(client.tui.showToast.bind(client.tui), { message, variant }, { body: { message, variant } }, { message, variant }) } catch {}
+  try { await sdkCall(client.tui.showToast.bind(client.tui), { body: { message, variant } }, { message, variant }) } catch {}
 }
 
 function guardLoopOwnedUserMessage(sessionID) {
@@ -524,9 +522,8 @@ async function say(client, sessionID, text) {
   try {
     await sdkCall(
       client.session.prompt.bind(client.session),
-      { sessionID, noReply: true, parts: [{ type: "text", text }] },
-      { path: { sessionID }, body: { noReply: true, parts: [{ type: "text", text }] } },
       { path: { id: sessionID }, body: { noReply: true, parts: [{ type: "text", text }] } },
+      { path: { sessionID }, body: { noReply: true, parts: [{ type: "text", text }] } },
       { sessionID, noReply: true, parts: [{ type: "text", text }] },
     )
   } catch {}
@@ -594,6 +591,32 @@ function startHeartbeat() {
     }
   }, HEARTBEAT_MS)
 }
+
+function disposeRuntime(directory, client) {
+  const sessions = [...knownSessions.entries()]
+    .filter(([, info]) => info?.directory === directory && info?.client === client)
+    .map(([sessionID]) => sessionID)
+  for (const sessionID of sessions) {
+    clearActiveRun(sessionID)
+    const idle = idleTimers.get(sessionID); if (idle) clearTimeout(idle)
+    const due = dueTimers.get(sessionID); if (due) clearTimeout(due)
+    const watchdog = watchdogTimers.get(sessionID); if (watchdog) clearInterval(watchdog)
+    idleTimers.delete(sessionID)
+    dueTimers.delete(sessionID)
+    watchdogTimers.delete(sessionID)
+    runLocks.delete(sessionID)
+    knownSessions.delete(sessionID)
+    loopOwnedUserMessageGuards.delete(sessionID)
+    sessionStatuses.delete(sessionID)
+    sessionStatusSeenAt.delete(sessionID)
+    for (const key of handledCommands.keys()) if (key.startsWith(`${sessionID}:`)) handledCommands.delete(key)
+  }
+  if (!knownSessions.size && heartbeatTimer) {
+    clearInterval(heartbeatTimer)
+    heartbeatTimer = undefined
+  }
+}
+
 function presetDefaults(name, args) {
   const [maybeDuration, rest] = splitFirst(args)
   const parsed = parseDuration(maybeDuration)
@@ -728,6 +751,7 @@ function goalStatusText(job) {
 
 async function buildGoalPrompt(directory, job) {
   const sections = []
+  sections.push(`Working directory:\n${path.resolve(directory)}\nKeep every file operation inside this directory. Prefer workspace-relative paths such as \"src/index.js\"; never turn a relative path into a root path such as \"/src/index.js\".`)
   const objective = String(job.action || "").trim()
   if (objective) sections.push(`Goal objective:\n${objective}`)
   if (job.goalFile) {
@@ -960,7 +984,7 @@ async function canFinalizeActiveRun(directory, client, sessionID, active, option
 
 async function readLiveSessionStatus(client, sessionID, directory) {
   const argsList = []
-  if (directory) argsList.push({ directory }, { query: { directory } }, { workspace: directory }, { directory })
+  if (directory) argsList.push({ query: { directory } }, { directory }, { workspace: directory })
   argsList.push({})
   for (const args of argsList) {
     try {
@@ -1463,9 +1487,8 @@ async function fireAction(directory, client, sessionID, job) {
     guardLoopOwnedUserMessage(sessionID)
     await sdkCall(
       client.session.command.bind(client.session),
-      { sessionID, command, arguments: argumentsText },
-      { path: { sessionID }, body: { command, arguments: argumentsText } },
       { path: { id: sessionID }, body: { command, arguments: argumentsText } },
+      { path: { sessionID }, body: { command, arguments: argumentsText } },
       { sessionID, command, arguments: argumentsText },
     )
     return { startsAssistantTurn: true }
@@ -1482,9 +1505,8 @@ async function fireAction(directory, client, sessionID, job) {
       client,
       "session.shell",
       client.session.shell.bind(client.session),
-      { sessionID, command },
-      { path: { sessionID }, body: { command } },
       { path: { id: sessionID }, body: { command } },
+      { path: { sessionID }, body: { command } },
       { sessionID, command },
     )
     return { startsAssistantTurn: true }
@@ -1501,9 +1523,8 @@ ${prompt}`
     client,
     "session.prompt",
     client.session.prompt.bind(client.session),
-    { sessionID, parts: [{ type: "text", text: promptText }] },
-    { path: { sessionID }, body: { parts: [{ type: "text", text: promptText }] } },
     { path: { id: sessionID }, body: { parts: [{ type: "text", text: promptText }] } },
+    { path: { sessionID }, body: { parts: [{ type: "text", text: promptText }] } },
     { sessionID, parts: [{ type: "text", text: promptText }] },
   )
   return { startsAssistantTurn: true }
@@ -1621,7 +1642,7 @@ async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
         return
       }
       let timer
-      if (job.timeoutMs > 0) timer = setTimeout(() => { fireSdk(client, "session.abort", client.session.abort.bind(client.session), { sessionID }, { path: { sessionID }, body: {} }, { path: { id: sessionID }, body: {} }, { sessionID }); toast(client, `Loop timeout fired: ${job.name || job.id}`, "warning").catch(() => {}) }, job.timeoutMs)
+      if (job.timeoutMs > 0) timer = setTimeout(() => { fireSdk(client, "session.abort", client.session.abort.bind(client.session), { path: { id: sessionID }, body: {} }, { path: { sessionID }, body: {} }, { sessionID }); toast(client, `Loop timeout fired: ${job.name || job.id}`, "warning").catch(() => {}) }, job.timeoutMs)
       activeRuns.set(sessionID, { jobId: job.id, job, startedAt: now(), timer })
       sessionStatuses.set(sessionID, "busy")
       sessionStatusSeenAt.set(sessionID, now())
@@ -1654,7 +1675,11 @@ async function addLoop(directory, client, sessionID, args, defaults = {}) {
   const parsed = parseLoopArgs(args, defaults)
   if (!parsed.ok) { await toast(client, parsed.error, "warning"); return }
   if (parsed.job.watchPaths.length) parsed.job.watchSnapshot = await snapshotPaths(directory, parsed.job.watchPaths)
-  if (!parsed.job.activeRecoveryMs) parsed.job.activeRecoveryMs = Math.max(20_000, Math.min(90_000, (parsed.job.intervalMs || 0) + 10_000))
+  if (!parsed.job.activeRecoveryMs) {
+    parsed.job.activeRecoveryMs = isGoalJob(parsed.job)
+      ? DEFAULT_GOAL_ACTIVE_RECOVERY_MS
+      : Math.max(DEFAULT_ACTIVE_GUARD_MS, Math.min(90_000, (parsed.job.intervalMs || 0) + 10_000))
+  }
   if (parsed.job.dryRun) { await toast(client, `Loop dry run: ${jobLabel(parsed.job)}`, "info"); await say(client, sessionID, "OpenCode loop dry run:\n```json\n" + JSON.stringify(parsed.job, null, 2) + "\n```"); return }
   const state = await readState(directory, sessionID)
   const jobs = Array.isArray(state.jobs) ? state.jobs : []
@@ -1947,6 +1972,7 @@ function goalTools(defaultDirectory) {
 export const OpenCodeLoopPlugin = async ({ client, directory }) => {
   await log(client, "info", "Plugin initialized", { directory })
   return {
+    dispose: async () => { disposeRuntime(directory, client) },
     tool: goalTools(directory),
     "command.execute.before": async (input, output) => { await handleCommand(directory, client, input, undefined, undefined, output) },
     event: async ({ event }) => {

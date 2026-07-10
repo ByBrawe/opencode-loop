@@ -6,7 +6,11 @@
 - Required configured goal `--check` commands to pass before agent-tool completion, unless the user explicitly opts out or manually marks the goal done.
 - Added a no-progress guard for goals. Goals pause after 3 turns without recorded meaningful progress by default, configurable with `--max-no-progress`.
 - Paused active goals when a real user message arrives, so new user intent wins before the next automatic continuation.
-- Preferred current OpenCode 1.17-style flat SDK arguments for session, TUI, and log calls while keeping older SDK fallbacks.
+- Preferred the OpenCode plugin SDK's `{ body }`, `{ path: { id }, body }`, and `{ query }` argument shapes while keeping flat and older path-key fallbacks.
+- Added the resolved working directory and workspace-relative path rules to Goal Mode prompts so agents do not accidentally target filesystem-root paths.
+- Increased Goal Mode's default active-turn recovery window to 3 minutes so slow model/tool turns are not finalized as stale after 20 seconds.
+- Added plugin disposal cleanup for heartbeat, idle, due, watchdog, and active-run timers.
+- Added an automated smoke test for SDK call order, Goal Mode prompts, evidence rejection, and successful completion state.
 - Updated local installers to create or update config `package.json` with `@opencode-ai/plugin`, needed by local `.ts` plugins that import `tool()`.
 - Updated Goal Mode status/report output and README guidance for the new guards.
 
