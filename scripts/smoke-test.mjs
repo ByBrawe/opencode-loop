@@ -83,7 +83,7 @@ try {
     sessionID,
     arguments: "Create proof.txt and verify it --max-turns 3",
   }, output)
-  assert.match(output.parts[0].text, /handled by the local plugin/i)
+  assert.equal(output.parts.length, 0, "a locally handled slash command must not start a placeholder model turn")
 
   await hooks["command.execute.before"]({ command: "loop-now", sessionID, arguments: "goal" }, { parts: [] })
   await new Promise((resolve) => setTimeout(resolve, 0))

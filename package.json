@@ -1,6 +1,6 @@
 {
   "name": "@bybrawe/opencode-loop",
-  "version": "0.5.16",
+  "version": "0.5.17",
   "description": "Claude Code/Codex style /loop and experimental goal mode for OpenCode: heartbeat scheduler, idle-safe loops, scheduled commands, compact scheduling, verification, checkpoints, and persistent coding goals.",
   "type": "module",
   "main": "src/index.js",
@@ -10,6 +10,7 @@
   "files": [
     "src",
     "commands",
+    "agents",
     "scripts",
     "examples",
     "README.md",
@@ -17,8 +18,8 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "check": "node --check src/index.js && node --check scripts/install-node.mjs && node --check scripts/loopd.mjs && node --check scripts/smoke-test.mjs",
-    "test": "node scripts/smoke-test.mjs",
+    "check": "node --check src/index.js && node --check scripts/install-node.mjs && node --check scripts/loopd.mjs && node --check scripts/install-test.mjs && node --check scripts/smoke-test.mjs && node --check scripts/comprehensive-test.mjs",
+    "test": "node scripts/install-test.mjs && node scripts/smoke-test.mjs && node scripts/comprehensive-test.mjs",
     "install:global": "node scripts/install-node.mjs",
     "pack:zip": "node scripts/make-zip.mjs"
   },

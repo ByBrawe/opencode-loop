@@ -16,7 +16,7 @@ v0.5.11 includes a referenced heartbeat scheduler. This is important in OpenCode
 
 ## Current status
 
-**v0.5.16 fixes idle detection during long-running tools and background subtasks.** The scheduler now treats OpenCode tool lifecycle activity and running child sessions as stronger busy signals than a premature parent idle/status event, so due prompts wait instead of filling the queue. It keeps the Goal Mode and SDK compatibility hardening from v0.5.15.
+**v0.5.17 hardens command, installer, and scheduler behavior around the v0.5.16 busy-detection fix.** Long-running tools and child sessions remain authoritative busy signals. Local `/loop-*` commands now use a tool-denied acknowledgement agent, scheduled work restores the normal agent/model context, package/local duplicate loading is prevented, watched jobs fire correctly, and preset/safe-shell edge cases have regression coverage.
 
 The known update-related symptoms from older builds are fixed:
 
@@ -32,7 +32,7 @@ The known update-related symptoms from older builds are fixed:
 
 The TUI loop is still intentionally session-bound: it runs while OpenCode is open and the current session emits status/idle events. For long-running background work after closing the terminal or OpenCode, use `opencode-loopd`.
 
-## v0.5.16 quick behavior guide
+## v0.5.17 quick behavior guide
 
 OpenCode Loop has two triggers now:
 
@@ -79,7 +79,7 @@ Run a shell command every 10 minutes when idle.
 
 Experimental persistent goal mode: keep working until the goal is complete, blocked, paused, cleared, or a safety limit is reached.
 
-> Note: OpenCode custom command markdown still creates a tiny assistant turn for slash commands. v0.5.11 keeps these command templates short and asks the model to reply `OK`. The actual loop scheduling is handled locally by the plugin. If that short turn briefly makes OpenCode look busy, the loop now recovers with fresh status checks, stale-active-run recovery, and a watchdog that does not require another manual command.
+> Note: OpenCode custom command markdown still creates an assistant turn for slash commands. v0.5.17 routes that acknowledgement through the installed `opencode-loop-local` agent, which denies tools and subagents. The real scheduled iteration explicitly restores the normal coding agent/model, so a status or control command cannot launch background exploration or leave later loop work tool-disabled.
 
 ## Why this exists
 
@@ -157,14 +157,14 @@ Use the npm installer from any shell: Windows PowerShell, Windows CMD, macOS, or
 npx -y @bybrawe/opencode-loop@latest
 ```
 
-The installer copies the plugin and slash command files into your OpenCode config directory. It also ensures that the config directory has a `package.json` dependency on `@opencode-ai/plugin`, which local `.ts` plugins need for the `tool()` helper.
-It also removes the old local `opencode-loop.js` copy from earlier releases so only the current local `opencode-loop.ts` plugin remains.
+The installer copies the slash command files and the tool-denied local command agent into your OpenCode config directory. If `@bybrawe/opencode-loop` is already present in the OpenCode `plugin` array, that package entry remains authoritative and the installer removes duplicate local plugin copies. Otherwise it installs `opencode-loop.ts` locally and ensures the config directory has the `@opencode-ai/plugin` dependency required by `tool()`.
 
 Windows target paths:
 
 ```text
 %USERPROFILE%\.config\opencode\plugins\opencode-loop.ts
 %USERPROFILE%\.config\opencode\commands\loop*.md
+%USERPROFILE%\.config\opencode\agents\opencode-loop-local.md
 ```
 
 macOS / Linux target paths:
@@ -172,6 +172,7 @@ macOS / Linux target paths:
 ```text
 ~/.config/opencode/plugins/opencode-loop.ts
 ~/.config/opencode/commands/loop*.md
+~/.config/opencode/agents/opencode-loop-local.md
 ```
 
 Then fully restart OpenCode and run:
@@ -195,9 +196,9 @@ The `npx` installer installs both parts:
 
 - the OpenCode plugin file
 - the `/loop-*` command markdown files
+- the tool-denied `opencode-loop-local` acknowledgement agent
 
-Use the OpenCode config-only method only if you already installed the command files separately or you are only testing plugin loading.
-Do not use the config package entry and the local `npx`-installed plugin at the same time unless you intentionally want to test duplicate plugin loading.
+The installer automatically avoids loading both the package entry and a local plugin copy. It can therefore be rerun safely after switching installation styles.
 
 ### Optional: OpenCode config package entry
 
@@ -220,7 +221,7 @@ If `/loop` does not appear after using only the config method, run the installer
 npx -y @bybrawe/opencode-loop
 ```
 
-If you later switch back to the recommended `npx` local install, remove `@bybrawe/opencode-loop` from the `plugin` array to avoid loading the package plugin and local plugin together.
+If you later remove `@bybrawe/opencode-loop` from the `plugin` array, rerun the installer so it restores the local plugin copy.
 
 ### Install from GitHub
 
@@ -257,16 +258,19 @@ Windows PowerShell:
 ```powershell
 mkdir "$env:USERPROFILE\.config\opencode\plugins" -Force
 mkdir "$env:USERPROFILE\.config\opencode\commands" -Force
+mkdir "$env:USERPROFILE\.config\opencode\agents" -Force
 copy .\src\index.js "$env:USERPROFILE\.config\opencode\plugins\opencode-loop.ts"
 copy .\commands\*.md "$env:USERPROFILE\.config\opencode\commands\"
+copy .\agents\*.md "$env:USERPROFILE\.config\opencode\agents\"
 ```
 
 macOS / Linux:
 
 ```bash
-mkdir -p ~/.config/opencode/plugins ~/.config/opencode/commands
+mkdir -p ~/.config/opencode/plugins ~/.config/opencode/commands ~/.config/opencode/agents
 cp ./src/index.js ~/.config/opencode/plugins/opencode-loop.ts
 cp ./commands/*.md ~/.config/opencode/commands/
+cp ./agents/*.md ~/.config/opencode/agents/
 ```
 
 ### Project-local install
@@ -274,9 +278,10 @@ cp ./commands/*.md ~/.config/opencode/commands/
 Use this when you want the plugin to be available only inside one repository.
 
 ```bash
-mkdir -p .opencode/plugins .opencode/commands
+mkdir -p .opencode/plugins .opencode/commands .opencode/agents
 cp ./src/index.js .opencode/plugins/opencode-loop.ts
 cp ./commands/*.md .opencode/commands/
+cp ./agents/*.md .opencode/agents/
 ```
 
 On Windows PowerShell:
@@ -284,8 +289,10 @@ On Windows PowerShell:
 ```powershell
 mkdir .opencode\plugins -Force
 mkdir .opencode\commands -Force
+mkdir .opencode\agents -Force
 copy .\src\index.js .opencode\plugins\opencode-loop.ts
 copy .\commands\*.md .opencode\commands\
+copy .\agents\*.md .opencode\agents\
 ```
 
 ### Verify installation
@@ -302,7 +309,8 @@ If the commands do not appear:
 1. Make sure OpenCode was fully restarted.
 2. Check that `opencode-loop.ts` exists in the OpenCode plugin directory.
 3. Check that `loop.md`, `loop-help.md`, and the other command files exist in the OpenCode commands directory.
-4. Run `npx -y @bybrawe/opencode-loop` again to reinstall the command files.
+4. Check that `opencode-loop-local.md` exists in the OpenCode agents directory.
+5. Run `npx -y @bybrawe/opencode-loop` again to reinstall the command and agent files.
 
 ## Quick start
 
@@ -1111,6 +1119,13 @@ Improve the application in small safe steps.
 ```
 
 ## Changelog highlights
+
+### v0.5.17
+
+- Added a tool-denied local command agent and restored the normal coding agent/model for scheduled iterations.
+- Prevented package/local duplicate plugin loading and deferred bootstrap SDK calls to avoid project startup deadlocks.
+- Fixed watched jobs, preset parsing, repeated-command deduplication, safe-shell patterns, and invalid-action retry storms.
+- Added comprehensive command, lifecycle, installer, JSONC, scheduler, and safety regression tests.
 
 ### v0.5.16
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.17
+
+- Prevented OpenCode project bootstrap deadlocks by deferring local SDK logging and session discovery until after plugin hooks are returned.
+- Added a tool-denied `opencode-loop-local` command agent for all 30 slash commands, preventing local status/control commands from spawning tools or background subagents; scheduled work restores the normal agent/model context.
+- Made the installer detect package-based plugin configuration in JSON or JSONC and remove duplicate local plugin copies instead of loading two schedulers.
+- Fixed watched jobs so file changes actually trigger them, while unchanged paths remain dormant.
+- Fixed preset parsing for explicit `0s`, flag-only presets, and custom `/loop-testfix` commands.
+- Fixed command-event deduplication so compatibility events are suppressed without swallowing intentional repeated commands.
+- Hardened safe shell detection for PowerShell and `rm` variants, removed the `npm run format` false positive, and paused invalid synchronous actions instead of retrying them indefinitely.
+- Added comprehensive parser, preset, lifecycle, watch, safety, routing, goal, installer, JSONC, and initialization regression coverage.
+
 ## 0.5.16
 
 - Treat active OpenCode tools, shell calls, and foreground or background subtasks as busy even if the parent session receives an idle/status event while they are still running.

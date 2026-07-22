@@ -20,9 +20,12 @@ const GOAL_PROMPT_PREFIX = "EXPERIMENTAL OPENCODE GOAL MODE ITERATION"
 const DEFAULT_GOAL_MAX_NO_PROGRESS = 3
 const DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180_000
 const LOOP_OWNED_USER_MESSAGE_GUARD_MS = 10_000
+const LOCAL_COMMAND_AGENT = "opencode-loop-local"
 
 const activeRuns = new Map()
 const handledCommands = new Map()
+const handledCommandEvents = new Map()
+const sessionExecutionContexts = new Map()
 const loopOwnedUserMessageGuards = new Map()
 const idleTimers = new Map()
 const dueTimers = new Map()
@@ -240,6 +243,7 @@ function parseLoopArgs(raw, defaults = {}) {
     lastCompactAt: 0,
     lastCompactRunCount: 0,
     watchSnapshot: {},
+    watchTriggered: false,
     createdAt: new Date().toISOString(),
     enabled: true,
     paused: false,
@@ -533,12 +537,26 @@ async function say(client, sessionID, text) {
 
 function commandKey(sessionID, name, args) { return `${sessionID || "no-session"}:${name || ""}:${normalizeArgsForKey(args)}` }
 function markHandled(sessionID, name, args) {
-  handledCommands.set(commandKey(sessionID, name, args), now())
-  for (const [key, time] of handledCommands.entries()) if (now() - time > 30_000) handledCommands.delete(key)
+  const key = commandKey(sessionID, name, args)
+  const previous = handledCommands.get(key)
+  const pending = previous && now() - previous.time < 30_000 ? previous.pending + 1 : 1
+  handledCommands.set(key, { time: now(), pending })
+  for (const [entryKey, entry] of handledCommands.entries()) if (now() - entry.time > 30_000) handledCommands.delete(entryKey)
+  for (const [entryKey, time] of handledCommandEvents.entries()) if (now() - time > 30_000) handledCommandEvents.delete(entryKey)
 }
-function wasHandled(sessionID, name, args) {
-  const time = handledCommands.get(commandKey(sessionID, name, args))
-  return typeof time === "number" && now() - time < 30_000
+function consumeHandled(sessionID, name, args) {
+  const key = commandKey(sessionID, name, args)
+  const entry = handledCommands.get(key)
+  if (!entry || now() - entry.time >= 30_000) {
+    handledCommands.delete(key)
+    return false
+  }
+  if (entry.pending <= 1) handledCommands.delete(key)
+  else handledCommands.set(key, { time: entry.time, pending: entry.pending - 1 })
+  return true
+}
+function commandEventKey(sessionID, messageID) {
+  return `${sessionID || "no-session"}:event:${messageID || "no-message"}`
 }
 
 function commandName(name) { return String(name || "") }
@@ -572,6 +590,48 @@ function rememberSession(directory, client, sessionID) {
   startHeartbeat()
 }
 
+function normalizedModelRef(model) {
+  if (typeof model === "string") {
+    const separator = model.indexOf("/")
+    if (separator > 0) return { providerID: model.slice(0, separator), modelID: model.slice(separator + 1) }
+    return undefined
+  }
+  const providerID = model?.providerID
+  const modelID = model?.modelID || model?.id
+  if (typeof providerID !== "string" || typeof modelID !== "string") return undefined
+  return { providerID, modelID }
+}
+
+function updateSessionExecutionContext(info) {
+  const sessionID = info?.sessionID || info?.id
+  if (typeof sessionID !== "string") return
+  const previous = sessionExecutionContexts.get(sessionID) || {}
+  const candidateAgent = info?.agent || (info?.role === "assistant" ? info?.mode : undefined)
+  const agent = typeof candidateAgent === "string" && candidateAgent !== LOCAL_COMMAND_AGENT
+    ? candidateAgent
+    : previous.agent
+  const model = normalizedModelRef(info?.model) || normalizedModelRef(info) || previous.model
+  sessionExecutionContexts.set(sessionID, { agent, model })
+}
+
+async function captureSessionExecutionContext(client, sessionID) {
+  if (client?.session?.get) {
+    try {
+      const info = await sdkCall(
+        client.session.get.bind(client.session),
+        { path: { id: sessionID } },
+        { path: { sessionID } },
+        { sessionID },
+      )
+      updateSessionExecutionContext(info)
+    } catch {}
+  }
+  const context = sessionExecutionContexts.get(sessionID) || {}
+  const normalized = { agent: context.agent || "build", model: context.model }
+  sessionExecutionContexts.set(sessionID, normalized)
+  return normalized
+}
+
 function hasActiveToolCalls(sessionID) {
   return (activeToolCalls.get(sessionID)?.size || 0) > 0
 }
@@ -602,6 +662,8 @@ function updateSessionRelationship(info, removed = false) {
   if (typeof sessionID !== "string") return
   if (removed || typeof info?.parentID !== "string") sessionParents.delete(sessionID)
   else sessionParents.set(sessionID, info.parentID)
+  if (!removed) updateSessionExecutionContext(info)
+  else sessionExecutionContexts.delete(sessionID)
 }
 
 function updateSessionRelationshipFromEvent(event) {
@@ -707,7 +769,9 @@ function disposeRuntime(directory, client) {
     sessionParents.delete(sessionID)
     sessionStatuses.delete(sessionID)
     sessionStatusSeenAt.delete(sessionID)
+    sessionExecutionContexts.delete(sessionID)
     for (const key of handledCommands.keys()) if (key.startsWith(`${sessionID}:`)) handledCommands.delete(key)
+    for (const key of handledCommandEvents.keys()) if (key.startsWith(`${sessionID}:`)) handledCommandEvents.delete(key)
   }
   if (!knownSessions.size && heartbeatTimer) {
     clearInterval(heartbeatTimer)
@@ -715,20 +779,19 @@ function disposeRuntime(directory, client) {
   }
 }
 
-function presetDefaults(name, args) {
-  const [maybeDuration, rest] = splitFirst(args)
-  const parsed = parseDuration(maybeDuration)
-  const intervalMs = parsed === null ? 0 : parsed
-  const extra = parsed === null ? String(args || "").trim() : rest
-  if (name === "loop-compact") return { intervalMs: intervalMs || parseDuration("200m"), action: extra || "/compact", kind: "compact", name: "compact", immediate: false }
-  if (name === "loop-command" || name === "loop-cmd") return { intervalMs, action: extra, kind: "command", name: "command", immediate: false }
-  if (name === "loop-prompt") return { intervalMs, action: extra, kind: "prompt", name: "prompt", immediate: true }
-  if (name === "loop-ask") return { intervalMs, action: extra, kind: "prompt", name: "ask", immediate: false }
-  if (name === "loop-shell") return { intervalMs, action: extra, kind: "shell", name: "shell", immediate: false }
-  if (name === "loop-testfix") return { intervalMs, name: "testfix", safe: true, askNever: true, verifyCommand: extra || "npm test", action: `Run the project tests. Fix failures. Re-run the tests. Test command hint: ${extra || "npm test"}` }
-  if (name === "loop-progress") return { intervalMs, name: "progress", safe: true, askNever: true, progressFile: "progress.md", action: extra || "Read progress.md and continue the next unfinished TODO. Mark completed TODOs with [x]. Add useful TODOs when you discover them." }
-  if (name === "loop-safe-dev") return { intervalMs, name: "safe-dev", safe: true, askNever: true, noOverlap: true, checkpointOnly: true, batch: 5, progressFile: "progress.md", action: extra || "Develop the project from progress.md. Work in small safe batches. Mark completed TODOs with [x]. Add new ideas to progress.md. Run tests/lint/build if available." }
-  return { intervalMs, name: "dev", askNever: true, progressFile: "progress.md", action: extra || "Continue developing the project from progress.md. Mark completed TODOs with [x]. Add new ideas to progress.md. Run tests/lint/build if available." }
+function presetDefaults(name) {
+  // parseLoopArgs owns duration/flag/action parsing. Presets only provide real
+  // defaults; deriving an action from the raw string made flag-only invocations
+  // such as `/loop-compact --dry-run` use "--dry-run" as the action.
+  if (name === "loop-compact") return { intervalMs: parseDuration("200m"), action: "/compact", kind: "compact", name: "compact", immediate: false }
+  if (name === "loop-command" || name === "loop-cmd") return { intervalMs: 0, kind: "command", name: "command", immediate: false }
+  if (name === "loop-prompt") return { intervalMs: 0, kind: "prompt", name: "prompt", immediate: true }
+  if (name === "loop-ask") return { intervalMs: 0, kind: "prompt", name: "ask", immediate: false }
+  if (name === "loop-shell") return { intervalMs: 0, kind: "shell", name: "shell", immediate: false }
+  if (name === "loop-testfix") return { intervalMs: 0, name: "testfix", safe: true, askNever: true, verifyCommand: "npm test", testfixPreset: true, action: "Run the project tests. Fix failures. Re-run the tests. Test command hint: npm test" }
+  if (name === "loop-progress") return { intervalMs: 0, name: "progress", safe: true, askNever: true, progressFile: "progress.md", action: "Read progress.md and continue the next unfinished TODO. Mark completed TODOs with [x]. Add useful TODOs when you discover them." }
+  if (name === "loop-safe-dev") return { intervalMs: 0, name: "safe-dev", safe: true, askNever: true, noOverlap: true, checkpointOnly: true, batch: 5, progressFile: "progress.md", action: "Develop the project from progress.md. Work in small safe batches. Mark completed TODOs with [x]. Add new ideas to progress.md. Run tests/lint/build if available." }
+  return { intervalMs: 0, name: "dev", askNever: true, progressFile: "progress.md", action: "Continue developing the project from progress.md. Mark completed TODOs with [x]. Add new ideas to progress.md. Run tests/lint/build if available." }
 }
 
 function jobLabel(job) {
@@ -803,7 +866,19 @@ async function notifyJob(directory, job, reason) {
 
 function dangerousShell(command) {
   const text = String(command || "").toLowerCase()
-  return [/\brm\s+-rf\b/, /\bgit\s+reset\b/, /\bgit\s+clean\b/, /\bgit\s+push\b/, /\bdel\s+\/s\b/, /\brmdir\s+\/s\b/, /\bformat\b/, /\bterraform\s+destroy\b/, /\bkubectl\s+delete\b/, /\bdeploy\b.*\bproduction\b/].some((pattern) => pattern.test(text))
+  return [
+    /\brm\b(?=[^\r\n]*\s-{1,2}(?:[a-z]*r[a-z]*|recursive)\b)(?=[^\r\n]*\s-{1,2}(?:[a-z]*f[a-z]*|force)\b)/,
+    /\bremove-item\b[^\r\n]*(?:-recurse|-force)/,
+    /\bgit\s+reset\b/,
+    /\bgit\s+clean\b/,
+    /\bgit\s+push\b/,
+    /\bdel\b[^\r\n]*\s\/s\b/,
+    /\b(?:rmdir|rd)\b[^\r\n]*\s\/s\b/,
+    /(?:^|[;&|]\s*)format(?:\.com)?\s+(?:[a-z]:|\/(?:fs|q)\b)/,
+    /\bterraform\s+destroy\b/,
+    /\bkubectl\s+delete\b/,
+    /\bdeploy\b.*\bproduction\b/,
+  ].some((pattern) => pattern.test(text))
 }
 
 function actionKind(action, job = {}) {
@@ -1284,7 +1359,7 @@ function dueJobs(state, force = false) {
     if (job.maxRuns > 0 && (job.runCount || 0) >= job.maxRuns) return false
     if (job.maxRuntimeMs > 0 && current - Date.parse(job.createdAt || new Date().toISOString()) >= job.maxRuntimeMs) return true
     if (force) return true
-    if (job.watchPaths?.length) return false
+    if (job.watchPaths?.length) return job.watchTriggered === true
     return job.intervalMs === 0 || !job.lastRunAt || current - job.lastRunAt >= job.intervalMs
   })
 }
@@ -1592,16 +1667,18 @@ async function finalizeActiveRun(directory, client, sessionID, options = {}) {
 async function fireAction(directory, client, sessionID, job) {
   const action = String(job.action || "").trim()
   const kind = actionKind(action, job)
+  const agent = job.agent || "build"
+  const model = normalizedModelRef(job.model)
   if (kind === "compact") {
     const ok = await compactSession(client, sessionID)
-    return { startsAssistantTurn: ok }
+    return { startsAssistantTurn: ok, pause: !ok, reason: "compact_failed" }
   }
   if (kind === "command") {
     const normalized = action.startsWith("/") ? action.slice(1) : action
     const [command, argumentsText] = splitFirst(normalized)
     if (!command) {
       await toast(client, "Loop command action is empty. Example: /loop-command 200m /compact", "warning")
-      return { startsAssistantTurn: false }
+      return { startsAssistantTurn: false, pause: true, reason: "empty_command" }
     }
     const tuiCommand = compactTuiCommandName(command)
     if (tuiCommand) {
@@ -1610,11 +1687,13 @@ async function fireAction(directory, client, sessionID, job) {
       return { startsAssistantTurn: true }
     }
     guardLoopOwnedUserMessage(sessionID)
+    const commandBody = { command, arguments: argumentsText, agent }
+    if (model) commandBody.model = `${model.providerID}/${model.modelID}`
     await sdkCall(
       client.session.command.bind(client.session),
-      { path: { id: sessionID }, body: { command, arguments: argumentsText } },
-      { path: { sessionID }, body: { command, arguments: argumentsText } },
-      { sessionID, command, arguments: argumentsText },
+      { path: { id: sessionID }, body: commandBody },
+      { path: { sessionID }, body: commandBody },
+      { sessionID, ...commandBody },
     )
     return { startsAssistantTurn: true }
   }
@@ -1623,16 +1702,18 @@ async function fireAction(directory, client, sessionID, job) {
     if (job.safe && dangerousShell(command)) {
       await toast(client, `Blocked dangerous shell command in safe mode: ${command}`, "error")
       await appendLoopLog(directory, "blocked", { sessionID, job: job.name || job.id, command })
-      return { startsAssistantTurn: false }
+      return { startsAssistantTurn: false, pause: true, reason: "safe_shell_blocked" }
     }
     guardLoopOwnedUserMessage(sessionID)
+    const shellBody = { command, agent }
+    if (model) shellBody.model = model
     fireSdk(
       client,
       "session.shell",
       client.session.shell.bind(client.session),
-      { path: { id: sessionID }, body: { command } },
-      { path: { sessionID }, body: { command } },
-      { sessionID, command },
+      { path: { id: sessionID }, body: shellBody },
+      { path: { sessionID }, body: shellBody },
+      { sessionID, ...shellBody },
     )
     return { startsAssistantTurn: true }
   }
@@ -1644,13 +1725,15 @@ async function fireAction(directory, client, sessionID, job) {
 
 ${prompt}`
   guardLoopOwnedUserMessage(sessionID)
+  const promptBody = { agent, parts: [{ type: "text", text: promptText }] }
+  if (model) promptBody.model = model
   fireSdk(
     client,
     "session.prompt",
     client.session.prompt.bind(client.session),
-    { path: { id: sessionID }, body: { parts: [{ type: "text", text: promptText }] } },
-    { path: { sessionID }, body: { parts: [{ type: "text", text: promptText }] } },
-    { sessionID, parts: [{ type: "text", text: promptText }] },
+    { path: { id: sessionID }, body: promptBody },
+    { path: { sessionID }, body: promptBody },
+    { sessionID, ...promptBody },
   )
   return { startsAssistantTurn: true }
 }
@@ -1684,7 +1767,7 @@ async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
 
     const state = await readState(directory, sessionID)
     for (const candidate of state.jobs || []) {
-      if (candidate.watchPaths?.length && !candidate.paused && candidate.enabled && await watchChanged(directory, candidate)) candidate.lastRunAt = 0
+      if (candidate.watchPaths?.length && !candidate.paused && candidate.enabled && await watchChanged(directory, candidate)) candidate.watchTriggered = true
     }
     const due = dueJobs(state, options.force)
     if (!due.length) {
@@ -1746,6 +1829,7 @@ async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
 
     job = await ensureBranch(directory, job, client, sessionID)
     job = await maybeCompact(client, sessionID, job)
+    job.watchTriggered = false
     job.lastRunAt = now()
     job.runCount = (job.runCount || 0) + 1
     if (job.maxRuns > 0 && job.runCount >= job.maxRuns) {
@@ -1761,6 +1845,14 @@ async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
       const result = await fireAction(directory, client, sessionID, job)
       if (!result.startsAssistantTurn) {
         const fresh = await readState(directory, sessionID)
+        if (result.pause) {
+          fresh.jobs = (fresh.jobs || []).map((candidate) => candidate.id === job.id ? {
+            ...candidate,
+            paused: true,
+            failureCount: (candidate.failureCount || 0) + 1,
+            lastFailureReason: result.reason || "action_did_not_start",
+          } : candidate)
+        }
         fresh.jobs = (fresh.jobs || []).filter((candidate) => candidate.enabled !== false || isGoalJob(candidate))
         await writeState(directory, sessionID, fresh)
         await reschedule()
@@ -1799,6 +1891,20 @@ function sameLoopDefinition(a, b) {
 async function addLoop(directory, client, sessionID, args, defaults = {}) {
   const parsed = parseLoopArgs(args, defaults)
   if (!parsed.ok) { await toast(client, parsed.error, "warning"); return }
+  const executionContext = sessionExecutionContexts.get(sessionID) || { agent: "build" }
+  parsed.job.agent = defaults.agent || executionContext.agent || "build"
+  parsed.job.model = normalizedModelRef(defaults.model) || executionContext.model
+  if (defaults.testfixPreset) {
+    const defaultCommand = String(defaults.verifyCommand || "npm test")
+    const parsedAction = String(parsed.job.action || "").trim()
+    const usedDefaultAction = parsedAction === String(defaults.action || "").trim()
+    if (!usedDefaultAction && parsed.job.verifyCommand === defaults.verifyCommand) {
+      parsed.job.verifyCommand = parsedAction
+      parsed.job.action = `Run the project tests. Fix failures. Re-run the tests. Test command hint: ${parsedAction}`
+    } else if (usedDefaultAction && parsed.job.verifyCommand !== defaults.verifyCommand) {
+      parsed.job.action = `Run the project tests. Fix failures. Re-run the tests. Test command hint: ${parsed.job.verifyCommand || defaultCommand}`
+    }
+  }
   if (parsed.job.watchPaths.length) parsed.job.watchSnapshot = await snapshotPaths(directory, parsed.job.watchPaths)
   if (!parsed.job.activeRecoveryMs) {
     parsed.job.activeRecoveryMs = isGoalJob(parsed.job)
@@ -2014,20 +2120,32 @@ async function exportLoop(directory, client, sessionID) {
   await say(client, sessionID, "OpenCode loop state export:\n```json\n" + JSON.stringify(state, null, 2) + "\n```")
 }
 
-async function handleCommand(directory, client, input, fallbackName, fallbackArgs, output) {
+async function handleCommand(directory, client, input, fallbackName, fallbackArgs, output, source = "before") {
   const name = commandName(input?.command ?? input?.name ?? fallbackName)
   const sessionID = input?.sessionID
   const args = commandArgsText(input?.arguments ?? fallbackArgs ?? "")
   if (!sessionID || !name) return false
   rememberSession(directory, client, sessionID)
-  if (wasHandled(sessionID, name, args)) return true
-  markHandled(sessionID, name, args)
+  if (isLoopCommandName(name)) await captureSessionExecutionContext(client, sessionID)
+  if (source === "event") {
+    if (consumeHandled(sessionID, name, args)) return true
+    const eventKey = commandEventKey(sessionID, input?.messageID)
+    if (handledCommandEvents.has(eventKey)) return true
+    handledCommandEvents.set(eventKey, now())
+  } else {
+    // Every before-hook invocation is an intentional command. Keep a pending
+    // count only so the matching command.executed compatibility event can be
+    // consumed without suppressing a genuine repeated command.
+    markHandled(sessionID, name, args)
+  }
   if (isLoopCommandName(name)) guardLoopOwnedUserMessage(sessionID)
 
   const handled = () => {
     if (output && Array.isArray(output.parts)) {
+      // The command has already been completed through toasts/noReply prompts
+      // and local state. Leaving a placeholder prompt starts an unnecessary
+      // model turn; weaker agents may even call tools or spawn subagents.
       output.parts.length = 0
-      output.parts.push({ type: "text", text: "OpenCode Loop command was handled by the local plugin. Do not explain this command; continue only when the loop injects its next task." })
     }
     return true
   }
@@ -2052,7 +2170,8 @@ async function handleCommand(directory, client, input, fallbackName, fallbackArg
   if (name === "loop-doctor") return await doctorLoop(directory, client, sessionID), handled()
   if (name === "loop-init") return await initLoop(directory, client, sessionID, args), handled()
   if (name === "loop-export") return await exportLoop(directory, client, sessionID), handled()
-  handledCommands.delete(commandKey(sessionID, name, args))
+  if (source === "event") handledCommandEvents.delete(commandEventKey(sessionID, input?.messageID))
+  else consumeHandled(sessionID, name, args)
   return false
 }
 
@@ -2095,8 +2214,14 @@ function goalTools(defaultDirectory) {
 }
 
 export const OpenCodeLoopPlugin = async ({ client, directory }) => {
-  await log(client, "info", "Plugin initialized", { directory })
-  await refreshSessionRelationships(client, directory)
+  // OpenCode's local SDK can be slow or unavailable while a project instance
+  // is still waiting for its plugins to return their hooks. Defer bootstrap
+  // calls so headless/server sessions cannot deadlock during plugin loading.
+  const bootstrap = setTimeout(() => {
+    log(client, "info", "Plugin initialized", { directory }).catch(() => {})
+    refreshSessionRelationships(client, directory).catch(() => {})
+  }, 0)
+  bootstrap.unref?.()
   return {
     dispose: async () => { disposeRuntime(directory, client) },
     tool: goalTools(directory),
@@ -2105,10 +2230,11 @@ export const OpenCodeLoopPlugin = async ({ client, directory }) => {
     "tool.execute.after": async (input) => { markToolCallFinished(input) },
     event: async ({ event }) => {
       updateSessionRelationshipFromEvent(event)
+      if (event.type === "message.updated") updateSessionExecutionContext(event?.properties?.info)
       updateToolActivityFromEvent(event)
       if (event.type === "command.executed") {
         const props = event.properties || {}
-        await handleCommand(directory, client, props, props.name, props.arguments)
+        await handleCommand(directory, client, props, props.name, props.arguments, undefined, "event")
       }
       const interruptedSessionID = userInterruptSessionFromEvent(event)
       if (interruptedSessionID) {
