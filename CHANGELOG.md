@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.18
+
+- Fixed package-based installs loading stale OpenCode cache entries after npm had installed a newer release. The installer now pins an existing package config entry to its exact installed version while preserving JSONC comments.
+- Fixed Goal Mode mistaking delayed updates for its own scheduler-created user message as a real user interruption. Loop-owned message IDs remain recognized without hiding a distinct user message.
+- Added a dedicated `opencode-loopd` regression suite for literal argument passing, BOM prompt files, model/agent forwarding, finite-run exit codes, invalid options, and Windows scheduled-task lifecycle behavior.
+- Made finite daemon runs propagate OpenCode failures instead of reporting exit code 0, and reject invalid `--max-runs` values and missing project directories.
+- Added `--model` and `--agent` forwarding to daemon and scheduled-task runs.
+- Fixed Windows Task Scheduler installation failing when `/TR` exceeded its 261-character limit. Scheduled tasks now use a short launcher plus a task-specific JSON config under the local app-data directory, and uninstall removes both artifacts.
+- Made Task Scheduler command launch failures return a nonzero exit code instead of silently succeeding.
+- Added non-mutating `--help` and `--version` handling to the `opencode-loop` installer CLI.
+
 ## 0.5.17
 
 - Prevented OpenCode project bootstrap deadlocks by deferring local SDK logging and session discovery until after plugin hooks are returned.

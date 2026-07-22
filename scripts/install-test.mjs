@@ -7,11 +7,13 @@ import { fileURLToPath } from "node:url"
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const installer = path.join(root, "scripts", "install-node.mjs")
+const packageVersion = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8")).version
+const expectedPackageSpec = `@bybrawe/opencode-loop@${packageVersion}`
 const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-loop-installer-"))
 
-async function runInstaller(config) {
+async function runInstaller(config, cliArgs = []) {
   return await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [installer], {
+    const child = spawn(process.execPath, [installer, ...cliArgs], {
       cwd: root,
       env: { ...process.env, OPENCODE_CONFIG_DIR: config },
       windowsHide: true,
@@ -38,6 +40,17 @@ async function exists(target) {
 }
 
 try {
+  const helpConfig = path.join(temporaryRoot, "help-must-not-install")
+  const helpResult = await runInstaller(helpConfig, ["--help"])
+  assert.equal(helpResult.code, 0, helpResult.stderr)
+  assert.match(helpResult.stdout, /OpenCode Loop installer/)
+  assert.equal(await exists(helpConfig), false, "--help must not mutate the OpenCode config directory")
+
+  const versionResult = await runInstaller(helpConfig, ["--version"])
+  assert.equal(versionResult.code, 0, versionResult.stderr)
+  assert.equal(versionResult.stdout.trim(), packageVersion)
+  assert.equal(await exists(helpConfig), false, "--version must not mutate the OpenCode config directory")
+
   const local = path.join(temporaryRoot, "local")
   const localResult = await runInstaller(local)
   assert.equal(localResult.code, 0, localResult.stderr)
@@ -59,6 +72,8 @@ try {
   assert.equal(await exists(path.join(configured, "plugins", "opencode-loop.js")), false)
   assert.equal(await commandCount(configured), 30)
   assert.equal(await exists(path.join(configured, "agents", "opencode-loop-local.md")), true)
+  const configuredJson = JSON.parse(await fs.readFile(path.join(configured, "opencode.json"), "utf8"))
+  assert.deepEqual(configuredJson.plugin, [expectedPackageSpec], "the installer must bust OpenCode's stale package cache with an exact version spec")
 
   const jsonc = path.join(temporaryRoot, "jsonc")
   await fs.mkdir(jsonc, { recursive: true })
@@ -72,6 +87,9 @@ try {
   const jsoncResult = await runInstaller(jsonc)
   assert.equal(jsoncResult.code, 0, jsoncResult.stderr)
   assert.equal(await exists(path.join(jsonc, "plugins", "opencode-loop.ts")), false)
+  const updatedJsonc = await fs.readFile(path.join(jsonc, "opencode.jsonc"), "utf8")
+  assert.match(updatedJsonc, /A configured package is authoritative/, "pinning must preserve JSONC comments")
+  assert.match(updatedJsonc, new RegExp(expectedPackageSpec.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
 
   const lookalike = path.join(temporaryRoot, "lookalike")
   await fs.mkdir(lookalike, { recursive: true })

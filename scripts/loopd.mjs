@@ -2,15 +2,22 @@
 import fs from "node:fs"
 import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
+import { createHash } from "node:crypto"
+import { homedir } from "node:os"
 import { fileURLToPath } from "node:url"
 
 const args = process.argv.slice(2)
-const FAILED_RUN_RETRY_MS = 5_000
+const configuredRetryMs = Number(process.env.OPENCODE_LOOPD_FAILED_RUN_RETRY_MS)
+const FAILED_RUN_RETRY_MS = Number.isFinite(configuredRetryMs) && configuredRetryMs >= 0 ? configuredRetryMs : 5_000
 const OPENCODE_BIN = process.env.OPENCODE_BIN || "opencode"
+const SCHTASKS_BIN = process.env.SCHTASKS_BIN || "schtasks"
+const TASK_ROOT = process.env.OPENCODE_LOOPD_TASK_DIR || path.join(process.env.LOCALAPPDATA || path.join(homedir(), "AppData", "Local"), "opencode-loop", "tasks")
 
 function arg(name, fallback = null) {
   const i = args.indexOf(name)
-  return i >= 0 ? args[i + 1] ?? fallback : fallback
+  if (i < 0) return fallback
+  if (i + 1 >= args.length) throw new Error(`Missing value for ${name}`)
+  return args[i + 1]
 }
 
 function has(name) {
@@ -18,7 +25,7 @@ function has(name) {
 }
 
 function parseMs(value) {
-  const v = String(value || "0s").trim().toLowerCase()
+  const v = String(value ?? "0s").trim().toLowerCase()
   if (v === "0" || v === "0s" || v === "now") return 0
 
   const m = v.match(/^(\d+(?:\.\d+)?)\s*(ms|s|sec|secs|m|min|mins|h|hr|hrs|d|day|days)$/)
@@ -34,6 +41,20 @@ function parseMs(value) {
   if (unit.startsWith("d")) return n * 86_400_000
 
   return n
+}
+
+function parseMaxRuns(value) {
+  const text = String(value ?? "0").trim()
+  if (!/^\d+$/.test(text)) throw new Error(`Invalid --max-runs value: ${value}`)
+  const parsed = Number(text)
+  if (!Number.isSafeInteger(parsed)) throw new Error(`Invalid --max-runs value: ${value}`)
+  return parsed
+}
+
+function validateProject(project) {
+  let stat
+  try { stat = fs.statSync(project) } catch { throw new Error(`Project directory does not exist: ${project}`) }
+  if (!stat.isDirectory()) throw new Error(`Project path is not a directory: ${project}`)
 }
 
 function sleep(ms) {
@@ -64,7 +85,7 @@ function spawnOnce(command, commandArgs, cwd) {
     }
 
     child.on("error", (error) => done({ code: -1, error }))
-    child.on("exit", (code) => done({ code: code ?? 0 }))
+    child.on("exit", (code, signal) => done({ code: code ?? (signal ? 1 : 0), signal }))
   })
 }
 
@@ -88,9 +109,17 @@ async function run(command, commandArgs, cwd) {
   return fallback.code
 }
 
-function readPrompt(project) {
-  const promptFile = arg("--prompt-file")
-  const promptArg = arg("--prompt")
+function runSync(command, commandArgs) {
+  const options = { shell: false, stdio: "inherit", windowsHide: true }
+  const direct = spawnSync(command, commandArgs, options)
+  const extension = path.extname(String(command || "")).toLowerCase()
+  if (!direct.error || process.platform !== "win32" || direct.error.code !== "EINVAL" || ![".cmd", ".bat"].includes(extension)) return direct
+  return spawnSync("cmd.exe", ["/d", "/s", "/c", command, ...commandArgs], options)
+}
+
+function readPrompt(project, options = {}) {
+  const promptFile = options.promptFile ?? arg("--prompt-file")
+  const promptArg = options.prompt ?? arg("--prompt")
 
   if (promptFile) {
     return stripBom(fs.readFileSync(path.resolve(project, promptFile), "utf8"))
@@ -110,13 +139,17 @@ function readPrompt(project) {
   ].join(" ")
 }
 
-async function daemon() {
-  const project = path.resolve(arg("--project", process.cwd()))
-  const every = arg("--every", "0s")
+async function daemon(options = {}) {
+  const project = path.resolve(options.project ?? arg("--project", process.cwd()))
+  validateProject(project)
+  const every = options.every ?? arg("--every", "0s")
   const delay = parseMs(every)
-  const maxRuns = Number(arg("--max-runs", "0")) || 0
-  const sleepFirst = has("--sleep-first")
-  const prompt = readPrompt(project)
+  const maxRuns = parseMaxRuns(options.maxRuns ?? arg("--max-runs", "0"))
+  const sleepFirst = options.sleepFirst ?? has("--sleep-first")
+  const prompt = readPrompt(project, options)
+  const model = options.model ?? arg("--model")
+  const agent = options.agent ?? arg("--agent")
+  const opencodeBin = options.opencodeBin || OPENCODE_BIN
 
   console.log("OpenCode Loop daemon")
   console.log(`project: ${project}`)
@@ -135,7 +168,11 @@ async function daemon() {
     console.log("")
     console.log(`[opencode-loopd] run #${count} ${new Date().toISOString()}`)
 
-    const code = await run(OPENCODE_BIN, ["run", "--continue", prompt], project)
+    const runArgs = ["run", "--continue"]
+    if (model) runArgs.push("--model", model)
+    if (agent) runArgs.push("--agent", agent)
+    runArgs.push(prompt)
+    const code = await run(opencodeBin, runArgs, project)
 
     if (code !== 0) {
       console.log(`[opencode-loopd] opencode exited with code ${code}`)
@@ -146,7 +183,7 @@ async function daemon() {
 
     if (maxRuns > 0 && count >= maxRuns) {
       console.log("[opencode-loopd] max runs reached")
-      break
+      return Number.isInteger(code) && code > 0 ? code : code < 0 ? 1 : 0
     }
 
     if (delay > 0) {
@@ -155,41 +192,75 @@ async function daemon() {
   }
 }
 
+function taskArtifacts(name) {
+  const id = createHash("sha256").update(String(name || "OpenCodeLoop")).digest("hex").slice(0, 16)
+  return {
+    config: path.join(TASK_ROOT, `${id}.json`),
+    launcher: path.join(TASK_ROOT, `${id}.cmd`),
+  }
+}
+
+function removeTaskArtifacts(artifacts) {
+  for (const target of [artifacts.launcher, artifacts.config]) {
+    try { fs.rmSync(target, { force: true }) } catch {}
+  }
+}
+
+async function taskRun() {
+  const configFile = path.resolve(arg("--config"))
+  let config
+  try { config = JSON.parse(fs.readFileSync(configFile, "utf8")) } catch (error) { throw new Error(`Could not read task config ${configFile}: ${error.message}`) }
+  return await daemon(config)
+}
+
 function installTask() {
   if (process.platform !== "win32") {
     throw new Error("install-task is currently implemented for Windows Task Scheduler only. Use daemon mode on macOS/Linux.")
   }
 
   const project = path.resolve(arg("--project", process.cwd()))
+  validateProject(project)
   const every = arg("--every", "10m")
   const minutes = Math.max(1, Math.round(parseMs(every) / 60_000))
   const name = arg("--name", "OpenCodeLoop")
   const promptFile = arg("--prompt-file")
   const promptArg = arg("--prompt")
+  const model = arg("--model")
+  const agent = arg("--agent")
   const node = process.execPath
   const script = fileURLToPath(import.meta.url)
-
-  const commandParts = [
-    quoteWindowsArg(node),
-    quoteWindowsArg(script),
-    "daemon",
-    "--project",
-    quoteWindowsArg(project),
-    "--every",
-    "0s",
-    "--max-runs",
-    "1",
-  ]
-
-  if (promptFile) commandParts.push("--prompt-file", quoteWindowsArg(promptFile))
-  if (promptArg) commandParts.push("--prompt", quoteWindowsArg(promptArg))
-
-  const taskCommand = commandParts.join(" ")
+  const artifacts = taskArtifacts(name)
+  fs.mkdirSync(TASK_ROOT, { recursive: true })
+  const taskConfig = {
+    project,
+    every: "0s",
+    maxRuns: 1,
+    promptFile: promptFile ? path.resolve(project, promptFile) : undefined,
+    prompt: promptArg || undefined,
+    model: model || undefined,
+    agent: agent || undefined,
+    opencodeBin: OPENCODE_BIN,
+  }
+  fs.writeFileSync(artifacts.config, JSON.stringify(taskConfig, null, 2) + "\n", "utf8")
+  const launcherCommand = [quoteWindowsArg(node), quoteWindowsArg(script), "task-run", "--config", quoteWindowsArg(artifacts.config)].join(" ")
+  fs.writeFileSync(artifacts.launcher, `@echo off\r\n${launcherCommand}\r\nexit /b %errorlevel%\r\n`, "utf8")
+  const taskCommand = `cmd.exe /d /s /c "${quoteWindowsArg(artifacts.launcher)}"`
+  if (taskCommand.length > 261) {
+    removeTaskArtifacts(artifacts)
+    throw new Error(`Task Scheduler command is still too long (${taskCommand.length} characters). Set OPENCODE_LOOPD_TASK_DIR to a shorter directory.`)
+  }
   const taskArgs = ["/Create", "/F", "/SC", "MINUTE", "/MO", String(minutes), "/TN", name, "/TR", taskCommand]
 
-  console.log(["schtasks", ...taskArgs.map((part) => JSON.stringify(part))].join(" "))
-  const result = spawnSync("schtasks", taskArgs, { shell: false, stdio: "inherit" })
-  process.exit(result.status ?? 0)
+  console.log([SCHTASKS_BIN, ...taskArgs.map((part) => JSON.stringify(part))].join(" "))
+  const result = runSync(SCHTASKS_BIN, taskArgs)
+  if (result.error) {
+    removeTaskArtifacts(artifacts)
+    console.error(`[opencode-loopd] failed to start ${SCHTASKS_BIN}: ${result.error.message}`)
+    return 1
+  }
+  const status = Number.isInteger(result.status) ? result.status : 1
+  if (status !== 0) removeTaskArtifacts(artifacts)
+  return status
 }
 
 function uninstallTask() {
@@ -198,8 +269,14 @@ function uninstallTask() {
   }
 
   const name = arg("--name", "OpenCodeLoop")
-  const result = spawnSync("schtasks", ["/Delete", "/F", "/TN", name], { shell: false, stdio: "inherit" })
-  process.exit(result.status ?? 0)
+  const result = runSync(SCHTASKS_BIN, ["/Delete", "/F", "/TN", name])
+  if (result.error) {
+    console.error(`[opencode-loopd] failed to start ${SCHTASKS_BIN}: ${result.error.message}`)
+    return 1
+  }
+  const status = Number.isInteger(result.status) ? result.status : 1
+  if (status === 0) removeTaskArtifacts(taskArtifacts(name))
+  return status
 }
 
 function help() {
@@ -217,6 +294,8 @@ Options:
   --every <duration>     0s, 5m, 1h, etc.
   --prompt <text>        Prompt text
   --prompt-file <file>   Read prompt from file relative to the project
+  --model <provider/id>  OpenCode model used for each run
+  --agent <name>         OpenCode agent used for each run
   --max-runs <n>         Stop after n runs
   --sleep-first          Wait before first run
 `)
@@ -225,20 +304,25 @@ Options:
 const command = args[0]
 
 try {
+  let exitCode = 0
   if (command === "daemon" || command === "loopd") {
     args.shift()
-    await daemon()
+    exitCode = await daemon()
   } else if (command === "install-task") {
     args.shift()
-    installTask()
+    exitCode = installTask()
   } else if (command === "uninstall-task") {
     args.shift()
-    uninstallTask()
+    exitCode = uninstallTask()
+  } else if (command === "task-run") {
+    args.shift()
+    exitCode = await taskRun()
   } else if (has("--help") || has("-h") || command === "help") {
     help()
   } else {
-    await daemon()
+    exitCode = await daemon()
   }
+  if (exitCode) process.exitCode = exitCode
 } catch (error) {
   console.error(error?.message || error)
   process.exit(1)

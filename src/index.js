@@ -20,6 +20,7 @@ const GOAL_PROMPT_PREFIX = "EXPERIMENTAL OPENCODE GOAL MODE ITERATION"
 const DEFAULT_GOAL_MAX_NO_PROGRESS = 3
 const DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180_000
 const LOOP_OWNED_USER_MESSAGE_GUARD_MS = 10_000
+const LOOP_OWNED_USER_MESSAGE_RETENTION_MS = 10 * 60_000
 const LOCAL_COMMAND_AGENT = "opencode-loop-local"
 
 const activeRuns = new Map()
@@ -509,18 +510,31 @@ async function toast(client, message, variant = "info") {
 
 function guardLoopOwnedUserMessage(sessionID) {
   if (!sessionID) return
-  loopOwnedUserMessageGuards.set(sessionID, now() + LOOP_OWNED_USER_MESSAGE_GUARD_MS)
-  for (const [key, time] of loopOwnedUserMessageGuards.entries()) if (time < now()) loopOwnedUserMessageGuards.delete(key)
+  const current = loopOwnedUserMessageGuards.get(sessionID) || { pending: 0, until: 0, messageIDs: new Map() }
+  current.pending += 1
+  current.until = Math.max(current.until || 0, now() + LOOP_OWNED_USER_MESSAGE_GUARD_MS)
+  for (const [messageID, expiresAt] of current.messageIDs.entries()) if (expiresAt < now()) current.messageIDs.delete(messageID)
+  loopOwnedUserMessageGuards.set(sessionID, current)
+  for (const [key, entry] of loopOwnedUserMessageGuards.entries()) {
+    for (const [messageID, expiresAt] of entry.messageIDs.entries()) if (expiresAt < now()) entry.messageIDs.delete(messageID)
+    if ((entry.pending || 0) <= 0 && entry.messageIDs.size === 0 && (entry.until || 0) < now()) loopOwnedUserMessageGuards.delete(key)
+  }
 }
 
-function loopOwnedUserMessageGuardActive(sessionID) {
-  const until = loopOwnedUserMessageGuards.get(sessionID)
-  if (typeof until !== "number") return false
-  if (until < now()) {
-    loopOwnedUserMessageGuards.delete(sessionID)
-    return false
+function loopOwnedUserMessageGuardActive(sessionID, messageID) {
+  const entry = loopOwnedUserMessageGuards.get(sessionID)
+  if (!entry || typeof entry !== "object") return false
+  for (const [id, expiresAt] of entry.messageIDs.entries()) if (expiresAt < now()) entry.messageIDs.delete(id)
+  const id = typeof messageID === "string" ? messageID : ""
+  if (id && entry.messageIDs.has(id)) return true
+  if ((entry.pending || 0) > 0 && (entry.until || 0) >= now()) {
+    entry.pending -= 1
+    if (id) entry.messageIDs.set(id, now() + LOOP_OWNED_USER_MESSAGE_RETENTION_MS)
+    loopOwnedUserMessageGuards.set(sessionID, entry)
+    return true
   }
-  return true
+  if ((entry.pending || 0) <= 0 && entry.messageIDs.size === 0) loopOwnedUserMessageGuards.delete(sessionID)
+  return false
 }
 
 async function say(client, sessionID, text) {
@@ -1106,8 +1120,9 @@ function userInterruptSessionFromEvent(event) {
   const info = props.info || props.message || props
   const role = info?.role
   const sessionID = info?.sessionID || props.sessionID
+  const messageID = info?.id || props.messageID
   if (role !== "user" || typeof sessionID !== "string") return undefined
-  if (loopOwnedUserMessageGuardActive(sessionID)) return undefined
+  if (loopOwnedUserMessageGuardActive(sessionID, messageID)) return undefined
   return sessionID
 }
 

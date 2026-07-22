@@ -16,7 +16,7 @@ v0.5.11 includes a referenced heartbeat scheduler. This is important in OpenCode
 
 ## Current status
 
-**v0.5.17 hardens command, installer, and scheduler behavior around the v0.5.16 busy-detection fix.** Long-running tools and child sessions remain authoritative busy signals. Local `/loop-*` commands now use a tool-denied acknowledgement agent, scheduled work restores the normal agent/model context, package/local duplicate loading is prevented, watched jobs fire correctly, and preset/safe-shell edge cases have regression coverage.
+**v0.5.18 hardens Goal Mode, package updates, and the background daemon.** Package installs are pinned to the installed version so OpenCode cannot keep loading an older cached release, scheduler-created goal messages no longer self-interrupt on delayed updates, finite daemon failures return nonzero, model/agent selection is supported, and Windows scheduled tasks use a short launcher that stays below the `/TR` limit.
 
 The known update-related symptoms from older builds are fixed:
 
@@ -32,7 +32,7 @@ The known update-related symptoms from older builds are fixed:
 
 The TUI loop is still intentionally session-bound: it runs while OpenCode is open and the current session emits status/idle events. For long-running background work after closing the terminal or OpenCode, use `opencode-loopd`.
 
-## v0.5.17 quick behavior guide
+## v0.5.18 quick behavior guide
 
 OpenCode Loop has two triggers now:
 
@@ -157,7 +157,7 @@ Use the npm installer from any shell: Windows PowerShell, Windows CMD, macOS, or
 npx -y @bybrawe/opencode-loop@latest
 ```
 
-The installer copies the slash command files and the tool-denied local command agent into your OpenCode config directory. If `@bybrawe/opencode-loop` is already present in the OpenCode `plugin` array, that package entry remains authoritative and the installer removes duplicate local plugin copies. Otherwise it installs `opencode-loop.ts` locally and ensures the config directory has the `@opencode-ai/plugin` dependency required by `tool()`.
+The installer copies the slash command files and the tool-denied local command agent into your OpenCode config directory. If `@bybrawe/opencode-loop` is already present in the OpenCode `plugin` array, that package entry remains authoritative, is pinned to the installer's exact version to bypass stale OpenCode package caches, and duplicate local plugin copies are removed. Otherwise it installs `opencode-loop.ts` locally and ensures the config directory has the `@opencode-ai/plugin` dependency required by `tool()`.
 
 Windows target paths:
 
@@ -531,6 +531,14 @@ Limit runs:
 opencode-loopd --project . --every 5m --max-runs 20 --prompt-file loop-prompt.md
 ```
 
+Select the OpenCode model and agent explicitly:
+
+```bash
+opencode-loopd --project . --every 0s --max-runs 1 --model opencode/big-pickle --agent build --prompt-file loop-prompt.md
+```
+
+When `--max-runs` is finite, the daemon exits with the final OpenCode run's nonzero status so scripts and CI can detect failures.
+
 Wait before the first run:
 
 ```bash
@@ -567,6 +575,8 @@ Install a scheduled task:
 ```powershell
 opencode-loopd install-task --project "C:\path\to\project" --every 10m --prompt-file loop-prompt.md --name OpenCodeLoop
 ```
+
+You can also pass `--model <provider/model>` and `--agent <name>`. The installer stores long task options in a task-specific JSON file and registers only a short launcher with Task Scheduler, avoiding Windows' 261-character `/TR` limit. `uninstall-task` removes that launcher and JSON config after the task is deleted.
 
 Remove it:
 

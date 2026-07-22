@@ -11,6 +11,26 @@ const commandDir = join(config, "commands")
 const agentDir = join(config, "agents")
 const packagePath = join(config, "package.json")
 const packageName = "@bybrawe/opencode-loop"
+const packageVersion = JSON.parse(await readFile(join(root, "package.json"), "utf8")).version
+const packageSpec = `${packageName}@${packageVersion}`
+const installerArgs = process.argv.slice(2)
+
+if (installerArgs.includes("--help") || installerArgs.includes("-h")) {
+  console.log(`OpenCode Loop installer
+
+Usage:
+  opencode-loop
+  npx -y @bybrawe/opencode-loop@latest
+
+Installs the plugin commands and local command agent into OPENCODE_CONFIG_DIR
+or the default ~/.config/opencode directory.`)
+  process.exit(0)
+}
+
+if (installerArgs.includes("--version") || installerArgs.includes("-v")) {
+  console.log(packageVersion)
+  process.exit(0)
+}
 
 function stripJsonComments(input) {
   let output = ""
@@ -78,16 +98,36 @@ function isPackageSpec(value) {
   return spec === packageName || spec.startsWith(`${packageName}@`)
 }
 
-async function packagePluginConfigured() {
+async function configurePackagePlugin() {
+  let configured = false
+  const updatedFiles = []
   for (const name of ["opencode.json", "opencode.jsonc", "config.json", "config.jsonc"]) {
     try {
-      const parsed = parseJsonc(await readFile(join(config, name), "utf8"))
-      if (Array.isArray(parsed?.plugin) && parsed.plugin.some(isPackageSpec)) return true
+      const target = join(config, name)
+      const source = await readFile(target, "utf8")
+      const parsed = parseJsonc(source)
+      const specs = Array.isArray(parsed?.plugin) ? parsed.plugin.filter(isPackageSpec) : []
+      if (!specs.length) continue
+      configured = true
+
+      // OpenCode caches package plugins by the literal config spec. A bare
+      // package name or @latest can therefore keep loading an older cached
+      // release after npm installs a newer one. Pin the config entry to the
+      // installer package's exact version while preserving JSONC comments.
+      let updated = source
+      for (const spec of new Set(specs)) {
+        if (spec === packageSpec) continue
+        updated = updated.replaceAll(JSON.stringify(spec), JSON.stringify(packageSpec))
+      }
+      if (updated !== source) {
+        await writeFile(target, updated, "utf8")
+        updatedFiles.push(target)
+      }
     } catch (error) {
       if (error?.code !== "ENOENT") console.warn(`Could not inspect ${join(config, name)} for duplicate plugin entries: ${error.message}`)
     }
   }
-  return false
+  return { configured, updatedFiles }
 }
 
 async function ensureDependency() {
@@ -112,7 +152,8 @@ async function ensureDependency() {
 await mkdir(pluginDir, { recursive: true })
 await mkdir(commandDir, { recursive: true })
 await mkdir(agentDir, { recursive: true })
-const useConfiguredPackage = await packagePluginConfigured()
+const packageConfig = await configurePackagePlugin()
+const useConfiguredPackage = packageConfig.configured
 if (useConfiguredPackage) {
   await rm(join(pluginDir, "opencode-loop.ts"), { force: true })
   await rm(join(pluginDir, "opencode-loop.js"), { force: true })
@@ -134,7 +175,12 @@ for (const name of await readdir(join(root, "agents"))) {
   }
 }
 
-if (useConfiguredPackage) console.log(`OpenCode Loop is already configured as a package in ${config}; removed the duplicate local plugin copy.`)
+if (useConfiguredPackage) {
+  const pinResult = packageConfig.updatedFiles.length
+    ? `pinned the config entry to ${packageSpec}`
+    : `the config entry is already pinned to ${packageSpec}`
+  console.log(`OpenCode Loop is already configured as a package in ${config}; ${pinResult} and removed the duplicate local plugin copy.`)
+}
 else console.log(`Installed OpenCode Loop plugin to ${config}`)
 console.log(`Installed ${packageName} commands to ${commandDir}`)
 console.log(`Installed ${packageName} local command agent to ${agentDir}`)

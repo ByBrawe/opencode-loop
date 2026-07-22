@@ -425,6 +425,36 @@ async function testStopsPreflightAndGoalLifecycle() {
   }
 }
 
+async function testLoopOwnedGoalMessageUpdatesDoNotSelfInterrupt() {
+  const h = await createHarness()
+  const originalDateNow = Date.now
+  let fakeNow = originalDateNow()
+  Date.now = () => fakeNow
+  try {
+    await h.command("loop-goal", "--no-now Keep working until the objective is complete")
+    const synthetic = {
+      type: "message.updated",
+      properties: { info: { id: "msg_loop_owned", sessionID: h.sessionID, role: "user" } },
+    }
+    await h.hooks.event({ event: synthetic })
+
+    fakeNow += 60_000
+    await h.hooks.event({ event: synthetic })
+    let state = await h.readState()
+    assert.equal(state.jobs[0].paused, false, "a delayed update for the same loop-owned user message must remain ignored")
+
+    await h.hooks.event({ event: {
+      type: "message.updated",
+      properties: { info: { id: "msg_real_user", sessionID: h.sessionID, role: "user" } },
+    } })
+    state = await h.readState()
+    assert.equal(state.jobs[0].paused, true, "a distinct real user message must still pause an active goal")
+  } finally {
+    Date.now = originalDateNow
+    await h.cleanup()
+  }
+}
+
 async function testInitializationDoesNotWaitForLocalApi() {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-loop-init-deadlock-"))
   const never = new Promise(() => {})
@@ -450,6 +480,7 @@ await testLifecycleAndCommandDedupe()
 await testWatchScheduling()
 await testActionRoutingAndSafety()
 await testStopsPreflightAndGoalLifecycle()
+await testLoopOwnedGoalMessageUpdatesDoNotSelfInterrupt()
 await testInitializationDoesNotWaitForLocalApi()
 
 console.log("OpenCode Loop comprehensive test passed")
