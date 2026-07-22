@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.19
+
+- Made the asynchronous goal prompt smoke test wait for the observable SDK call instead of assuming a single event-loop tick is always sufficient under load.
+
 ## 0.5.18
 
 - Fixed package-based installs loading stale OpenCode cache entries after npm had installed a newer release. The installer now pins an existing package config entry to its exact installed version while preserving JSONC comments.

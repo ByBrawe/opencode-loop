@@ -16,7 +16,7 @@ v0.5.11 includes a referenced heartbeat scheduler. This is important in OpenCode
 
 ## Current status
 
-**v0.5.18 hardens Goal Mode, package updates, and the background daemon.** Package installs are pinned to the installed version so OpenCode cannot keep loading an older cached release, scheduler-created goal messages no longer self-interrupt on delayed updates, finite daemon failures return nonzero, model/agent selection is supported, and Windows scheduled tasks use a short launcher that stays below the `/TR` limit.
+**v0.5.19 hardens Goal Mode, package updates, and the background daemon.** Package installs are pinned to the installed version so OpenCode cannot keep loading an older cached release, scheduler-created goal messages no longer self-interrupt on delayed updates, finite daemon failures return nonzero, model/agent selection is supported, Windows scheduled tasks use a short launcher that stays below the `/TR` limit, and asynchronous release verification is reliable under load.
 
 The known update-related symptoms from older builds are fixed:
 
@@ -32,7 +32,7 @@ The known update-related symptoms from older builds are fixed:
 
 The TUI loop is still intentionally session-bound: it runs while OpenCode is open and the current session emits status/idle events. For long-running background work after closing the terminal or OpenCode, use `opencode-loopd`.
 
-## v0.5.18 quick behavior guide
+## v0.5.19 quick behavior guide
 
 OpenCode Loop has two triggers now:
 

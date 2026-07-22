@@ -12,6 +12,15 @@ const prompts = []
 const liveStatuses = new Map([[sessionID, "idle"]])
 let hooks
 
+async function waitFor(predicate, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs
+  while (!predicate()) {
+    if (Date.now() >= deadline) return false
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  return true
+}
+
 function legacyBody(name) {
   return async (args) => {
     attempts[name]++
@@ -86,8 +95,11 @@ try {
   assert.equal(output.parts.length, 0, "a locally handled slash command must not start a placeholder model turn")
 
   await hooks["command.execute.before"]({ command: "loop-now", sessionID, arguments: "goal" }, { parts: [] })
-  await new Promise((resolve) => setTimeout(resolve, 0))
-  assert.ok(prompts.some((prompt) => prompt.includes(path.resolve(directory))), "goal prompt must include the working directory")
+  assert.equal(
+    await waitFor(() => prompts.some((prompt) => prompt.includes(path.resolve(directory)))),
+    true,
+    "goal prompt must include the working directory",
+  )
   assert.ok(prompts.some((prompt) => prompt.includes("never turn a relative path into a root path")))
 
   const stateFile = path.join(directory, ".opencode", "opencode-loop", `${sessionID}.json`)
@@ -122,8 +134,11 @@ try {
 
   await hooks["tool.execute.after"]({ tool: "bash", sessionID, callID: "call_background", args: {} }, { title: "done", output: "", metadata: {} })
   await hooks.event({ event: { type: "session.idle", properties: { sessionID } } })
-  await new Promise((resolve) => setTimeout(resolve, 1_400))
-  assert.equal(prompts.length, promptCountBeforeBackgroundTool + 1, "the due loop must resume after the active tool finishes and the session becomes idle")
+  assert.equal(
+    await waitFor(() => prompts.length === promptCountBeforeBackgroundTool + 1, 5_000),
+    true,
+    "the due loop must resume after the active tool finishes and the session becomes idle",
+  )
 
   await hooks["command.execute.before"]({ command: "loop-clear", sessionID, arguments: "" }, { parts: [] })
 
@@ -143,8 +158,11 @@ try {
   liveStatuses.set(childSessionID, "idle")
   await hooks.event({ event: { type: "session.status", properties: { sessionID: childSessionID, status: { type: "idle" } } } })
   await hooks.event({ event: { type: "session.idle", properties: { sessionID } } })
-  await new Promise((resolve) => setTimeout(resolve, 1_400))
-  assert.equal(prompts.length, promptCountBeforeBackgroundChild + 1, "the parent loop must resume after its background child becomes idle")
+  assert.equal(
+    await waitFor(() => prompts.length === promptCountBeforeBackgroundChild + 1, 5_000),
+    true,
+    "the parent loop must resume after its background child becomes idle",
+  )
 
   await hooks["command.execute.before"]({ command: "loop-clear", sessionID, arguments: "" }, { parts: [] })
   assert.equal(attempts.log, 1)
