@@ -60,8 +60,8 @@
     "@opencode-ai/plugin": "^1.4.0"
   },
   "bin": {
-    "opencode-loop": "./scripts/install-node.mjs",
-    "opencode-loopd": "./scripts/loopd.mjs"
+    "opencode-loop": "scripts/install-node.mjs",
+    "opencode-loopd": "scripts/loopd.mjs"
   },
   "publishConfig": {
     "access": "public"
