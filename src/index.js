@@ -30,6 +30,8 @@ const watchdogTimers = new Map()
 const runLocks = new Map()
 const knownSessions = new Map()
 const stateWriteLocks = new Map()
+const activeToolCalls = new Map()
+const sessionParents = new Map()
 let heartbeatTimer
 const sessionStatuses = new Map()
 const sessionStatusSeenAt = new Map()
@@ -570,6 +572,100 @@ function rememberSession(directory, client, sessionID) {
   startHeartbeat()
 }
 
+function hasActiveToolCalls(sessionID) {
+  return (activeToolCalls.get(sessionID)?.size || 0) > 0
+}
+
+function markToolCallActive(input) {
+  const sessionID = input?.sessionID
+  const callID = input?.callID
+  if (typeof sessionID !== "string" || typeof callID !== "string") return
+  const calls = activeToolCalls.get(sessionID) || new Set()
+  calls.add(callID)
+  activeToolCalls.set(sessionID, calls)
+  sessionStatuses.set(sessionID, "busy")
+  sessionStatusSeenAt.set(sessionID, now())
+}
+
+function markToolCallFinished(input) {
+  const sessionID = input?.sessionID
+  const callID = input?.callID
+  if (typeof sessionID !== "string" || typeof callID !== "string") return
+  const calls = activeToolCalls.get(sessionID)
+  if (!calls) return
+  calls.delete(callID)
+  if (!calls.size) activeToolCalls.delete(sessionID)
+}
+
+function updateSessionRelationship(info, removed = false) {
+  const sessionID = info?.id
+  if (typeof sessionID !== "string") return
+  if (removed || typeof info?.parentID !== "string") sessionParents.delete(sessionID)
+  else sessionParents.set(sessionID, info.parentID)
+}
+
+function updateSessionRelationshipFromEvent(event) {
+  if (!["session.created", "session.updated", "session.deleted"].includes(event?.type)) return
+  updateSessionRelationship(event?.properties?.info, event.type === "session.deleted")
+}
+
+function isDescendantSession(sessionID, ancestorID) {
+  const visited = new Set()
+  let current = sessionID
+  while (sessionParents.has(current) && !visited.has(current)) {
+    visited.add(current)
+    current = sessionParents.get(current)
+    if (current === ancestorID) return true
+  }
+  return false
+}
+
+function hasBusyDescendant(sessionID) {
+  for (const childID of sessionParents.keys()) {
+    if (!isDescendantSession(childID, sessionID)) continue
+    const status = sessionStatuses.get(childID)
+    if (status === "busy" || status === "retry" || hasActiveToolCalls(childID)) return true
+  }
+  return false
+}
+
+async function refreshSessionRelationships(client, directory) {
+  if (!client?.session?.list) return
+  try {
+    const sessions = await sdkCall(
+      client.session.list.bind(client.session),
+      { query: { directory } },
+      { directory },
+      {},
+    )
+    if (Array.isArray(sessions)) for (const info of sessions) updateSessionRelationship(info)
+  } catch {}
+}
+
+function updateToolActivityFromEvent(event) {
+  const props = event?.properties || {}
+  if (event?.type === "message.part.updated") {
+    const part = props.part
+    if (part?.type !== "tool") return
+    const sessionID = part.sessionID || props.sessionID
+    if (["pending", "running"].includes(part.state?.status)) {
+      markToolCallActive({ sessionID, callID: part.callID })
+    }
+    if (["completed", "error"].includes(part.state?.status)) {
+      // Task/subagent hooks have used the part id as their hook call id in some
+      // OpenCode versions, while normal tools use part.callID. Clear either.
+      const identifiers = [...new Set([part.callID, part.id].filter((value) => typeof value === "string"))]
+      for (const callID of identifiers) markToolCallFinished({ sessionID, callID })
+    }
+    return
+  }
+
+  const started = ["session.next.shell.started", "session.next.tool.called"].includes(event?.type)
+  const finished = ["session.next.shell.ended", "session.next.tool.success", "session.next.tool.failed"].includes(event?.type)
+  if (started) markToolCallActive(props)
+  if (finished) markToolCallFinished(props)
+}
+
 function startHeartbeat() {
   if (heartbeatTimer) return
   heartbeatTimer = setInterval(() => {
@@ -607,6 +703,8 @@ function disposeRuntime(directory, client) {
     runLocks.delete(sessionID)
     knownSessions.delete(sessionID)
     loopOwnedUserMessageGuards.delete(sessionID)
+    activeToolCalls.delete(sessionID)
+    sessionParents.delete(sessionID)
     sessionStatuses.delete(sessionID)
     sessionStatusSeenAt.delete(sessionID)
     for (const key of handledCommands.keys()) if (key.startsWith(`${sessionID}:`)) handledCommands.delete(key)
@@ -970,6 +1068,7 @@ function staleActiveRun(sessionID) {
 }
 
 async function canFinalizeActiveRun(directory, client, sessionID, active, options = {}) {
+  if (hasActiveToolCalls(sessionID) || hasBusyDescendant(sessionID)) return false
   if (!options.requireIdle && !options.forceStale) return true
   if (options.forceStale && staleActiveRun(sessionID)) return true
   if (!options.requireIdle) return false
@@ -992,15 +1091,41 @@ async function readLiveSessionStatus(client, sessionID, directory) {
       const error = sdkError(result)
       if (error) continue
       const data = sdkData(result)
+      if (!data || typeof data !== "object" || Array.isArray(data)) continue
+      const observedAt = now()
+      for (const [observedSessionID, observedStatus] of Object.entries(data)) {
+        const observedType = observedStatus && typeof observedStatus === "object" ? observedStatus.type : undefined
+        if (typeof observedType !== "string") continue
+        sessionStatuses.set(observedSessionID, observedType)
+        sessionStatusSeenAt.set(observedSessionID, observedAt)
+      }
+      // OpenCode's status list contains active sessions; idle sessions are
+      // normally omitted. Clear a completed descendant that was previously busy.
+      for (const childID of sessionParents.keys()) {
+        if (!isDescendantSession(childID, sessionID) || data[childID]) continue
+        sessionStatuses.set(childID, "idle")
+        sessionStatusSeenAt.set(childID, observedAt)
+      }
+      if (hasBusyDescendant(sessionID)) return { type: "busy", source: "descendant" }
       const status = data?.[sessionID]
       const type = status && typeof status === "object" ? status.type : undefined
       if (typeof type === "string") return { type, source: "sdk" }
+      return { type: "idle", source: "sdk" }
     } catch {}
   }
   return undefined
 }
 
 async function sessionStatusType(client, sessionID, directory, options = {}) {
+  // OpenCode can briefly report an idle session while a long-running tool or
+  // subtask is still executing. Tool lifecycle hooks are the more specific
+  // signal here, so never enqueue another turn until every active call ends.
+  if (hasActiveToolCalls(sessionID) || hasBusyDescendant(sessionID)) {
+    sessionStatuses.set(sessionID, "busy")
+    sessionStatusSeenAt.set(sessionID, now())
+    return "busy"
+  }
+
   const cached = sessionStatuses.get(sessionID)
   const seenAt = sessionStatusSeenAt.get(sessionID) || 0
 
@@ -1971,11 +2096,16 @@ function goalTools(defaultDirectory) {
 
 export const OpenCodeLoopPlugin = async ({ client, directory }) => {
   await log(client, "info", "Plugin initialized", { directory })
+  await refreshSessionRelationships(client, directory)
   return {
     dispose: async () => { disposeRuntime(directory, client) },
     tool: goalTools(directory),
     "command.execute.before": async (input, output) => { await handleCommand(directory, client, input, undefined, undefined, output) },
+    "tool.execute.before": async (input) => { markToolCallActive(input) },
+    "tool.execute.after": async (input) => { markToolCallFinished(input) },
     event: async ({ event }) => {
+      updateSessionRelationshipFromEvent(event)
+      updateToolActivityFromEvent(event)
       if (event.type === "command.executed") {
         const props = event.properties || {}
         await handleCommand(directory, client, props, props.name, props.arguments)

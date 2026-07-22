@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.16
+
+- Treat active OpenCode tools, shell calls, and foreground or background subtasks as busy even if the parent session receives an idle/status event while they are still running.
+- Prevent stale active-run recovery from finalizing a loop turn while any tracked tool call remains active.
+- Added regression coverage proving that a due loop waits for long-running tools and background child sessions, then resumes only after that work finishes and the parent session becomes idle.
+
 ## 0.5.15
 
 - Hardened experimental Goal Mode completion: agent tool completion now requires concrete evidence instead of accepting empty or generic claims.

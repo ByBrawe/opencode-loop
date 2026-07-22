@@ -16,7 +16,7 @@ v0.5.11 includes a referenced heartbeat scheduler. This is important in OpenCode
 
 ## Current status
 
-**v0.5.15 is a Goal Mode and SDK compatibility hardening release.** It keeps the timer/watchdog reliability fixes from v0.5.11-v0.5.14, then tightens experimental goals with evidence-gated completion, passing-check requirements, no-progress pausing, user-message interruption, explicit workspace paths, and safer active-turn recovery. It also prefers the OpenCode plugin SDK argument shape while keeping fallbacks for older builds.
+**v0.5.16 fixes idle detection during long-running tools and background subtasks.** The scheduler now treats OpenCode tool lifecycle activity and running child sessions as stronger busy signals than a premature parent idle/status event, so due prompts wait instead of filling the queue. It keeps the Goal Mode and SDK compatibility hardening from v0.5.15.
 
 The known update-related symptoms from older builds are fixed:
 
@@ -32,14 +32,14 @@ The known update-related symptoms from older builds are fixed:
 
 The TUI loop is still intentionally session-bound: it runs while OpenCode is open and the current session emits status/idle events. For long-running background work after closing the terminal or OpenCode, use `opencode-loopd`.
 
-## v0.5.15 quick behavior guide
+## v0.5.16 quick behavior guide
 
 OpenCode Loop has two triggers now:
 
 1. **Idle/status events** from OpenCode. These are used when OpenCode finishes a turn.
 2. **A real due timer** inside the plugin. This wakes delayed jobs even when no new OpenCode event happens.
 
-All TUI jobs are still idle-safe. If the timer expires while OpenCode is busy, the job does not interrupt the active turn. It waits and retries until the session becomes idle.
+All TUI jobs are still idle-safe. If the timer expires while OpenCode is busy, or while a tool/background child session is still executing, the job does not interrupt the active turn. It waits and retries until that work finishes and the parent session becomes idle.
 
 Simple examples:
 
@@ -352,7 +352,7 @@ Experimental goal mode: keep working until the objective is actually done, block
 
 ### What “when idle” means
 
-OpenCode Loop is idle-safe. It does **not** intentionally start a new agent turn while OpenCode is already busy.
+OpenCode Loop is idle-safe. It does **not** intentionally start a new agent turn while OpenCode is already busy. Active tool calls and running child sessions also count as busy, even if OpenCode emits a premature idle/status signal for the parent during long-running background work.
 
 Example:
 
@@ -1111,6 +1111,12 @@ Improve the application in small safe steps.
 ```
 
 ## Changelog highlights
+
+### v0.5.16
+
+- Treat active tools, shell calls, and running foreground/background child sessions as busy even when the parent session appears idle.
+- Prevent stale-run recovery from enqueueing another continuation while tracked background work is still active.
+- Added regression tests for long-running tool calls and background child sessions.
 
 ### v0.5.15
 

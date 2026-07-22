@@ -9,6 +9,7 @@ const directory = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-loop-smoke-"
 const sessionID = "ses_smoke_goal"
 const attempts = { log: 0, prompt: 0, status: 0, toast: 0 }
 const prompts = []
+const liveStatuses = new Map([[sessionID, "idle"]])
 let hooks
 
 function legacyBody(name) {
@@ -31,6 +32,10 @@ const client = {
     showToast: legacyBody("toast"),
   },
   session: {
+    list: async (args) => {
+      assert.equal(args?.query?.directory, directory)
+      return { data: [{ id: sessionID, directory, projectID: "project", title: "smoke", version: "test", time: { created: Date.now(), updated: Date.now() } }] }
+    },
     abort: async (args) => {
       assert.equal(args?.path?.id, sessionID)
       return { data: true }
@@ -55,7 +60,7 @@ const client = {
     status: async (args) => {
       attempts.status++
       assert.equal(args?.query?.directory, directory, "session.status must use query.directory first")
-      return { data: { [sessionID]: { type: "idle" } } }
+      return { data: Object.fromEntries([...liveStatuses].filter(([, type]) => type !== "idle").map(([id, type]) => [id, { type }])) }
     },
     summarize: async (args) => {
       assert.equal(args?.path?.id, sessionID)
@@ -102,6 +107,44 @@ try {
   assert.equal(completedState.jobs[0].goalStatus, "completed")
   assert.equal(completedState.jobs[0].paused, true)
   assert.equal(completedState.jobs[0].enabled, false)
+
+  await hooks["command.execute.before"]({ command: "loop-clear", sessionID, arguments: "" }, { parts: [] })
+
+  const promptCountBeforeBackgroundTool = prompts.length
+  await hooks["tool.execute.before"]({ tool: "bash", sessionID, callID: "call_background" }, { args: {} })
+  await hooks["command.execute.before"]({
+    command: "loop",
+    sessionID,
+    arguments: "0s --max-runs 1 continue after the background task",
+  }, { parts: [] })
+  await new Promise((resolve) => setTimeout(resolve, 1_400))
+  assert.equal(prompts.length, promptCountBeforeBackgroundTool, "an active tool call must keep the loop busy even when session.status says idle")
+
+  await hooks["tool.execute.after"]({ tool: "bash", sessionID, callID: "call_background", args: {} }, { title: "done", output: "", metadata: {} })
+  await hooks.event({ event: { type: "session.idle", properties: { sessionID } } })
+  await new Promise((resolve) => setTimeout(resolve, 1_400))
+  assert.equal(prompts.length, promptCountBeforeBackgroundTool + 1, "the due loop must resume after the active tool finishes and the session becomes idle")
+
+  await hooks["command.execute.before"]({ command: "loop-clear", sessionID, arguments: "" }, { parts: [] })
+
+  const childSessionID = "ses_background_child"
+  liveStatuses.set(childSessionID, "busy")
+  await hooks.event({ event: { type: "session.created", properties: { info: { id: childSessionID, parentID: sessionID } } } })
+  await hooks.event({ event: { type: "session.status", properties: { sessionID: childSessionID, status: { type: "busy" } } } })
+  const promptCountBeforeBackgroundChild = prompts.length
+  await hooks["command.execute.before"]({
+    command: "loop",
+    sessionID,
+    arguments: "0s --max-runs 1 continue after the background subtask",
+  }, { parts: [] })
+  await new Promise((resolve) => setTimeout(resolve, 2_700))
+  assert.equal(prompts.length, promptCountBeforeBackgroundChild, "a running background child session must keep its parent loop busy")
+
+  liveStatuses.set(childSessionID, "idle")
+  await hooks.event({ event: { type: "session.status", properties: { sessionID: childSessionID, status: { type: "idle" } } } })
+  await hooks.event({ event: { type: "session.idle", properties: { sessionID } } })
+  await new Promise((resolve) => setTimeout(resolve, 1_400))
+  assert.equal(prompts.length, promptCountBeforeBackgroundChild + 1, "the parent loop must resume after its background child becomes idle")
 
   await hooks["command.execute.before"]({ command: "loop-clear", sessionID, arguments: "" }, { parts: [] })
   assert.equal(attempts.log, 1)
