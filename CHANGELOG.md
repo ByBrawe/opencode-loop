@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.20
+
+- Fixed Windows TUI loop state writes failing with `EPERM` / `EEXIST` when renaming a project-local `*.tmp` over an existing session state file. Heartbeat and due-timer updates no longer drop jobs when antivirus, IDE indexers, or OpenCode snapshots briefly lock the destination.
+- Write atomic state payloads under the OS temp directory first, then replace the target with rename plus a copy/unlink fallback and short retries, so project trees no longer accumulate `opencode-loop/*.tmp` files that OpenCode tried to git-snapshot.
+
 ## 0.5.19
 
 - Made the asynchronous goal prompt smoke test wait for the observable SDK call instead of assuming a single event-loop tick is always sufficient under load.

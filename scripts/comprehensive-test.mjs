@@ -475,6 +475,36 @@ async function testInitializationDoesNotWaitForLocalApi() {
   }
 }
 
+async function testWindowsSafeStatePersistence() {
+  const h = await createHarness()
+  try {
+    const stateDir = path.join(h.directory, ".opencode", "opencode-loop")
+
+    // Rapid replacements exercise atomic overwrite of an existing state file.
+    // On Windows this used to fail with EPERM when rename targeted a locked file
+    // next to a project-local *.tmp, leaving jobs empty and the heartbeat stuck.
+    for (let index = 0; index < 25; index++) {
+      await h.command("loop", `10m --no-now --name sticky action-${index}`)
+    }
+
+    const state = await h.readState()
+    assert.equal(state.jobs.length, 1)
+    assert.equal(state.jobs[0].name, "sticky")
+    assert.equal(state.jobs[0].action, "action-24")
+
+    // Temp payloads must live outside the project so OpenCode git snapshots and
+    // Windows file locks do not see opencode-loop/*.tmp pathspecs.
+    const leftovers = (await fs.readdir(stateDir)).filter((name) => name.endsWith(".tmp"))
+    assert.deepEqual(leftovers, [], "state writes must not leave project-local temp files")
+
+    await h.command("loop-clear")
+    const cleared = await h.readState()
+    assert.equal(cleared.jobs.length, 0)
+  } finally {
+    await h.cleanup()
+  }
+}
+
 await testParserAndPresets()
 await testLifecycleAndCommandDedupe()
 await testWatchScheduling()
@@ -482,5 +512,6 @@ await testActionRoutingAndSafety()
 await testStopsPreflightAndGoalLifecycle()
 await testLoopOwnedGoalMessageUpdatesDoNotSelfInterrupt()
 await testInitializationDoesNotWaitForLocalApi()
+await testWindowsSafeStatePersistence()
 
 console.log("OpenCode Loop comprehensive test passed")

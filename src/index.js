@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import { spawn } from "node:child_process"
 import { tool } from "@opencode-ai/plugin/tool"
@@ -387,17 +388,67 @@ async function readState(directory, sessionID) {
   }
 }
 
+function isRetriableStateWriteError(error) {
+  const code = error?.code
+  return code === "EPERM" || code === "EACCES" || code === "EBUSY" || code === "EEXIST" || code === "EAGAIN"
+}
+
+async function delay(ms) {
+  await new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// Windows often fails POSIX-style "write temp next to target, then rename over it":
+// existing destinations can return EPERM/EEXIST while antivirus, IDE indexers, or
+// OpenCode's own snapshotter briefly hold the state file. Temp files next to the
+// target also show up in project git snapshots as *.tmp pathspec noise.
+//
+// Write the payload outside the project first, then replace the target with
+// rename when possible and a copy/unlink fallback with short retries.
+async function writeFileAtomically(target, contents, options = {}) {
+  const encoding = options.encoding || "utf8"
+  const attempts = Math.max(1, Number(options.attempts) || 5)
+  const temp = path.join(
+    os.tmpdir(),
+    `opencode-loop-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`,
+  )
+  await fs.writeFile(temp, contents, encoding)
+  try {
+    let lastError
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try {
+        await fs.rename(temp, target)
+        return
+      } catch (error) {
+        lastError = error
+        const code = error?.code
+        // Cross-device rename is expected when the project is not on the temp volume.
+        // On Windows, rename-over-existing can also fail while the destination is locked.
+        if (code === "EXDEV" || isRetriableStateWriteError(error)) {
+          try {
+            await fs.copyFile(temp, target)
+            return
+          } catch (copyError) {
+            lastError = copyError
+            if (!isRetriableStateWriteError(copyError) || attempt === attempts - 1) throw copyError
+          }
+        } else if (attempt === attempts - 1) {
+          throw error
+        }
+      }
+      await delay(25 * (attempt + 1))
+    }
+    throw lastError || new Error(`Failed to write ${target}`)
+  } finally {
+    try { await fs.rm(temp, { force: true }) } catch {}
+  }
+}
+
 async function writeState(directory, sessionID, state) {
   await withStateWriteLock(directory, sessionID, async () => {
     await ensureDir(stateDir(directory))
     const target = statePath(directory, sessionID)
-    const temp = `${target}.${process.pid}.${Date.now()}.tmp`
-    try {
-      await fs.writeFile(temp, JSON.stringify({ version: 4, jobs: state.jobs || [] }, null, 2))
-      await fs.rename(temp, target)
-    } finally {
-      try { await fs.rm(temp, { force: true }) } catch {}
-    }
+    const payload = JSON.stringify({ version: 4, jobs: state.jobs || [] }, null, 2)
+    await writeFileAtomically(target, payload)
   })
 }
 
