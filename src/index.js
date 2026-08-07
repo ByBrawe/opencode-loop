@@ -429,10 +429,20 @@ async function writeFileAtomically(target, contents, options = {}) {
             return
           } catch (copyError) {
             lastError = copyError
-            if (!isRetriableStateWriteError(copyError) || attempt === attempts - 1) throw copyError
+            // Last resort: direct overwrite. Less atomic, but better than dropping jobs.
+            if (attempt === attempts - 1) {
+              await fs.writeFile(target, contents, encoding)
+              return
+            }
+            if (!isRetriableStateWriteError(copyError)) throw copyError
           }
         } else if (attempt === attempts - 1) {
-          throw error
+          try {
+            await fs.writeFile(target, contents, encoding)
+            return
+          } catch {
+            throw error
+          }
         }
       }
       await delay(25 * (attempt + 1))
