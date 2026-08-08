@@ -35,7 +35,12 @@ p.write_text(text)
 replace_once("scripts/comprehensive-test.mjs", "node -e process.exit(7)", "node -e process.exitCode=7")
 
 # Current OpenCode still runs the command prompt after command.execute.before.
-# Verify we retain a valid acknowledgement part for opencode-loop-local.
+# Verify both smoke and comprehensive tests retain valid acknowledgement parts.
+replace_once(
+    "scripts/smoke-test.mjs",
+    '  assert.equal(output.parts.length, 0, "a locally handled slash command must not start a placeholder model turn")',
+    '  assert.equal(output.parts.length, 1, "a locally handled slash command must keep a valid acknowledgement prompt")\n  assert.equal(output.parts[0].text, "original command body")',
+)
 replace_once(
     "scripts/comprehensive-test.mjs",
     '    const beforeReports = h.reportTexts().length\n    await h.command("loop-status")\n    await h.commandEvent("loop-status", "", "msg_status_1")',
