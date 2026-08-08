@@ -1,3 +1,4 @@
+# One-shot workflow: applies the README promotion and removes itself.
 name: Apply Goal Mode docs
 
 on:
