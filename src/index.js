@@ -2220,9 +2220,10 @@ async function handleCommand(directory, client, input, fallbackName, fallbackArg
   if (isLoopCommandName(name)) guardLoopOwnedUserMessage(sessionID)
 
   const handled = () => {
-    // OpenCode server plugins cannot currently cancel the command prompt turn.
-    // Keep the command markdown acknowledgement intact so opencode-loop-local
-    // receives a valid, tool-denied message instead of an empty parts array.
+    // OpenCode 1.18.x ignores unknown hook output fields, while proposed/newer
+    // hosts can honor noReply to skip the otherwise unavoidable model turn.
+    // Keep acknowledgement parts intact as the compatibility fallback.
+    if (output && typeof output === "object") output.noReply = true
     return true
   }
 
