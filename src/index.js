@@ -374,18 +374,23 @@ async function withStateWriteLock(directory, sessionID, fn) {
 
 async function readState(directory, sessionID) {
   const target = statePath(directory, sessionID)
-  try {
-    const parsed = JSON.parse(await fs.readFile(target, "utf8"))
-    return { version: 4, jobs: Array.isArray(parsed.jobs) ? parsed.jobs : [] }
-  } catch (error) {
-    if (error?.code !== "ENOENT") {
-      try {
-        await ensureDir(stateDir(directory))
-        await fs.copyFile(target, `${target}.corrupt-${Date.now()}`)
-      } catch {}
+  const attempts = 5
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const parsed = JSON.parse(await fs.readFile(target, "utf8"))
+      return { version: 4, jobs: Array.isArray(parsed.jobs) ? parsed.jobs : [] }
+    } catch (error) {
+      if (error?.code === "ENOENT") return { version: 4, jobs: [] }
+      const transient = error instanceof SyntaxError || isRetriableStateWriteError(error)
+      if (!transient || attempt === attempts - 1) break
+      await delay(25 * (attempt + 1))
     }
-    return { version: 4, jobs: [] }
   }
+  try {
+    await ensureDir(stateDir(directory))
+    await fs.copyFile(target, `${target}.corrupt-${Date.now()}`)
+  } catch {}
+  return { version: 4, jobs: [] }
 }
 
 function isRetriableStateWriteError(error) {
@@ -414,40 +419,38 @@ async function writeFileAtomically(target, contents, options = {}) {
   await fs.writeFile(temp, contents, encoding)
   try {
     let lastError
+    // Prefer an atomic rename and retry transient Windows destination locks
+    // before falling back to a non-atomic copy/overwrite.
     for (let attempt = 0; attempt < attempts; attempt++) {
       try {
         await fs.rename(temp, target)
         return
       } catch (error) {
         lastError = error
-        const code = error?.code
-        // Cross-device rename is expected when the project is not on the temp volume.
-        // On Windows, rename-over-existing can also fail while the destination is locked.
-        if (code === "EXDEV" || isRetriableStateWriteError(error)) {
-          try {
-            await fs.copyFile(temp, target)
-            return
-          } catch (copyError) {
-            lastError = copyError
-            // Last resort: direct overwrite. Less atomic, but better than dropping jobs.
-            if (attempt === attempts - 1) {
-              await fs.writeFile(target, contents, encoding)
-              return
-            }
-            if (!isRetriableStateWriteError(copyError)) throw copyError
-          }
-        } else if (attempt === attempts - 1) {
-          try {
-            await fs.writeFile(target, contents, encoding)
-            return
-          } catch {
-            throw error
-          }
-        }
+        if (error?.code === "EXDEV") break
+        if (!isRetriableStateWriteError(error)) throw error
+        if (attempt < attempts - 1) await delay(25 * (attempt + 1))
       }
-      await delay(25 * (attempt + 1))
     }
-    throw lastError || new Error(`Failed to write ${target}`)
+
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try {
+        await fs.copyFile(temp, target)
+        return
+      } catch (error) {
+        lastError = error
+        if (!isRetriableStateWriteError(error)) throw error
+        if (attempt < attempts - 1) await delay(25 * (attempt + 1))
+      }
+    }
+
+    try {
+      await fs.writeFile(target, contents, encoding)
+      return
+    } catch (error) {
+      if (lastError && !error.cause) error.cause = lastError
+      throw error
+    }
   } finally {
     try { await fs.rm(temp, { force: true }) } catch {}
   }

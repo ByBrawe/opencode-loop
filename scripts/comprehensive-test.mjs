@@ -106,6 +106,7 @@ async function createHarness(options = {}) {
     hooks,
     records,
     sessionID,
+    stateFile,
     statuses,
     async command(command, argumentsText = "", output = { parts: [] }) {
       await hooks["command.execute.before"]({ command, sessionID, arguments: argumentsText }, output)
@@ -505,6 +506,56 @@ async function testWindowsSafeStatePersistence() {
   }
 }
 
+async function testWindowsStateRenameRetriesBeforeFallback() {
+  const h = await createHarness()
+  const originalRename = fs.rename
+  const originalCopyFile = fs.copyFile
+  let renameAttempts = 0
+  let fallbackCopies = 0
+  fs.rename = async (source, target) => {
+    if (target === h.stateFile && renameAttempts++ < 2) {
+      const error = new Error("simulated Windows destination lock")
+      error.code = "EPERM"
+      throw error
+    }
+    return await originalRename(source, target)
+  }
+  fs.copyFile = async (source, target, ...rest) => {
+    if (target === h.stateFile) fallbackCopies++
+    return await originalCopyFile(source, target, ...rest)
+  }
+  try {
+    await h.command("loop", "10m --no-now --name retry-safe keep-state")
+    const state = await h.readState()
+    assert.equal(state.jobs[0]?.name, "retry-safe")
+    assert.equal(renameAttempts, 3, "transient EPERM should retry rename")
+    assert.equal(fallbackCopies, 0, "successful rename retry should avoid non-atomic copy fallback")
+  } finally {
+    fs.rename = originalRename
+    fs.copyFile = originalCopyFile
+    await h.cleanup()
+  }
+}
+
+async function testStateReadRetriesTransientPartialJson() {
+  const h = await createHarness()
+  const originalReadFile = fs.readFile
+  try {
+    await h.command("loop", "10m --no-now --name sticky survive-partial-read")
+    let partialReads = 0
+    fs.readFile = async (filePath, ...rest) => {
+      if (filePath === h.stateFile && partialReads++ < 2) return "{"
+      return await originalReadFile(filePath, ...rest)
+    }
+    await h.command("loop-status")
+    assert.equal(partialReads, 3, "partial JSON should be retried before treating state as corrupt")
+    assert.equal(h.records.toasts.at(-1)?.message, "1 loop job(s).")
+  } finally {
+    fs.readFile = originalReadFile
+    await h.cleanup()
+  }
+}
+
 await testParserAndPresets()
 await testLifecycleAndCommandDedupe()
 await testWatchScheduling()
@@ -513,5 +564,7 @@ await testStopsPreflightAndGoalLifecycle()
 await testLoopOwnedGoalMessageUpdatesDoNotSelfInterrupt()
 await testInitializationDoesNotWaitForLocalApi()
 await testWindowsSafeStatePersistence()
+await testWindowsStateRenameRetriesBeforeFallback()
+await testStateReadRetriesTransientPartialJson()
 
 console.log("OpenCode Loop comprehensive test passed")
