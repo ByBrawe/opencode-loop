@@ -88,3 +88,98 @@ jobs:
           node -e "require('node:fs').copyFileSync('src/index.js', 'src/__opencode_loop_local_ci.ts')"
           bun -e "await import('./src/__opencode_loop_local_ci.ts')"
           node -e "require('node:fs').rmSync('src/__opencode_loop_local_ci.ts', { force: true })"
+
+  apply-goal-readme:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: docs/goal-mode-readme-final
+      - name: Apply README patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('README.md')
+          text = path.read_text()
+
+          def replace_once(old, new):
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected one README match, found {count}: {old[:100]!r}')
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              '''**Claude Code style auto-continue for OpenCode.**
+
+OpenCode Loop adds a practical `/loop` command and `opencode-loopd` daemon to OpenCode so an agent can keep working after each idle turn instead of waiting for you to type “continue” again.
+''',
+              '''**Claude Code style auto-continue + persistent Goal Mode for OpenCode.**
+
+OpenCode Loop adds a practical `/loop` command and `opencode-loopd` daemon to OpenCode so an agent can keep working after each idle turn instead of waiting for you to type “continue” again. It also includes experimental `/loop-goal` for outcome-driven work that keeps pursuing a goal across idle turns until it is proven complete, blocked, paused, or stopped by safety limits.
+''',
+          )
+
+          replace_once(
+              '''Repository: **ByBrawe/opencode-loop**  
+NPM package name: **@bybrawe/opencode-loop**
+
+### Scheduler heartbeat note
+''',
+              '''Repository: **ByBrawe/opencode-loop**  
+NPM package name: **@bybrawe/opencode-loop**
+
+## Goal Mode: pursue an outcome, not a timer
+
+Normal loops answer “what should run again?” **Goal Mode answers “what result should the agent keep pursuing until it is actually done?”**
+
+```text
+/loop-goal --check "npm test" --complete-when-checks-pass fix the failing tests without weakening coverage
+```
+
+Goal Mode is experimental, but it is designed as a first-class workflow:
+
+- **Persistent objective:** the goal survives across idle turns instead of relying on a fixed timer.
+- **Evidence-gated completion:** the agent cannot finish with a generic “done”; completion needs concrete evidence.
+- **Verification gates:** `--check`, acceptance criteria, and `--complete-when-checks-pass` can define what “finished” means.
+- **Safety against runaway work:** user interruption, no-progress guards, max turns, and max runtime can pause or stop the goal.
+- **Inspectable progress:** Goal Mode records progress/evidence and can write a goal report under `.opencode/opencode-loop/goals/`.
+
+Use `/loop` for recurring or timer-driven work. Use `/loop-goal` when you care about an **outcome** and want OpenCode to keep working toward it until the result is verified or genuinely blocked.
+
+See [Goal Mode: persistent objectives](#goal-mode-persistent-objectives) for the full command guide and examples.
+
+### Scheduler heartbeat note
+''',
+          )
+
+          replace_once('### The 6 examples most people need', '### The examples most people need')
+          replace_once('### Experimental Goal Mode', '### Goal Mode: persistent objectives')
+          replace_once(
+              '- **Experimental Goal Mode** with `/loop-goal`, goal status, goal tools, acceptance criteria, and verification checks.\n',
+              '- **Experimental Goal Mode** with persistent objectives, evidence-gated completion, acceptance criteria, verification checks, no-progress guards, and goal reports.\n',
+          )
+          replace_once(
+              '- OpenCode auto continue\n- OpenCode continue automatically\n',
+              '- OpenCode auto continue\n- OpenCode Goal Mode\n- OpenCode persistent goal\n- Codex `/goal` style workflow for OpenCode\n- OpenCode continue automatically\n',
+          )
+
+          path.write_text(text)
+          PY
+          grep -q '^## Goal Mode: pursue an outcome, not a timer$' README.md
+          grep -q '^### Goal Mode: persistent objectives$' README.md
+      - name: Restore permanent CI and commit README only
+        shell: bash
+        run: |
+          git fetch origin main --depth=1
+          rm .github/workflows/apply-goal-mode-readme-pr.yml
+          git checkout origin/main -- .github/workflows/ci.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md .github/workflows/ci.yml .github/workflows/apply-goal-mode-readme-pr.yml
+          git commit -m "docs: make Goal Mode a headline workflow"
+          git push origin HEAD:docs/goal-mode-readme-final
