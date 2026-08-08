@@ -1,13 +1,33 @@
 # OpenCode Loop
 
-**Claude Code style auto-continue for OpenCode.**
+**Claude Code style auto-continue + persistent Goal Mode for OpenCode.**
 
-OpenCode Loop adds a practical `/loop` command and `opencode-loopd` daemon to OpenCode so an agent can keep working after each idle turn instead of waiting for you to type “continue” again.
+OpenCode Loop adds a practical `/loop` command and `opencode-loopd` daemon to OpenCode so an agent can keep working after each idle turn instead of waiting for you to type “continue” again. It also includes experimental `/loop-goal` for outcome-driven work that keeps pursuing a goal across idle turns until it is proven complete, blocked, paused, or stopped by safety limits.
 
-It is useful for long coding sessions, `progress.md` workflows, TODO automation, test-fix loops, periodic `/compact`, checkpoints, safe autonomous development, and background OpenCode continuation jobs.
+It is useful for long coding sessions, `progress.md` workflows, TODO automation, test-fix loops, periodic `/compact`, checkpoints, safe autonomous development, persistent goals, and background OpenCode continuation jobs.
 
 Repository: **ByBrawe/opencode-loop**  
 NPM package name: **@bybrawe/opencode-loop**
+
+## Goal Mode: pursue an outcome, not a timer
+
+Normal loops answer “what should run again?” **Goal Mode answers “what result should the agent keep pursuing until it is actually done?”**
+
+```text
+/loop-goal --check "npm test" --complete-when-checks-pass fix the failing tests without weakening coverage
+```
+
+Goal Mode is experimental, but it is designed as a first-class workflow:
+
+- **Persistent objective:** the goal survives across idle turns instead of relying on a fixed timer.
+- **Evidence-gated completion:** the agent cannot finish with a generic “done”; completion needs concrete evidence.
+- **Verification gates:** `--check`, acceptance criteria, and `--complete-when-checks-pass` can define what “finished” means.
+- **Safety against runaway work:** user interruption, no-progress guards, max turns, and max runtime can pause or stop the goal.
+- **Inspectable progress:** Goal Mode records progress/evidence and can write a goal report under `.opencode/opencode-loop/goals/`.
+
+Use `/loop` for recurring or timer-driven work. Use `/loop-goal` when you care about an **outcome** and want OpenCode to keep working toward it until the result is verified or genuinely blocked.
+
+See [Goal Mode: persistent objectives](#goal-mode-persistent-objectives) for the full command guide and examples.
 
 ### Scheduler heartbeat note
 
@@ -103,6 +123,9 @@ OpenCode Loop is designed for developers searching for:
 - OpenCode loop
 - OpenCode Claude Code loop
 - OpenCode auto continue
+- OpenCode Goal Mode
+- OpenCode persistent goal
+- Codex `/goal` style workflow for OpenCode
 - OpenCode continue automatically
 - OpenCode `/loop` command
 - OpenCode compact scheduler
@@ -142,7 +165,7 @@ OpenCode Loop is designed for developers searching for:
 - **Branch setup** with `--branch ai-loop`.
 - **Stop controls** with `--stop-file STOP_LOOP`, `--until`, `/loop-stop`, `/loop-pause`, `/loop-resume`, and `/loop-remove`.
 - **Watch mode** with `--watch progress.md`.
-- **Experimental Goal Mode** with `/loop-goal`, goal status, goal tools, acceptance criteria, and verification checks.
+- **Experimental Goal Mode** with persistent objectives, evidence-gated completion, acceptance criteria, verification checks, no-progress guards, and goal reports.
 - **Diagnostics** with `/loop-doctor`.
 - **Starter progress file** with `/loop-init`.
 - **State export** with `/loop-export`.
@@ -314,7 +337,7 @@ If the commands do not appear:
 
 ## Quick start
 
-### The 6 examples most people need
+### The examples most people need
 
 Auto-continue every time OpenCode finishes a turn:
 
@@ -352,7 +375,7 @@ Run a real shell command every 10 minutes when idle:
 /loop-shell 10m npm test
 ```
 
-Experimental goal mode: keep working until the objective is actually done, blocked, paused, or cleared:
+Goal Mode: keep working until the objective is actually done, blocked, paused, or cleared:
 
 ```text
 /loop-goal finish the feature, run tsc --noEmit and build, fix every error, and stop only when everything passes
@@ -396,7 +419,7 @@ That can look like a chat prompt in older versions or unclear setups. Prefer `/l
 /loop-compact 200m
 ```
 
-### Experimental Goal Mode
+### Goal Mode: persistent objectives
 
 Goal Mode is experimental. Use it when you do **not** want a timer such as "every 5 minutes". Use it when you want OpenCode to keep pursuing a result until it is complete or blocked.
 
