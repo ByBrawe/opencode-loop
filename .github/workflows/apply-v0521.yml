@@ -36,9 +36,6 @@ jobs:
                   raise SystemExit(f"{path}: expected one match for {old!r}, found {count}")
               p.write_text(text.replace(old, new, 1))
 
-          # OpenCode 1.18.x server plugins cannot cancel the command prompt turn.
-          # Do not create an empty message; let the tool-denied acknowledgement agent
-          # receive the valid prompt already present in each command markdown file.
           p = Path("src/index.js")
           text = p.read_text()
           pattern = re.compile(r'''  const handled = \(\) => \{\n    if \(output && Array\.isArray\(output\.parts\)\) \{\n(?:.*\n)*?      output\.parts\.length = 0\n    \}\n    return true\n  \}\n''')
@@ -46,20 +43,19 @@ jobs:
           text, count = pattern.subn(replacement, text, count=1)
           if count != 1:
               raise SystemExit(f"src/index.js: handled() block match count={count}")
-          text = text.replace('for (const command of ["session_compact", "session.compact"]) {', 'for (const command of ["session.compact", "session_compact"]) {', 1)
+          old_compact = 'for (const command of ["session_compact", "session.compact"]) {'
+          if text.count(old_compact) != 1:
+              raise SystemExit("src/index.js: compact command sequence changed")
+          text = text.replace(old_compact, 'for (const command of ["session.compact", "session_compact"]) {', 1)
           p.write_text(text)
 
-          # Cross-platform failure fixture: no shell-significant parentheses.
           replace_once("scripts/comprehensive-test.mjs", "node -e process.exit(7)", "node -e process.exitCode=7")
-
-          # Ensure handled commands keep a valid acknowledgement prompt.
           replace_once(
               "scripts/comprehensive-test.mjs",
               '    const beforeReports = h.reportTexts().length\n    await h.command("loop-status")\n    await h.commandEvent("loop-status", "", "msg_status_1")',
               '    const beforeReports = h.reportTexts().length\n    const statusOutput = { parts: [{ type: "text", text: "OpenCode Loop status command handled locally. Reply exactly: OK." }] }\n    await h.command("loop-status", "", statusOutput)\n    assert.equal(statusOutput.parts.length, 1, "handled commands must keep a valid acknowledgement prompt")\n    assert.match(statusOutput.parts[0].text, /Reply exactly: OK/)\n    await h.commandEvent("loop-status", "", "msg_status_1")',
           )
 
-          # Version and development target. Keep broad peer compatibility for users.
           package_path = Path("package.json")
           package = json.loads(package_path.read_text())
           if package.get("version") != "0.5.20":
@@ -119,7 +115,8 @@ jobs:
                 - run: npm publish --access public
           YAML
 
-          cat > .github/workflows/ci.yml <<'YAML'
+          MATRIX_OS='$'"{{ matrix.os }}"
+          cat > .github/workflows/ci.yml <<YAML
           name: CI
 
           on:
@@ -137,7 +134,7 @@ jobs:
                 fail-fast: false
                 matrix:
                   os: [ubuntu-latest, windows-latest]
-              runs-on: ${{ matrix.os }}
+              runs-on: ${MATRIX_OS}
               steps:
                 - uses: actions/checkout@v6
                 - uses: actions/setup-node@v6
