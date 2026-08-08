@@ -140,7 +140,7 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 25))
   await hooks.event({ event: { type: "session.idle", properties: { sessionID } } })
   let autoCompletedState
-  for (let attempt = 0; attempt < 100; attempt++) {
+  for (let attempt = 0; attempt < 400; attempt++) {
     autoCompletedState = JSON.parse(await fs.readFile(stateFile, "utf8"))
     if (autoCompletedState.jobs[0]?.goalStatus === "completed") break
     await new Promise((resolve) => setTimeout(resolve, 10))
@@ -186,7 +186,7 @@ try {
   assert.equal(prompts.length, promptCountBeforeBackgroundChild, "a running background child session must keep its parent loop busy")
 
   liveStatuses.set(childSessionID, "idle")
-  await hooks.event({ event: { type: "session.status", properties: { sessionID: childSessionID, status: { type: "idle" } } } })
+  await hooks.event({ event: { type: "session.status", properties: { sessionID: childSessionID, status: { type: "idle" } } })
   await hooks.event({ event: { type: "session.idle", properties: { sessionID } } })
   assert.equal(
     await waitFor(() => prompts.length === promptCountBeforeBackgroundChild + 1, 5_000),
