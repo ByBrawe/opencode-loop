@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.23
+
+- Track non-blocking `session.prompt` and `session.shell` dispatch promises instead of treating every fire-and-forget request as successfully started.
+- Recover a rejected scheduler dispatch immediately: clear only the matching active run token, invalidate cached busy status, persist the failure, honor `--max-failures`, and reschedule through the normal scheduler path.
+- Never replay a rejected prompt automatically; this avoids duplicate turns when OpenCode status/events are delayed or multiple instances are involved.
+- Added a deterministic regression test for delayed prompt rejection and verified the error remains observable in plugin logs.
+
 ## 0.5.22
 
 - Hardened compatibility with current OpenCode 1.18.15 while preserving the existing `>=1.4.0` peer range.

@@ -75,6 +75,10 @@ async function createHarness(options = {}) {
         assert.equal(args?.path?.id, sessionID)
         const text = args.body.parts.map((part) => part.text || "").join("\n")
         records.prompts.push({ text, noReply: args.body.noReply === true, agent: args.body.agent, model: args.body.model })
+        if (options.failPrompt) {
+          await delay(options.promptFailureDelayMs ?? 20)
+          throw new Error(options.promptFailureMessage || "simulated prompt dispatch failure")
+        }
         return { data: true }
       },
       shell: async (args) => {
@@ -374,6 +378,32 @@ async function testActionRoutingAndSafety() {
   }
 }
 
+async function testPromptDispatchFailureRecovery() {
+  const h = await createHarness({ failPrompt: true, promptFailureDelayMs: 25 })
+  try {
+    await h.command("loop", "0s --no-now --name dispatch-failure --max-failures 1 recover from a rejected prompt dispatch")
+    await h.command("loop-now", "dispatch-failure")
+
+    let state
+    for (let attempt = 0; attempt < 40; attempt++) {
+      state = await h.readState()
+      if (state.jobs[0]?.lastFailureReason === "dispatch_failed") break
+      await delay(25)
+    }
+
+    const job = state.jobs[0]
+    assert.equal(job.failureCount, 1, "a rejected prompt dispatch must count as a scheduler failure")
+    assert.equal(job.paused, true, "--max-failures must pause after a rejected prompt dispatch")
+    assert.equal(job.lastFailureReason, "dispatch_failed")
+    assert.match(job.lastDispatchFailure, /simulated prompt dispatch failure/)
+    assert.ok(job.lastDispatchFailureAt > 0)
+    assert.equal(h.actionTexts().length, 1, "dispatch recovery must never replay the prompt automatically")
+    assert.ok(h.records.logs.some((entry) => entry.message === "session.prompt failed"), "the SDK rejection must remain observable")
+  } finally {
+    await h.cleanup()
+  }
+}
+
 async function testStopsPreflightAndGoalLifecycle() {
   let h = await createHarness()
   try {
@@ -563,6 +593,7 @@ await testParserAndPresets()
 await testLifecycleAndCommandDedupe()
 await testWatchScheduling()
 await testActionRoutingAndSafety()
+await testPromptDispatchFailureRecovery()
 await testStopsPreflightAndGoalLifecycle()
 await testLoopOwnedGoalMessageUpdatesDoNotSelfInterrupt()
 await testInitializationDoesNotWaitForLocalApi()
