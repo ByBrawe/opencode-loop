@@ -122,6 +122,34 @@ try {
   assert.equal(completedState.jobs[0].paused, true)
   assert.equal(completedState.jobs[0].enabled, false)
 
+  await hooks.event({ event: { type: "session.idle", properties: { sessionID } } })
+  await hooks["command.execute.before"]({ command: "loop-clear", sessionID, arguments: "" }, { parts: [] })
+
+  const promptCountBeforeAutoGoal = prompts.length
+  await hooks["command.execute.before"]({
+    command: "loop-goal",
+    sessionID,
+    arguments: "--no-now --check \"node -e process.exitCode=0\" --complete-when-checks-pass make the configured checks pass",
+  }, { parts: [] })
+  await hooks["command.execute.before"]({ command: "loop-now", sessionID, arguments: "goal" }, { parts: [] })
+  assert.equal(
+    await waitFor(() => prompts.length === promptCountBeforeAutoGoal + 1),
+    true,
+    "a Goal Mode check-gated run must start when forced",
+  )
+  await new Promise((resolve) => setTimeout(resolve, 25))
+  await hooks.event({ event: { type: "session.idle", properties: { sessionID } } })
+  let autoCompletedState
+  for (let attempt = 0; attempt < 400; attempt++) {
+    autoCompletedState = JSON.parse(await fs.readFile(stateFile, "utf8"))
+    if (autoCompletedState.jobs[0]?.goalStatus === "completed") break
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  assert.equal(autoCompletedState.jobs[0].goalStatus, "completed", "--complete-when-checks-pass must complete the goal after successful configured checks")
+  assert.equal(autoCompletedState.jobs[0].paused, true)
+  assert.equal(autoCompletedState.jobs[0].enabled, false)
+  assert.ok(autoCompletedState.jobs[0].lastGoalChecks?.every((item) => item.code === 0), "auto-completed Goal Mode must persist passing check evidence")
+
   await hooks["command.execute.before"]({ command: "loop-clear", sessionID, arguments: "" }, { parts: [] })
 
   const promptCountBeforeBackgroundTool = prompts.length
