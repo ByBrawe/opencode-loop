@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.22
+
+- Hardened compatibility with current OpenCode 1.18.15 while preserving the existing `>=1.4.0` peer range.
+- Handled loop commands now also set `output.noReply = true`; OpenCode 1.18.x safely ignores the unknown field, while hosts that add the proposed `noReply` hook support can skip the acknowledgement model turn automatically.
+- Added Bun runtime loading coverage so CI exercises the runtime OpenCode actually uses to load plugins, not only Node syntax/tests.
+- Added explicit minimum-peer coverage against `@opencode-ai/plugin@1.4.0` and scheduled testing against the latest published OpenCode plugin package.
+- Kept the v0.5.21 server-plugin acknowledgement fallback for current OpenCode versions where `command.execute.before` cannot cancel the prompt turn.
+
 ## 0.5.21
 
 - Verified server-plugin compatibility against OpenCode 1.18.15 and updated the development plugin dependency accordingly.
