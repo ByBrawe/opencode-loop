@@ -16,7 +16,7 @@ v0.5.11 includes a referenced heartbeat scheduler. This is important in OpenCode
 
 ## Current status
 
-**v0.5.19 hardens Goal Mode, package updates, and the background daemon.** Package installs are pinned to the installed version so OpenCode cannot keep loading an older cached release, scheduler-created goal messages no longer self-interrupt on delayed updates, finite daemon failures return nonzero, model/agent selection is supported, Windows scheduled tasks use a short launcher that stays below the `/TR` limit, and asynchronous release verification is reliable under load.
+**v0.5.20 fixes Windows TUI state writes.** Session job state is written through the OS temp directory with rename plus copy/unlink fallback and short retries, so antivirus locks and OpenCode snapshots no longer drop `/loop` jobs with `EPERM` on rename. **v0.5.19** hardens Goal Mode, package updates, and the background daemon: package installs are pinned to the installed version so OpenCode cannot keep loading an older cached release, scheduler-created goal messages no longer self-interrupt on delayed updates, finite daemon failures return nonzero, model/agent selection is supported, Windows scheduled tasks use a short launcher that stays below the `/TR` limit, and asynchronous release verification is reliable under load.
 
 The known update-related symptoms from older builds are fixed:
 
@@ -1087,6 +1087,12 @@ Recent plugin events are appended to:
 .opencode/opencode-loop/loop.log
 ```
 
+Add `.opencode/opencode-loop/` to project `.gitignore` when possible. Runtime state is rewritten often, and on Windows file locks from scanners or snapshot tools can interrupt in-place renames. Since v0.5.20 the plugin writes state payloads via the OS temp directory with a rename/copy fallback so jobs survive those locks; gitignoring the directory still keeps noise out of commits.
+
+## Example progress.md
+
+Create one with:
+
 ## Example progress.md
 
 Create one with:
@@ -1129,6 +1135,11 @@ Improve the application in small safe steps.
 ```
 
 ## Changelog highlights
+
+### v0.5.20
+
+- Fixed Windows `EPERM` / `EEXIST` failures when rewriting `.opencode/opencode-loop/ses_*.json` during heartbeat and due-timer updates.
+- Atomic state payloads are staged outside the project so OpenCode no longer git-snapshots `opencode-loop/*.tmp` pathspecs.
 
 ### v0.5.17
 
