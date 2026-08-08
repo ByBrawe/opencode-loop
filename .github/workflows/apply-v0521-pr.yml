@@ -29,12 +29,11 @@ jobs:
           npm run check
           npm test
           npm pack --dry-run
-      - name: Commit verified candidate
+      - name: Commit verified code candidate
         shell: bash
         run: |
-          rm -f .github/workflows/apply-v0521.yml .github/workflows/apply-v0521-pr.yml .v0521-trigger scripts/apply-v0521.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
+          git add src/index.js scripts/smoke-test.mjs scripts/comprehensive-test.mjs package.json package-lock.json README.md CHANGELOG.md
           git commit -m "chore: prepare v0.5.21 for OpenCode 1.18"
           git push origin HEAD:${{ github.head_ref }}
