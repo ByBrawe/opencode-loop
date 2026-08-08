@@ -18,10 +18,13 @@ async function createHarness(options = {}) {
     logs: [],
     prompts: [],
     shells: [],
+    summaries: [],
+    messageReads: [],
     toasts: [],
     tuiCommands: [],
   }
   const statuses = new Map([[sessionID, "idle"]])
+  const messageHistory = Array.isArray(options.messages) ? structuredClone(options.messages) : []
 
   const client = {
     app: {
@@ -35,7 +38,7 @@ async function createHarness(options = {}) {
       executeCommand: async (args) => {
         assert.ok(args?.body?.command, "tui.executeCommand must use the SDK body shape")
         records.tuiCommands.push(args.body.command)
-        if (options.failCompact) throw new Error("simulated TUI compact failure")
+        if (options.failCompact || options.failTuiCompact) throw new Error("simulated TUI compact failure")
         return { data: true }
       },
       showToast: async (args) => {
@@ -95,7 +98,15 @@ async function createHarness(options = {}) {
           ),
         }
       },
-      summarize: async () => {
+      messages: async (args) => {
+        assert.equal(args?.path?.id, sessionID)
+        assert.equal(args?.query?.directory, directory)
+        records.messageReads.push(args)
+        return { data: structuredClone(messageHistory) }
+      },
+      summarize: async (args) => {
+        assert.equal(args?.path?.id, sessionID)
+        records.summaries.push(args?.body)
         if (options.failCompact) throw new Error("simulated summarize failure")
         return { data: true }
       },
@@ -112,6 +123,7 @@ async function createHarness(options = {}) {
     sessionID,
     stateFile,
     statuses,
+    messageHistory,
     async command(command, argumentsText = "", output = { parts: [] }) {
       await hooks["command.execute.before"]({ command, sessionID, arguments: argumentsText }, output)
       return output
@@ -378,6 +390,92 @@ async function testActionRoutingAndSafety() {
   }
 }
 
+async function testNativeCompactionLifecycleAndFallback() {
+  let h = await createHarness({ failTuiCompact: true })
+  try {
+    await h.command("loop-compact", "0s --no-now")
+    await h.command("loop-now", "compact")
+    assert.deepEqual(h.records.summaries[0], {
+      providerID: "test-provider",
+      modelID: "test-model",
+      auto: false,
+    }, "headless compact fallback must satisfy the current OpenCode summarize payload")
+    assert.equal(typeof h.hooks["experimental.session.compacting"], "function")
+    const compactOutput = { context: [], prompt: undefined }
+    await h.hooks["experimental.session.compacting"]({ sessionID: h.sessionID }, compactOutput)
+    assert.deepEqual(compactOutput, { context: [], prompt: undefined }, "loop lifecycle tracking must not rewrite OpenCode's compaction prompt")
+    await h.hooks.event({ event: { type: "session.compacted", properties: { sessionID: h.sessionID } } })
+    await delay(20)
+    const state = await h.readState()
+    assert.ok(state.jobs[0].lastFinishedAt > 0, "session.compacted must finalize an explicit compact job without waiting for stale status recovery")
+  } finally {
+    await h.cleanup()
+  }
+
+  h = await createHarness()
+  try {
+    await h.command("loop", "5m --no-now --name compact-chain --compact-every 1 continue after compaction")
+    const seeded = await h.readState()
+    seeded.jobs[0].runCount = 1
+    seeded.jobs[0].lastRunAt = 0
+    await fs.writeFile(h.stateFile, JSON.stringify(seeded, null, 2), "utf8")
+
+    await h.command("loop-now", "compact-chain")
+    assert.equal(h.records.tuiCommands.length, 1, "compact-every must start compaction")
+    assert.equal(h.actionTexts().length, 0, "the scheduled action must not overlap a pending compaction")
+    assert.equal((await h.readState()).jobs[0].runCount, 1, "compaction-only phase must not count as a normal loop run")
+
+    await h.hooks["experimental.session.compacting"]({ sessionID: h.sessionID }, { context: [], prompt: undefined })
+    await h.hooks.event({ event: { type: "session.compacted", properties: { sessionID: h.sessionID } } })
+    await delay(20)
+    assert.equal((await h.readState()).jobs[0].runCount, 1, "native compaction completion must only release the deferred action")
+  } finally {
+    await h.cleanup()
+  }
+}
+
+async function testStaleBusyUsesCompletedAssistantTail() {
+  let h = await createHarness()
+  try {
+    await h.command("loop", "5m --no-now --name stale-complete continue safely")
+    await h.command("loop-now", "stale-complete")
+    h.statuses.set(h.sessionID, "busy")
+    const completedAt = Date.now() + 5
+    h.messageHistory.splice(0, h.messageHistory.length,
+      { info: { id: "usr_tail", sessionID: h.sessionID, role: "user", time: { created: completedAt - 2 } }, parts: [] },
+      { info: { id: "asst_tail", sessionID: h.sessionID, role: "assistant", time: { created: completedAt - 1, completed: completedAt } }, parts: [] },
+    )
+    await h.command("loop-now", "stale-complete")
+    const state = await h.readState()
+    assert.ok(state.jobs[0].lastFinishedAt > 0, "a completed assistant tail must override a stale busy status")
+    assert.ok(h.records.messageReads.length > 0, "busy recovery must cross-check message history")
+  } finally {
+    await h.cleanup()
+  }
+
+  h = await createHarness()
+  try {
+    await h.command("loop", "5m --no-now --name stale-incomplete continue safely")
+    const seeded = await h.readState()
+    seeded.jobs[0].staleActiveRecoveryMs = 1
+    await fs.writeFile(h.stateFile, JSON.stringify(seeded, null, 2), "utf8")
+    await h.command("loop-now", "stale-incomplete")
+    await delay(10)
+    h.statuses.set(h.sessionID, "busy")
+    const createdAt = Date.now()
+    h.messageHistory.splice(0, h.messageHistory.length,
+      { info: { id: "usr_running", sessionID: h.sessionID, role: "user", time: { created: createdAt - 1 } }, parts: [] },
+      { info: { id: "asst_running", sessionID: h.sessionID, role: "assistant", time: { created: createdAt } }, parts: [] },
+    )
+    await h.command("loop-now", "stale-incomplete")
+    const state = await h.readState()
+    assert.equal(state.jobs[0].lastFinishedAt, undefined, "an unfinished assistant tail must never be force-finalized just because the active-run timeout elapsed")
+    assert.equal(h.actionTexts().length, 1, "unfinished work must not be overlapped by a replacement prompt")
+  } finally {
+    await h.cleanup()
+  }
+}
+
 async function testPromptDispatchFailureRecovery() {
   const h = await createHarness({ failPrompt: true, promptFailureDelayMs: 25 })
   try {
@@ -593,6 +691,8 @@ await testParserAndPresets()
 await testLifecycleAndCommandDedupe()
 await testWatchScheduling()
 await testActionRoutingAndSafety()
+await testNativeCompactionLifecycleAndFallback()
+await testStaleBusyUsesCompletedAssistantTail()
 await testPromptDispatchFailureRecovery()
 await testStopsPreflightAndGoalLifecycle()
 await testLoopOwnedGoalMessageUpdatesDoNotSelfInterrupt()

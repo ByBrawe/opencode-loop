@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.24
+
+- Cross-check stale OpenCode `busy`/`retry` status against the chronological session tail and only recover early when the latest assistant message has a real `time.completed`; an explicitly unfinished assistant tail is never force-finalized.
+- Track scheduled compaction through OpenCode's native `experimental.session.compacting` hook and `session.compacted` event, while retaining idle/status fallbacks for older hosts.
+- Serialize `--compact-every` as its own compaction phase so the next loop prompt/shell action cannot overlap an in-progress compaction.
+- Fix headless/server compact fallback for current OpenCode by supplying the required `providerID`, `modelID`, and `auto: false` payload to `session.summarize`.
+- Add deterministic regressions for completed-vs-running assistant tails, native compaction completion, compact/action serialization, and current summarize payloads.
+
 ## 0.5.23
 
 - Track non-blocking `session.prompt` and `session.shell` dispatch promises instead of treating every fire-and-forget request as successfully started.
