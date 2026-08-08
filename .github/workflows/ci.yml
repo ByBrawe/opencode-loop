@@ -5,6 +5,9 @@ on:
   push:
     branches:
       - main
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -25,8 +28,50 @@ jobs:
           node-version: "24"
           cache: npm
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       - run: npm ci
 
       - run: npm run check
 
       - run: npm test
+
+      - name: Verify Bun can load the plugin
+        run: bun -e "await import('./src/index.js')"
+
+  opencode-peer-compat:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin-version: ["1.4.0", "latest"]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: npm ci
+
+      - name: Install OpenCode plugin compatibility target
+        shell: bash
+        run: npm install --no-save --package-lock=false "@opencode-ai/plugin@${{ matrix.plugin-version }}"
+
+      - name: Show tested OpenCode plugin version
+        run: node -p "require('./node_modules/@opencode-ai/plugin/package.json').version"
+
+      - run: npm run check
+
+      - run: npm test
+
+      - name: Verify Bun can load with this OpenCode plugin
+        run: bun -e "await import('./src/index.js')"
