@@ -1,0 +1,44 @@
+name: Apply v0.5.24 on PR
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'fix/v0.5.24-native-compaction-status'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Apply v0.5.24 patch
+        run: python scripts/apply-v0524.py
+      - name: Refresh lockfile
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Verify candidate
+        run: |
+          npm ci
+          npm run check
+          npm test
+          bun -e "await import('./src/index.js')"
+          npm pack --dry-run
+      - name: Commit verified candidate
+        shell: bash
+        run: |
+          rm scripts/apply-v0524.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/index.js scripts/comprehensive-test.mjs package.json package-lock.json CHANGELOG.md README.md scripts/apply-v0524.py
+          git commit -m "fix: harden native compaction and stale status recovery"
+          git push origin HEAD:${{ github.head_ref }}
