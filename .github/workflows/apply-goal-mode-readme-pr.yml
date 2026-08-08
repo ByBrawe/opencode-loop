@@ -1,3 +1,4 @@
+# PR-scoped one-shot workflow; self-removes after applying README changes.
 name: Apply Goal Mode README on PR
 
 on:
