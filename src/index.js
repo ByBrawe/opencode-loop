@@ -510,9 +510,11 @@ async function sdkCall(method, ...argsList) {
 }
 
 function fireSdk(client, label, method, ...argsList) {
-  Promise.resolve()
-    .then(() => sdkCall(method, ...argsList))
-    .catch((error) => log(client, "warn", `${label} failed`, { error: sdkErrorMessage(error) }))
+  const pending = Promise.resolve().then(() => sdkCall(method, ...argsList))
+  void pending.catch((error) => {
+    log(client, "warn", `${label} failed`, { error: sdkErrorMessage(error) }).catch(() => {})
+  })
+  return pending
 }
 
 async function executeTuiCommand(client, command) {
@@ -1449,6 +1451,36 @@ function clearActiveRun(sessionID) {
   activeRuns.delete(sessionID)
 }
 
+async function recoverActiveDispatchFailure(directory, client, sessionID, jobId, runToken, error) {
+  const active = activeRuns.get(sessionID)
+  if (!active || active.jobId !== jobId || active.runToken !== runToken) return false
+
+  clearActiveRun(sessionID)
+  sessionStatuses.delete(sessionID)
+  sessionStatusSeenAt.delete(sessionID)
+
+  const message = sdkErrorMessage(error)
+  const state = await readState(directory, sessionID)
+  const job = (state.jobs || []).find((candidate) => candidate.id === jobId)
+  if (job) {
+    job.failureCount = (job.failureCount || 0) + 1
+    job.lastFailureReason = "dispatch_failed"
+    job.lastDispatchFailure = message.slice(0, 4000)
+    job.lastDispatchFailureAt = now()
+    if (job.maxFailures > 0 && job.failureCount >= job.maxFailures) {
+      job.paused = true
+      await notifyJob(directory, job, "dispatch_failed")
+    }
+    state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate)
+    await writeState(directory, sessionID, state)
+  }
+
+  await appendLoopLog(directory, "dispatch-error", { sessionID, job: job?.name || jobId, error: message })
+  await toast(client, `Loop dispatch failed${job?.paused ? " and paused" : ""}: ${message}`, job?.paused ? "error" : "warning")
+  await scheduleDueWork(directory, client, sessionID, BUSY_RETRY_MS)
+  return true
+}
+
 function goalReportPath(directory, sessionID, job) {
   return path.join(stateDir(directory), GOAL_REPORT_DIR, `${safeID(sessionID)}-${safeID(job.name || job.id)}.md`)
 }
@@ -1786,7 +1818,7 @@ async function fireAction(directory, client, sessionID, job) {
     guardLoopOwnedUserMessage(sessionID)
     const shellBody = { command, agent }
     if (model) shellBody.model = model
-    fireSdk(
+    const dispatch = fireSdk(
       client,
       "session.shell",
       client.session.shell.bind(client.session),
@@ -1794,7 +1826,7 @@ async function fireAction(directory, client, sessionID, job) {
       { path: { sessionID }, body: shellBody },
       { sessionID, ...shellBody },
     )
-    return { startsAssistantTurn: true }
+    return { startsAssistantTurn: true, dispatch }
   }
   const prompt = await buildPrompt(directory, job)
   const prefix = kind === "goal"
@@ -1806,7 +1838,7 @@ ${prompt}`
   guardLoopOwnedUserMessage(sessionID)
   const promptBody = { agent, parts: [{ type: "text", text: promptText }] }
   if (model) promptBody.model = model
-  fireSdk(
+  const dispatch = fireSdk(
     client,
     "session.prompt",
     client.session.prompt.bind(client.session),
@@ -1814,7 +1846,7 @@ ${prompt}`
     { path: { sessionID }, body: promptBody },
     { sessionID, ...promptBody },
   )
-  return { startsAssistantTurn: true }
+  return { startsAssistantTurn: true, dispatch }
 }
 
 async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
@@ -1939,7 +1971,14 @@ async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
       }
       let timer
       if (job.timeoutMs > 0) timer = setTimeout(() => { fireSdk(client, "session.abort", client.session.abort.bind(client.session), { path: { id: sessionID }, body: {} }, { path: { sessionID }, body: {} }, { sessionID }); toast(client, `Loop timeout fired: ${job.name || job.id}`, "warning").catch(() => {}) }, job.timeoutMs)
-      activeRuns.set(sessionID, { jobId: job.id, job, startedAt: now(), timer })
+      const runToken = `${job.id}:${now().toString(36)}:${Math.random().toString(16).slice(2)}`
+      activeRuns.set(sessionID, { jobId: job.id, job, startedAt: now(), timer, runToken })
+      if (result.dispatch) {
+        void result.dispatch.catch((error) => {
+          recoverActiveDispatchFailure(directory, client, sessionID, job.id, runToken, error)
+            .catch((recoveryError) => log(client, "error", "dispatch recovery failed", { error: sdkErrorMessage(recoveryError) }))
+        })
+      }
       sessionStatuses.set(sessionID, "busy")
       sessionStatusSeenAt.set(sessionID, now())
       await reschedule(BUSY_RETRY_MS)
