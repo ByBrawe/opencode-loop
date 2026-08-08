@@ -20,9 +20,21 @@ jobs:
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
+          cache: npm
 
-      - run: npm ci || npm install
+      - run: npm ci
 
-      - run: npm run check --if-present
+      - name: Verify tag matches package version
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          test "$TAG_VERSION" = "$PACKAGE_VERSION"
+
+      - run: npm run check
+
+      - run: npm test
+
+      - run: npm pack --dry-run
 
       - run: npm publish --access public

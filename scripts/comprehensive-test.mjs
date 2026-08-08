@@ -243,7 +243,10 @@ async function testLifecycleAndCommandDedupe() {
     assert.equal(state.jobs.find((item) => item.name === "same").paused, false)
 
     const beforeReports = h.reportTexts().length
-    await h.command("loop-status")
+    const statusOutput = { parts: [{ type: "text", text: "OpenCode Loop status command handled locally. Reply exactly: OK." }] }
+    await h.command("loop-status", "", statusOutput)
+    assert.equal(statusOutput.parts.length, 1, "handled commands must keep a valid acknowledgement prompt")
+    assert.match(statusOutput.parts[0].text, /Reply exactly: OK/)
     await h.commandEvent("loop-status", "", "msg_status_1")
     assert.equal(h.reportTexts().length, beforeReports + 1, "command.executed must not duplicate the before hook")
     await h.command("loop-status")
@@ -384,7 +387,7 @@ async function testStopsPreflightAndGoalLifecycle() {
 
   h = await createHarness()
   try {
-    await h.command("loop", "5m --no-now --preflight \"node -e process.exit(7)\" continue")
+    await h.command("loop", "5m --no-now --preflight \"node -e process.exitCode=7\" continue")
     await h.command("loop-now")
     const state = await h.readState()
     assert.equal(state.jobs[0].paused, true)
