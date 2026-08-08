@@ -186,7 +186,7 @@ try {
   assert.equal(prompts.length, promptCountBeforeBackgroundChild, "a running background child session must keep its parent loop busy")
 
   liveStatuses.set(childSessionID, "idle")
-  await hooks.event({ event: { type: "session.status", properties: { sessionID: childSessionID, status: { type: "idle" } } })
+  await hooks.event({ event: { type: "session.status", properties: { sessionID: childSessionID, status: { type: "idle" } } } })
   await hooks.event({ event: { type: "session.idle", properties: { sessionID } } })
   assert.equal(
     await waitFor(() => prompts.length === promptCountBeforeBackgroundChild + 1, 5_000),
