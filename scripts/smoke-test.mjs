@@ -137,6 +137,7 @@ try {
     true,
     "a Goal Mode check-gated run must start when forced",
   )
+  await new Promise((resolve) => setTimeout(resolve, 25))
   await hooks.event({ event: { type: "session.idle", properties: { sessionID } } })
   let autoCompletedState
   for (let attempt = 0; attempt < 100; attempt++) {
