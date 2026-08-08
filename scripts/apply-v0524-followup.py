@@ -80,7 +80,7 @@ needle = '''  h = await createHarness()
 '''
 replacement = '''  h = await createHarness()
   try {
-    await h.command("loop", "5m --no-now --name compact-chain --compact-every 1 --verify \"node -e process.exitCode=7\" --pause-on-verify-fail continue after compaction")
+    await h.command("loop", "5m --no-now --name compact-chain --compact-every 1 --verify 'node -e process.exitCode=7' --pause-on-verify-fail continue after compaction")
 '''
 replace_once("scripts/comprehensive-test.mjs", needle, replacement)
 
@@ -99,7 +99,7 @@ replace_once(
 
   h = await createHarness()
   try {
-    await h.command("loop", "5m --no-now --name compact-idle-fallback --compact-every 1 --verify \"node -e process.exitCode=7\" --pause-on-verify-fail continue after fallback compaction")
+    await h.command("loop", "5m --no-now --name compact-idle-fallback --compact-every 1 --verify 'node -e process.exitCode=7' --pause-on-verify-fail continue after fallback compaction")
     const seeded = await h.readState()
     seeded.jobs[0].runCount = 1
     seeded.jobs[0].lastRunAt = 0
