@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.21
+
+- Verified server-plugin compatibility against OpenCode 1.18.15 and updated the development plugin dependency accordingly.
+- Stopped clearing `command.execute.before` output parts. Current OpenCode still creates a command prompt turn for server-plugin slash commands, so control commands keep the valid tool-denied `opencode-loop-local` acknowledgement instead of producing an empty message.
+- Prefer the current `session.compact` TUI command value while retaining `session_compact` and `session.summarize` as compatibility fallbacks.
+- Fixed the comprehensive preflight failure test to use a cross-platform shell-safe Node expression.
+- Added Ubuntu and Windows pull-request CI, and hardened npm publishing with full tests, tag/version verification, and `npm pack --dry-run`.
+- Retained the v0.5.20 Windows state-write retry hardening and deterministic EPERM/partial-read regressions.
+
 ## 0.5.20
 
 - Fixed Windows TUI loop state writes failing with `EPERM` / `EEXIST` when renaming a project-local `*.tmp` over an existing session state file. Heartbeat and due-timer updates no longer drop jobs when antivirus, IDE indexers, or OpenCode snapshots briefly lock the destination.

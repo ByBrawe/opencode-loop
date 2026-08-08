@@ -92,7 +92,8 @@ try {
     sessionID,
     arguments: "Create proof.txt and verify it --max-turns 3",
   }, output)
-  assert.equal(output.parts.length, 0, "a locally handled slash command must not start a placeholder model turn")
+  assert.equal(output.parts.length, 1, "a locally handled slash command must keep a valid acknowledgement prompt")
+  assert.equal(output.parts[0].text, "original command body")
 
   await hooks["command.execute.before"]({ command: "loop-now", sessionID, arguments: "goal" }, { parts: [] })
   assert.equal(

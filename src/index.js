@@ -535,7 +535,7 @@ async function compactSession(client, sessionID) {
   // current builds, while some older docs/examples mention the event value
   // (session.compact). Try the alias first, then the event value, then the
   // session summarize endpoint as a last resort.
-  for (const command of ["session_compact", "session.compact"]) {
+  for (const command of ["session.compact", "session_compact"]) {
     try {
       await executeTuiCommand(client, command)
       return true
@@ -2220,12 +2220,9 @@ async function handleCommand(directory, client, input, fallbackName, fallbackArg
   if (isLoopCommandName(name)) guardLoopOwnedUserMessage(sessionID)
 
   const handled = () => {
-    if (output && Array.isArray(output.parts)) {
-      // The command has already been completed through toasts/noReply prompts
-      // and local state. Leaving a placeholder prompt starts an unnecessary
-      // model turn; weaker agents may even call tools or spawn subagents.
-      output.parts.length = 0
-    }
+    // OpenCode server plugins cannot currently cancel the command prompt turn.
+    // Keep the command markdown acknowledgement intact so opencode-loop-local
+    // receives a valid, tool-denied message instead of an empty parts array.
     return true
   }
 
