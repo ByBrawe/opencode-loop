@@ -41,7 +41,7 @@ jobs:
       - name: Verify Bun can load the plugin
         run: bun -e "await import('./src/index.js')"
 
-      - name: Regression #2 - verify local .ts plugin loads in Bun
+      - name: "Regression #2 - verify local .ts plugin loads in Bun"
         run: |
           node -e "require('node:fs').copyFileSync('src/index.js', 'src/__opencode_loop_local_ci.ts')"
           bun -e "await import('./src/__opencode_loop_local_ci.ts')"
@@ -82,7 +82,7 @@ jobs:
       - name: Verify Bun can load with this OpenCode plugin
         run: bun -e "await import('./src/index.js')"
 
-      - name: Regression #2 - verify local .ts plugin loads with this OpenCode plugin
+      - name: "Regression #2 - verify local .ts plugin loads with this OpenCode plugin"
         run: |
           node -e "require('node:fs').copyFileSync('src/index.js', 'src/__opencode_loop_local_ci.ts')"
           bun -e "await import('./src/__opencode_loop_local_ci.ts')"
