@@ -122,6 +122,7 @@ try {
   assert.equal(completedState.jobs[0].paused, true)
   assert.equal(completedState.jobs[0].enabled, false)
 
+  await hooks.event({ event: { type: "session.idle", properties: { sessionID } } })
   await hooks["command.execute.before"]({ command: "loop-clear", sessionID, arguments: "" }, { parts: [] })
 
   const promptCountBeforeAutoGoal = prompts.length
