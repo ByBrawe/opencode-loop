@@ -40,6 +40,7 @@ const sessionParents = new Map()
 let heartbeatTimer
 const sessionStatuses = new Map()
 const sessionStatusSeenAt = new Map()
+const loopCompactionRequests = new Map()
 
 const DEFAULT_PROGRESS_MD = `# Progress
 
@@ -532,11 +533,72 @@ function compactTuiCommandName(command = "compact") {
   return undefined
 }
 
-async function compactSession(client, sessionID) {
-  // OpenCode's TUI API accepts legacy keybind aliases (session_compact) in
-  // current builds, while some older docs/examples mention the event value
-  // (session.compact). Try the alias first, then the event value, then the
-  // session summarize endpoint as a last resort.
+async function readRecentSessionMessages(client, sessionID, directory, limit = 20) {
+  if (!client?.session?.messages) return undefined
+  const query = { limit }
+  if (directory) query.directory = directory
+  try {
+    const messages = await sdkCall(
+      client.session.messages.bind(client.session),
+      { path: { id: sessionID }, query },
+      { path: { sessionID }, query },
+      { sessionID, ...query },
+    )
+    return Array.isArray(messages) ? messages : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function orderedSessionMessages(messages) {
+  return (messages || [])
+    .map((message, index) => {
+      const info = message?.info || message || {}
+      const created = Number(info?.time?.created || 0)
+      return { message, index, created: Number.isFinite(created) ? created : 0 }
+    })
+    .sort((a, b) => a.created - b.created || a.index - b.index)
+    .map((entry) => entry.message)
+}
+
+async function activeRunCompletionFromMessages(directory, client, sessionID, active) {
+  const messages = await readRecentSessionMessages(client, sessionID, directory)
+  if (!messages) return "unknown"
+  const tail = orderedSessionMessages(messages).at(-1)
+  const info = tail?.info || tail
+  if (!info || info.role !== "assistant") return "incomplete"
+  const completed = Number(info?.time?.completed || 0)
+  const created = Number(info?.time?.created || 0)
+  if (!Number.isFinite(completed) || completed <= 0) return "incomplete"
+  const startedAt = Number(active?.startedAt || 0)
+  if (startedAt > 0 && completed < startedAt && (!Number.isFinite(created) || created < startedAt)) return "incomplete"
+  return "completed"
+}
+
+async function resolveCompactionModel(directory, client, sessionID, preferredModel) {
+  const preferred = normalizedModelRef(preferredModel)
+  if (preferred) return preferred
+  const cached = normalizedModelRef(sessionExecutionContexts.get(sessionID)?.model)
+  if (cached) return cached
+  const captured = await captureSessionExecutionContext(client, sessionID)
+  const capturedModel = normalizedModelRef(captured?.model)
+  if (capturedModel) return capturedModel
+  const messages = await readRecentSessionMessages(client, sessionID, directory)
+  for (const message of orderedSessionMessages(messages).reverse()) {
+    const info = message?.info || message
+    const model = normalizedModelRef(info?.model) || normalizedModelRef(info)
+    if (!model) continue
+    const previous = sessionExecutionContexts.get(sessionID) || {}
+    sessionExecutionContexts.set(sessionID, { ...previous, model })
+    return model
+  }
+  return undefined
+}
+
+async function compactSession(directory, client, sessionID, preferredModel) {
+  // Prefer the native TUI command when a TUI is present. Headless/server hosts
+  // fall back to session.summarize, whose current API requires an explicit
+  // provider/model pair.
   for (const command of ["session.compact", "session_compact"]) {
     try {
       await executeTuiCommand(client, command)
@@ -546,17 +608,21 @@ async function compactSession(client, sessionID) {
     }
   }
   try {
+    if (!client?.session?.summarize) throw new Error("client.session.summarize is not available")
+    const model = await resolveCompactionModel(directory, client, sessionID, preferredModel)
+    if (!model) throw new Error("could not resolve a provider/model for session.summarize")
+    const body = { providerID: model.providerID, modelID: model.modelID, auto: false }
     await sdkCall(
       client.session.summarize.bind(client.session),
-      { path: { id: sessionID }, body: {} },
-      { path: { sessionID }, body: {} },
-      { sessionID },
+      { path: { id: sessionID }, body },
+      { path: { sessionID }, body },
+      { sessionID, ...body },
     )
     return true
   } catch (error) {
     await log(client, "warn", "session.summarize fallback failed", { error: sdkErrorMessage(error) })
   }
-  await toast(client, "Could not run /compact from loop. Check OpenCode version and active TUI session.", "error")
+  await toast(client, "Could not run /compact from loop. Check OpenCode version and active session model.", "error")
   return false
 }
 
@@ -850,6 +916,7 @@ function disposeRuntime(directory, client) {
     sessionStatuses.delete(sessionID)
     sessionStatusSeenAt.delete(sessionID)
     sessionExecutionContexts.delete(sessionID)
+    loopCompactionRequests.delete(sessionID)
     for (const key of handledCommands.keys()) if (key.startsWith(`${sessionID}:`)) handledCommands.delete(key)
     for (const key of handledCommandEvents.keys()) if (key.startsWith(`${sessionID}:`)) handledCommandEvents.delete(key)
   }
@@ -1079,15 +1146,18 @@ async function ensureBranch(directory, job, client, sessionID) {
   return job
 }
 
-async function maybeCompact(client, sessionID, job) {
+async function maybeCompact(directory, client, sessionID, job) {
   const dueRuns = job.compactEveryRuns > 0 && (job.runCount || 0) > 0 && (job.runCount || 0) % job.compactEveryRuns === 0 && job.lastCompactRunCount !== job.runCount
   const dueTime = job.compactEveryMs > 0 && (!job.lastCompactAt || now() - job.lastCompactAt >= job.compactEveryMs)
-  if (!dueRuns && !dueTime) return job
-  if (await compactSession(client, sessionID)) {
+  if (!dueRuns && !dueTime) return { job, started: false }
+  beginLoopCompaction(sessionID, job.id, true)
+  if (await compactSession(directory, client, sessionID, job.model)) {
     job.lastCompactAt = now()
     job.lastCompactRunCount = job.runCount || 0
+    return { job, started: true }
   }
-  return job
+  loopCompactionRequests.delete(sessionID)
+  return { job, started: false }
 }
 
 async function snapshotPaths(directory, files) {
@@ -1226,12 +1296,21 @@ function staleActiveRun(sessionID) {
 async function canFinalizeActiveRun(directory, client, sessionID, active, options = {}) {
   if (hasActiveToolCalls(sessionID) || hasBusyDescendant(sessionID)) return false
   if (!options.requireIdle && !options.forceStale) return true
-  if (options.forceStale && staleActiveRun(sessionID)) return true
-  if (!options.requireIdle) return false
+
+  const completion = options.forceStale
+    ? await activeRunCompletionFromMessages(directory, client, sessionID, active)
+    : undefined
+  if (completion === "completed") return true
+  if (!options.requireIdle) return completion === "unknown" && staleActiveRun(sessionID)
 
   const live = await readLiveSessionStatus(client, sessionID, directory)
-  if (live?.type) return live.type === "idle"
+  if (live?.type === "idle") return true
+  if (live?.type) {
+    if ((live.type === "busy" || live.type === "retry") && options.forceStale && completion === "unknown" && staleActiveRun(sessionID)) return true
+    return false
+  }
 
+  if (options.forceStale && completion === "unknown" && staleActiveRun(sessionID)) return true
   const cached = sessionStatuses.get(sessionID)
   const seenAt = sessionStatusSeenAt.get(sessionID) || 0
   return cached === "idle" && seenAt > (active.startedAt || 0)
@@ -1299,10 +1378,21 @@ async function sessionStatusType(client, sessionID, directory, options = {}) {
     // plugin-injected turn until the next user command touches the session.
     // When the only reason we still think the session is busy is our own stale
     // active-run guard, recover instead of waiting for another manual command.
-    if ((live.type === "busy" || live.type === "retry") && options.recoverStaleActive !== false && staleActiveRun(sessionID)) {
-      sessionStatuses.set(sessionID, "idle")
-      sessionStatusSeenAt.set(sessionID, now())
-      return "idle"
+    if ((live.type === "busy" || live.type === "retry") && options.recoverStaleActive !== false) {
+      const active = activeRuns.get(sessionID)
+      if (active) {
+        const completion = await activeRunCompletionFromMessages(directory, client, sessionID, active)
+        if (completion === "completed" || (completion === "unknown" && staleActiveRun(sessionID))) {
+          sessionStatuses.set(sessionID, "idle")
+          sessionStatusSeenAt.set(sessionID, now())
+          await appendLoopLog(directory, completion === "completed" ? "status-message-complete-recovery" : "status-stale-recovery", {
+            sessionID,
+            job: active.job?.name || active.jobId,
+            startedAt: active.startedAt,
+          })
+          return "idle"
+        }
+      }
     }
     sessionStatuses.set(sessionID, live.type)
     sessionStatusSeenAt.set(sessionID, now())
@@ -1448,7 +1538,51 @@ function dueJobs(state, force = false) {
 function clearActiveRun(sessionID) {
   const active = activeRuns.get(sessionID)
   if (active?.timer) clearTimeout(active.timer)
+  const compact = loopCompactionRequests.get(sessionID)
+  if (!compact || !active || compact.jobId === active.jobId) loopCompactionRequests.delete(sessionID)
   activeRuns.delete(sessionID)
+}
+
+function beginLoopCompaction(sessionID, jobId, resumeAfter = false) {
+  loopCompactionRequests.set(sessionID, {
+    jobId,
+    resumeAfter,
+    requestedAt: now(),
+    startedAt: 0,
+    completedAt: 0,
+  })
+}
+
+async function noteLoopCompactionStarted(directory, sessionID) {
+  const pending = loopCompactionRequests.get(sessionID)
+  if (!pending) return false
+  if (!pending.startedAt) {
+    pending.startedAt = now()
+    loopCompactionRequests.set(sessionID, pending)
+    await appendLoopLog(directory, "compact-started", { sessionID, job: pending.jobId, resumeAfter: pending.resumeAfter })
+  }
+  return true
+}
+
+async function finalizeLoopCompaction(directory, client, sessionID) {
+  const pending = loopCompactionRequests.get(sessionID)
+  const active = activeRuns.get(sessionID)
+  if (!pending || !active || pending.jobId !== active.jobId) return false
+  return await finalizeActiveRun(directory, client, sessionID)
+}
+
+async function noteLoopCompactionCompleted(directory, client, sessionID) {
+  const pending = loopCompactionRequests.get(sessionID)
+  if (!pending) return false
+  pending.completedAt = now()
+  loopCompactionRequests.set(sessionID, pending)
+  await appendLoopLog(directory, "compact-event", { sessionID, job: pending.jobId, resumeAfter: pending.resumeAfter })
+  const timer = setTimeout(() => {
+    finalizeLoopCompaction(directory, client, sessionID)
+      .catch((error) => log(client, "error", "compaction finalization failed", { error: sdkErrorMessage(error) }))
+  }, 0)
+  timer.unref?.()
+  return true
 }
 
 async function recoverActiveDispatchFailure(directory, client, sessionID, jobId, runToken, error) {
@@ -1718,6 +1852,20 @@ async function finalizeActiveRun(directory, client, sessionID, options = {}) {
   if (!active) return
   if (!await canFinalizeActiveRun(directory, client, sessionID, active, options)) return false
   const recoveredStale = staleActiveRun(sessionID)
+  if (active.compactionOnly) {
+    const pending = loopCompactionRequests.get(sessionID)
+    clearActiveRun(sessionID)
+    sessionStatuses.delete(sessionID)
+    sessionStatusSeenAt.delete(sessionID)
+    await appendLoopLog(directory, pending?.completedAt ? "compact-finished" : "compact-idle-fallback", {
+      sessionID,
+      job: active.job?.name || active.jobId,
+      startedAt: active.startedAt,
+      nativeEvent: Boolean(pending?.completedAt),
+    })
+    await scheduleDueWork(directory, client, sessionID)
+    return true
+  }
   clearActiveRun(sessionID)
   const state = await readState(directory, sessionID)
   let job = (state.jobs || []).find((candidate) => candidate.id === active.jobId)
@@ -1781,8 +1929,10 @@ async function fireAction(directory, client, sessionID, job) {
   const agent = job.agent || "build"
   const model = normalizedModelRef(job.model)
   if (kind === "compact") {
-    const ok = await compactSession(client, sessionID)
-    return { startsAssistantTurn: ok, pause: !ok, reason: "compact_failed" }
+    beginLoopCompaction(sessionID, job.id, false)
+    const ok = await compactSession(directory, client, sessionID, model)
+    if (!ok) loopCompactionRequests.delete(sessionID)
+    return { startsAssistantTurn: ok, pause: !ok, reason: "compact_failed", compaction: ok }
   }
   if (kind === "command") {
     const normalized = action.startsWith("/") ? action.slice(1) : action
@@ -1794,8 +1944,10 @@ async function fireAction(directory, client, sessionID, job) {
     const tuiCommand = compactTuiCommandName(command)
     if (tuiCommand) {
       guardLoopOwnedUserMessage(sessionID)
-      await compactSession(client, sessionID)
-      return { startsAssistantTurn: true }
+      beginLoopCompaction(sessionID, job.id, false)
+      const ok = await compactSession(directory, client, sessionID, model)
+      if (!ok) loopCompactionRequests.delete(sessionID)
+      return { startsAssistantTurn: ok, pause: !ok, reason: "compact_failed", compaction: ok }
     }
     guardLoopOwnedUserMessage(sessionID)
     const commandBody = { command, arguments: argumentsText, agent }
@@ -1939,7 +2091,25 @@ async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
     }
 
     job = await ensureBranch(directory, job, client, sessionID)
-    job = await maybeCompact(client, sessionID, job)
+    const compactResult = await maybeCompact(directory, client, sessionID, job)
+    job = compactResult.job
+    if (compactResult.started) {
+      state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate)
+      await writeState(directory, sessionID, state)
+      let timer
+      if (job.timeoutMs > 0) timer = setTimeout(() => { fireSdk(client, "session.abort", client.session.abort.bind(client.session), { path: { id: sessionID }, body: {} }, { path: { sessionID }, body: {} }, { sessionID }); toast(client, `Loop compact timeout fired: ${job.name || job.id}`, "warning").catch(() => {}) }, job.timeoutMs)
+      const runToken = `${job.id}:compact:${now().toString(36)}:${Math.random().toString(16).slice(2)}`
+      activeRuns.set(sessionID, { jobId: job.id, job, startedAt: now(), timer, runToken, compactionOnly: true })
+      const pending = loopCompactionRequests.get(sessionID)
+      if (pending?.jobId === job.id && pending.completedAt) {
+        await finalizeLoopCompaction(directory, client, sessionID)
+        return
+      }
+      sessionStatuses.set(sessionID, "busy")
+      sessionStatusSeenAt.set(sessionID, now())
+      await reschedule(BUSY_RETRY_MS)
+      return
+    }
     job.watchTriggered = false
     job.lastRunAt = now()
     job.runCount = (job.runCount || 0) + 1
@@ -1972,7 +2142,14 @@ async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
       let timer
       if (job.timeoutMs > 0) timer = setTimeout(() => { fireSdk(client, "session.abort", client.session.abort.bind(client.session), { path: { id: sessionID }, body: {} }, { path: { sessionID }, body: {} }, { sessionID }); toast(client, `Loop timeout fired: ${job.name || job.id}`, "warning").catch(() => {}) }, job.timeoutMs)
       const runToken = `${job.id}:${now().toString(36)}:${Math.random().toString(16).slice(2)}`
-      activeRuns.set(sessionID, { jobId: job.id, job, startedAt: now(), timer, runToken })
+      activeRuns.set(sessionID, { jobId: job.id, job, startedAt: now(), timer, runToken, compactionAction: result.compaction === true })
+      if (result.compaction) {
+        const pending = loopCompactionRequests.get(sessionID)
+        if (pending?.jobId === job.id && pending.completedAt) {
+          await finalizeLoopCompaction(directory, client, sessionID)
+          return
+        }
+      }
       if (result.dispatch) {
         void result.dispatch.catch((error) => {
           recoverActiveDispatchFailure(directory, client, sessionID, job.id, runToken, error)
@@ -2344,7 +2521,9 @@ export const OpenCodeLoopPlugin = async ({ client, directory }) => {
     "command.execute.before": async (input, output) => { await handleCommand(directory, client, input, undefined, undefined, output) },
     "tool.execute.before": async (input) => { markToolCallActive(input) },
     "tool.execute.after": async (input) => { markToolCallFinished(input) },
+    "experimental.session.compacting": async (input) => { await noteLoopCompactionStarted(directory, input?.sessionID) },
     event: async ({ event }) => {
+      if (event.type === "session.compacted") await noteLoopCompactionCompleted(directory, client, event?.properties?.sessionID)
       updateSessionRelationshipFromEvent(event)
       if (event.type === "message.updated") updateSessionExecutionContext(event?.properties?.info)
       updateToolActivityFromEvent(event)
