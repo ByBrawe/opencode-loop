@@ -172,7 +172,7 @@ try {
 
   const childSessionID = "ses_background_child"
   liveStatuses.set(childSessionID, "busy")
-  await hooks.event({ event: { type: "session.created", properties: { info: { id: childSessionID, parentID: sessionID } } })
+  await hooks.event({ event: { type: "session.created", properties: { info: { id: childSessionID, parentID: sessionID } } } })
   await hooks.event({ event: { type: "session.status", properties: { sessionID: childSessionID, status: { type: "busy" } } } })
   const promptCountBeforeBackgroundChild = prompts.length
   await hooks["command.execute.before"]({
