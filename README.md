@@ -1093,10 +1093,6 @@ Add `.opencode/opencode-loop/` to project `.gitignore` when possible. Runtime st
 
 Create one with:
 
-## Example progress.md
-
-Create one with:
-
 ```text
 /loop-init
 ```
