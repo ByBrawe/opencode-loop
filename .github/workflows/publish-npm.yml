@@ -4,9 +4,11 @@ on:
   push:
     tags:
       - "v*"
+    branches:
+      - "release/npm-v*"
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
@@ -14,22 +16,51 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Resolve release source
+        id: release
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            CHECKOUT_REF="$GITHUB_REF_NAME"
+            CREATE_RELEASE="false"
+          elif [[ "$GITHUB_REF_NAME" == release/npm-v* ]]; then
+            VERSION="${GITHUB_REF_NAME#release/npm-v}"
+            CHECKOUT_REF="main"
+            CREATE_RELEASE="true"
+          else
+            echo "Unsupported release ref: $GITHUB_REF" >&2
+            exit 1
+          fi
+          test -n "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "checkout_ref=$CHECKOUT_REF" >> "$GITHUB_OUTPUT"
+          echo "create_release=$CREATE_RELEASE" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.release.outputs.checkout_ref }}
+          fetch-depth: 0
 
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
-          cache: npm
+          package-manager-cache: false
 
       - run: npm ci
 
-      - name: Verify tag matches package version
+      - name: Verify release version
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          test "$TAG_VERSION" = "$PACKAGE_VERSION"
+          test "$RELEASE_VERSION" = "$PACKAGE_VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$RELEASE_VERSION" >/dev/null 2>&1; then
+            echo "Tag v$RELEASE_VERSION already exists." >&2
+            exit 1
+          fi
 
       - run: npm run check
 
@@ -38,3 +69,24 @@ jobs:
       - run: npm pack --dry-run
 
       - run: npm publish --access public
+
+      - name: Create tag and GitHub release for release branch
+        if: steps.release.outputs.create_release == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          TAG="v$RELEASE_VERSION"
+          COMMIT_SHA="$(git rev-parse HEAD)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" "$COMMIT_SHA" -m "Release $TAG"
+          git push origin "$TAG"
+          zip -r opencode-loop.zip . -x ".git/*" "node_modules/*" "opencode-loop.zip"
+          gh release create "$TAG" opencode-loop.zip --title "$TAG" --generate-notes --target "$COMMIT_SHA"
+
+      - name: Remove one-shot release branch
+        if: steps.release.outputs.create_release == 'true' && success()
+        shell: bash
+        run: git push origin --delete "$GITHUB_REF_NAME" || true
