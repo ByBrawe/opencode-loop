@@ -1568,14 +1568,6 @@ async function finalizeLoopCompaction(directory, client, sessionID) {
   const pending = loopCompactionRequests.get(sessionID)
   const active = activeRuns.get(sessionID)
   if (!pending || !active || pending.jobId !== active.jobId) return false
-  if (active.compactionOnly) {
-    clearActiveRun(sessionID)
-    sessionStatuses.delete(sessionID)
-    sessionStatusSeenAt.delete(sessionID)
-    await appendLoopLog(directory, "compact-finished", { sessionID, job: pending.jobId, resumeAfter: true })
-    await scheduleDueWork(directory, client, sessionID)
-    return true
-  }
   return await finalizeActiveRun(directory, client, sessionID)
 }
 
@@ -1860,6 +1852,20 @@ async function finalizeActiveRun(directory, client, sessionID, options = {}) {
   if (!active) return
   if (!await canFinalizeActiveRun(directory, client, sessionID, active, options)) return false
   const recoveredStale = staleActiveRun(sessionID)
+  if (active.compactionOnly) {
+    const pending = loopCompactionRequests.get(sessionID)
+    clearActiveRun(sessionID)
+    sessionStatuses.delete(sessionID)
+    sessionStatusSeenAt.delete(sessionID)
+    await appendLoopLog(directory, pending?.completedAt ? "compact-finished" : "compact-idle-fallback", {
+      sessionID,
+      job: active.job?.name || active.jobId,
+      startedAt: active.startedAt,
+      nativeEvent: Boolean(pending?.completedAt),
+    })
+    await scheduleDueWork(directory, client, sessionID)
+    return true
+  }
   clearActiveRun(sessionID)
   const state = await readState(directory, sessionID)
   let job = (state.jobs || []).find((candidate) => candidate.id === active.jobId)

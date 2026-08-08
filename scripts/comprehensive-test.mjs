@@ -414,7 +414,7 @@ async function testNativeCompactionLifecycleAndFallback() {
 
   h = await createHarness()
   try {
-    await h.command("loop", "5m --no-now --name compact-chain --compact-every 1 continue after compaction")
+    await h.command("loop", "5m --no-now --name compact-chain --compact-every 1 --verify 'node -e process.exitCode=7' --pause-on-verify-fail continue after compaction")
     const seeded = await h.readState()
     seeded.jobs[0].runCount = 1
     seeded.jobs[0].lastRunAt = 0
@@ -429,6 +429,24 @@ async function testNativeCompactionLifecycleAndFallback() {
     await h.hooks.event({ event: { type: "session.compacted", properties: { sessionID: h.sessionID } } })
     await delay(20)
     assert.equal((await h.readState()).jobs[0].runCount, 1, "native compaction completion must only release the deferred action")
+  } finally {
+    await h.cleanup()
+  }
+
+  h = await createHarness()
+  try {
+    await h.command("loop", "5m --no-now --name compact-idle-fallback --compact-every 1 --verify 'node -e process.exitCode=7' --pause-on-verify-fail continue after fallback compaction")
+    const seeded = await h.readState()
+    seeded.jobs[0].runCount = 1
+    seeded.jobs[0].lastRunAt = 0
+    await fs.writeFile(h.stateFile, JSON.stringify(seeded, null, 2), "utf8")
+    await h.command("loop-now", "compact-idle-fallback")
+    assert.equal(h.actionTexts().length, 0)
+    h.statuses.set(h.sessionID, "idle")
+    await h.command("loop-now", "compact-idle-fallback")
+    const fallbackState = await h.readState()
+    assert.equal(fallbackState.jobs[0].failureCount || 0, 0, "idle-only compaction fallback must not run normal verify logic")
+    assert.equal(fallbackState.jobs[0].paused, false, "idle-only compaction fallback must not pause the job through normal run finalization")
   } finally {
     await h.cleanup()
   }
