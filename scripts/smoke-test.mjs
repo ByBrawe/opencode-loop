@@ -124,6 +124,32 @@ try {
 
   await hooks["command.execute.before"]({ command: "loop-clear", sessionID, arguments: "" }, { parts: [] })
 
+  const promptCountBeforeAutoGoal = prompts.length
+  await hooks["command.execute.before"]({
+    command: "loop-goal",
+    sessionID,
+    arguments: "--no-now --check \"node -e process.exitCode=0\" --complete-when-checks-pass make the configured checks pass",
+  }, { parts: [] })
+  await hooks["command.execute.before"]({ command: "loop-now", sessionID, arguments: "goal" }, { parts: [] })
+  assert.equal(
+    await waitFor(() => prompts.length === promptCountBeforeAutoGoal + 1),
+    true,
+    "a Goal Mode check-gated run must start when forced",
+  )
+  await hooks.event({ event: { type: "session.idle", properties: { sessionID } } })
+  let autoCompletedState
+  for (let attempt = 0; attempt < 100; attempt++) {
+    autoCompletedState = JSON.parse(await fs.readFile(stateFile, "utf8"))
+    if (autoCompletedState.jobs[0]?.goalStatus === "completed") break
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  assert.equal(autoCompletedState.jobs[0].goalStatus, "completed", "--complete-when-checks-pass must complete the goal after successful configured checks")
+  assert.equal(autoCompletedState.jobs[0].paused, true)
+  assert.equal(autoCompletedState.jobs[0].enabled, false)
+  assert.ok(autoCompletedState.jobs[0].lastGoalChecks?.every((item) => item.code === 0), "auto-completed Goal Mode must persist passing check evidence")
+
+  await hooks["command.execute.before"]({ command: "loop-clear", sessionID, arguments: "" }, { parts: [] })
+
   const promptCountBeforeBackgroundTool = prompts.length
   await hooks["tool.execute.before"]({ tool: "bash", sessionID, callID: "call_background" }, { args: {} })
   await hooks["command.execute.before"]({
@@ -146,7 +172,7 @@ try {
 
   const childSessionID = "ses_background_child"
   liveStatuses.set(childSessionID, "busy")
-  await hooks.event({ event: { type: "session.created", properties: { info: { id: childSessionID, parentID: sessionID } } } })
+  await hooks.event({ event: { type: "session.created", properties: { info: { id: childSessionID, parentID: sessionID } } })
   await hooks.event({ event: { type: "session.status", properties: { sessionID: childSessionID, status: { type: "busy" } } } })
   const promptCountBeforeBackgroundChild = prompts.length
   await hooks["command.execute.before"]({
@@ -158,7 +184,7 @@ try {
   assert.equal(prompts.length, promptCountBeforeBackgroundChild, "a running background child session must keep its parent loop busy")
 
   liveStatuses.set(childSessionID, "idle")
-  await hooks.event({ event: { type: "session.status", properties: { sessionID: childSessionID, status: { type: "idle" } } } })
+  await hooks.event({ event: { type: "session.status", properties: { sessionID: childSessionID, status: { type: "idle" } } })
   await hooks.event({ event: { type: "session.idle", properties: { sessionID } } })
   assert.equal(
     await waitFor(() => prompts.length === promptCountBeforeBackgroundChild + 1, 5_000),
