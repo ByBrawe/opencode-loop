@@ -10,6 +10,7 @@ const installer = path.join(root, "scripts", "install-node.mjs")
 const packageVersion = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8")).version
 const expectedPackageSpec = `@bybrawe/opencode-loop@${packageVersion}`
 const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-loop-installer-"))
+const packagedCommandCount = (await fs.readdir(path.join(root, "commands"))).filter((name) => name.endsWith(".md")).length
 
 async function runInstaller(config, cliArgs = []) {
   return await new Promise((resolve, reject) => {
@@ -32,7 +33,12 @@ async function runInstaller(config, cliArgs = []) {
 }
 
 async function commandCount(config) {
-  return (await fs.readdir(path.join(config, "commands"))).filter((name) => name.endsWith(".md")).length
+  try {
+    return (await fs.readdir(path.join(config, "commands"))).filter((name) => name.endsWith(".md")).length
+  } catch (error) {
+    if (error?.code === "ENOENT") return 0
+    throw error
+  }
 }
 
 async function exists(target) {
@@ -43,7 +49,8 @@ try {
   const helpConfig = path.join(temporaryRoot, "help-must-not-install")
   const helpResult = await runInstaller(helpConfig, ["--help"])
   assert.equal(helpResult.code, 0, helpResult.stderr)
-  assert.match(helpResult.stdout, /OpenCode Loop installer/)
+  assert.match(helpResult.stdout, /OpenCode Loop installer\/updater/)
+  assert.match(helpResult.stdout, /--uninstall/)
   assert.equal(await exists(helpConfig), false, "--help must not mutate the OpenCode config directory")
 
   const versionResult = await runInstaller(helpConfig, ["--version"])
@@ -55,7 +62,7 @@ try {
   const localResult = await runInstaller(local)
   assert.equal(localResult.code, 0, localResult.stderr)
   assert.equal(await exists(path.join(local, "plugins", "opencode-loop.ts")), true)
-  assert.equal(await commandCount(local), 30)
+  assert.equal(await commandCount(local), packagedCommandCount)
   assert.equal(await exists(path.join(local, "agents", "opencode-loop-local.md")), true)
   const localPackage = JSON.parse(await fs.readFile(path.join(local, "package.json"), "utf8"))
   assert.equal(localPackage.dependencies["@opencode-ai/plugin"], ">=1.4.0")
@@ -70,7 +77,7 @@ try {
   assert.match(configuredResult.stdout, /removed the duplicate local plugin copy/i)
   assert.equal(await exists(path.join(configured, "plugins", "opencode-loop.ts")), false)
   assert.equal(await exists(path.join(configured, "plugins", "opencode-loop.js")), false)
-  assert.equal(await commandCount(configured), 30)
+  assert.equal(await commandCount(configured), packagedCommandCount)
   assert.equal(await exists(path.join(configured, "agents", "opencode-loop-local.md")), true)
   const configuredJson = JSON.parse(await fs.readFile(path.join(configured, "opencode.json"), "utf8"))
   assert.deepEqual(configuredJson.plugin, [expectedPackageSpec], "the installer must bust OpenCode's stale package cache with an exact version spec")
@@ -97,6 +104,45 @@ try {
   const lookalikeResult = await runInstaller(lookalike)
   assert.equal(lookalikeResult.code, 0, lookalikeResult.stderr)
   assert.equal(await exists(path.join(lookalike, "plugins", "opencode-loop.ts")), true)
+
+  const uninstallConfig = path.join(temporaryRoot, "uninstall")
+  await fs.mkdir(path.join(uninstallConfig, "plugins"), { recursive: true })
+  await fs.mkdir(path.join(uninstallConfig, "commands"), { recursive: true })
+  await fs.mkdir(path.join(uninstallConfig, "agents"), { recursive: true })
+  await fs.writeFile(path.join(uninstallConfig, "opencode.jsonc"), `{
+    // Keep unrelated OpenCode configuration.
+    "plugin": [
+      "other-plugin",
+      "@bybrawe/opencode-loop@0.5.1",
+    ],
+    "permission": { "read": "allow" },
+  }`, "utf8")
+  await fs.writeFile(path.join(uninstallConfig, "plugins", "opencode-loop.ts"), "local", "utf8")
+  for (const name of await fs.readdir(path.join(root, "commands"))) {
+    if (name.endsWith(".md")) await fs.copyFile(path.join(root, "commands", name), path.join(uninstallConfig, "commands", name))
+  }
+  for (const name of await fs.readdir(path.join(root, "agents"))) {
+    if (name.endsWith(".md")) await fs.copyFile(path.join(root, "agents", name), path.join(uninstallConfig, "agents", name))
+  }
+  const stateFile = path.join(temporaryRoot, "project", ".opencode", "opencode-loop", "state.json")
+  await fs.mkdir(path.dirname(stateFile), { recursive: true })
+  await fs.writeFile(stateFile, "preserve", "utf8")
+
+  const uninstallResult = await runInstaller(uninstallConfig, ["--uninstall"])
+  assert.equal(uninstallResult.code, 0, uninstallResult.stderr)
+  assert.match(uninstallResult.stdout, /Project state .* is preserved/)
+  const uninstallJsonc = await fs.readFile(path.join(uninstallConfig, "opencode.jsonc"), "utf8")
+  assert.match(uninstallJsonc, /Keep unrelated OpenCode configuration/)
+  assert.match(uninstallJsonc, /"other-plugin"/)
+  assert.match(uninstallJsonc, /"permission"/)
+  assert.doesNotMatch(uninstallJsonc, /@bybrawe\/opencode-loop/)
+  assert.equal(await exists(path.join(uninstallConfig, "plugins", "opencode-loop.ts")), false)
+  assert.equal(await commandCount(uninstallConfig), 0)
+  assert.equal(await exists(path.join(uninstallConfig, "agents", "opencode-loop-local.md")), false)
+  assert.equal(await fs.readFile(stateFile, "utf8"), "preserve")
+
+  const uninstallAgain = await runInstaller(uninstallConfig, ["--uninstall"])
+  assert.equal(uninstallAgain.code, 0, uninstallAgain.stderr)
 
   console.log("OpenCode Loop installer test passed")
 } finally {
