@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.26
+
+- Added an explicit npm-based OpenCode installation path: `npm install -g @bybrawe/opencode-loop@latest` followed by `opencode-loop`.
+- Clarified that project-local `npm install @bybrawe/opencode-loop` alone does not perform the OpenCode installer step.
+- Documented update and uninstall flows for both `npx` and global npm installation methods.
+- Added matching npm installation instructions for the recommended dedicated `@bybrawe/opencode-goal` plugin.
+
+## 0.5.25
+
+- Added safe `--uninstall` support to the Loop installer while preserving unrelated OpenCode configuration and project Loop state.
+- Reworked README installation/removal guidance and moved install/update instructions to the top.
+- Documented coexistence with OpenCode Goals and recommends the dedicated Goals plugin for stronger persistent Goal contracts and host-verified completion.
+- Warned against driving the same session/work simultaneously with Loop's experimental `/loop-goal` and the dedicated `/goal` continuation system.
+
 ## 0.5.24
 
 - Cross-check stale OpenCode `busy`/`retry` status against the chronological session tail and only recover early when the latest assistant message has a real `time.completed`; an explicitly unfinished assistant tail is never force-finalized.
