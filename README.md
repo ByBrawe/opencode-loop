@@ -4,15 +4,37 @@
 
 OpenCode Loop adds `/loop`, scheduled prompt/command/shell jobs, compact scheduling, safe long-running continuation helpers, and the `opencode-loopd` background daemon.
 
-> **Current release: `0.5.25`.** Loop also contains an older experimental `/loop-goal` mode, but for strong persistent Goal contracts and host-verified completion, use the separate **OpenCode Goals** plugin described below.
+> **Current release: `0.5.26`.** Loop also contains an older experimental `/loop-goal` mode, but for strong persistent Goal contracts and host-verified completion, use the separate **OpenCode Goals** plugin described below.
 
 ## Install or update
 
-Recommended installation from any shell on Windows, macOS, or Linux:
+Choose either installation method below.
+
+### Option 1 — one-command install with `npx` (recommended)
 
 ```bash
 npx -y @bybrawe/opencode-loop@latest
 ```
+
+Run the same command again whenever you want to update.
+
+### Option 2 — install with npm
+
+Install OpenCode Loop globally so its installer and daemon commands are available:
+
+```bash
+npm install -g @bybrawe/opencode-loop@latest
+opencode-loop
+```
+
+To update later:
+
+```bash
+npm install -g @bybrawe/opencode-loop@latest
+opencode-loop
+```
+
+`npm install @bybrawe/opencode-loop` by itself only adds the Node package to the current project. For a normal OpenCode installation, use the global npm method above or the recommended `npx` installer.
 
 The installer:
 
@@ -29,17 +51,22 @@ Then **fully restart OpenCode** and verify:
 /loop-doctor
 ```
 
-Run the same command again whenever you want to update:
-
-```bash
-npx -y @bybrawe/opencode-loop@latest
-```
-
 ### Uninstall
+
+If you use the `npx` installer:
 
 ```bash
 npx -y @bybrawe/opencode-loop@latest --uninstall
 ```
+
+If you installed OpenCode Loop globally with npm:
+
+```bash
+opencode-loop --uninstall
+npm uninstall -g @bybrawe/opencode-loop
+```
+
+Run `opencode-loop --uninstall` before removing the global npm package so it can clean its OpenCode registrations and managed command files.
 
 Uninstall removes known OpenCode Loop package registrations, local plugin files, `/loop-*` command markdown files, and the Loop local command agent while preserving unrelated OpenCode configuration.
 
@@ -113,10 +140,19 @@ Loop is idle-safe: if a job becomes due while the session is busy, active tools 
 
 OpenCode Loop still includes the older **experimental** `/loop-goal` workflow. It is useful for compatibility and lightweight outcome-driven automation, but it is not the strongest Goal implementation in this project family.
 
-For durable Goal Contracts, host-owned evidence, semantic verification, native Todo coordination, revision isolation, false-completion protection, restart recovery, Goal audit, budgets, and ordered Goals, install **OpenCode Goals**:
+For durable Goal Contracts, host-owned evidence, semantic verification, native Todo coordination, revision isolation, false-completion protection, restart recovery, Goal audit, budgets, and ordered Goals, install **OpenCode Goals**.
+
+Recommended one-command installer:
 
 ```bash
 npx -y @bybrawe/opencode-goal@latest
+```
+
+Or install its CLI globally with npm and run the installer:
+
+```bash
+npm install -g @bybrawe/opencode-goal@latest
+opencode-goal
 ```
 
 Then use:
@@ -141,11 +177,19 @@ Do **not** run Loop’s `/loop-goal` and OpenCode Goals `/goal` against the same
 
 Likewise, avoid leaving a prompt-producing `/loop ...` job continuously injecting agent turns into a session while an OpenCode Goal is actively continuing. Use separate sessions or pause/remove that prompt loop until the Goal is done. Scheduled shell/command jobs should also be chosen carefully so they do not race files or verification.
 
-Install both when needed:
+Install both when needed with `npx`:
 
 ```bash
 npx -y @bybrawe/opencode-loop@latest
 npx -y @bybrawe/opencode-goal@latest
+```
+
+Or install both globally with npm, then run both installers:
+
+```bash
+npm install -g @bybrawe/opencode-loop@latest @bybrawe/opencode-goal@latest
+opencode-loop
+opencode-goal
 ```
 
 ## Core commands
@@ -329,6 +373,13 @@ For new work where completion integrity matters, prefer the dedicated **OpenCode
 
 ```bash
 npx -y @bybrawe/opencode-goal@latest
+```
+
+or:
+
+```bash
+npm install -g @bybrawe/opencode-goal@latest
+opencode-goal
 ```
 
 ## State and checkpoints
