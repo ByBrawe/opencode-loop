@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   apply:
-    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'chore: execute loop hardening 0.5.27'
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, 'execute loop hardening 0.5.27')
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
