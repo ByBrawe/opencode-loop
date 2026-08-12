@@ -12,8 +12,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -51,6 +56,7 @@ jobs:
           node -e "require('node:fs').rmSync('src/__opencode_loop_local_ci.ts', { force: true })"
 
   opencode-peer-compat:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
