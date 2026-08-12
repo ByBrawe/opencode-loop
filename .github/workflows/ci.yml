@@ -22,6 +22,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v6
         with:
@@ -57,6 +59,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v6
         with:
@@ -88,3 +92,40 @@ jobs:
           node -e "require('node:fs').copyFileSync('src/index.js', 'src/__opencode_loop_local_ci.ts')"
           bun -e "await import('./src/__opencode_loop_local_ci.ts')"
           node -e "require('node:fs').rmSync('src/__opencode_loop_local_ci.ts', { force: true })"
+
+  real-opencode-loop:
+    name: real OpenCode loop (${{ matrix.os }})
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: npm ci
+
+      - name: Install current OpenCode CLI
+        run: npm install --no-save --package-lock=false opencode-ai@latest
+
+      - name: Show OpenCode version
+        run: npx --no-install opencode --version
+
+      - name: Run real-host Loop canary
+        run: node scripts/host-loop-canary.mjs
+        env:
+          OPENCODE_PRINT_LOGS: "1"
+          OPENCODE_LOG_LEVEL: DEBUG
