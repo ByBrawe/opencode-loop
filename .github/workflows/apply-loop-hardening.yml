@@ -1,0 +1,57 @@
+name: Apply Loop hardening
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'chore: execute loop hardening 0.5.27'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Validate staged scripts
+        run: |
+          node --check scripts/apply-hardening-0.5.27.mjs
+          node --check scripts/host-loop-canary.mjs
+
+      - name: Apply guarded hardening patch
+        run: node scripts/apply-hardening-0.5.27.mjs
+
+      - name: Refresh package lock
+        run: npm install --package-lock-only --ignore-scripts
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax checks
+        run: npm run check
+
+      - name: Unit and regression tests
+        run: npm test
+
+      - name: Remove one-shot patch script
+        run: git rm scripts/apply-hardening-0.5.27.mjs
+
+      - name: Commit hardened source
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: harden loop state and daemon runtime"
+          git push origin HEAD:main
