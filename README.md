@@ -4,7 +4,7 @@
 
 OpenCode Loop adds `/loop`, scheduled prompt/command/shell jobs, compact scheduling, safe long-running continuation helpers, and the `opencode-loopd` background daemon.
 
-> **Current release: `0.5.26`.** Loop also contains an older experimental `/loop-goal` mode, but for strong persistent Goal contracts and host-verified completion, use the separate **OpenCode Goals** plugin described below.
+> **Current release: `0.5.27`.** Loop also contains an older experimental `/loop-goal` mode, but for strong persistent Goal contracts and host-verified completion, use the separate **OpenCode Goals** plugin described below.
 
 ## Install or update
 
@@ -304,7 +304,7 @@ Do not use a normal prompt loop when you mean to run `/compact`. Prefer:
 
 ## Background daemon
 
-The normal `/loop` plugin is session-bound. If OpenCode closes, that TUI/session loop cannot keep running in the background.
+The normal `/loop` plugin is session-bound. If OpenCode closes, that TUI/session loop cannot keep running in the background. `opencode-loopd` resolves the session once at startup and pins that exact session for later iterations, so a newer unrelated session cannot steal the daemon. If no session exists, the daemon creates one and pins it before the second iteration. Each daemon run is bounded by `--timeout` (30 minutes by default; use `--timeout 0s` to disable).
 
 For long-running background jobs use:
 
@@ -321,7 +321,13 @@ opencode-loopd --project . --every 0s --prompt "continue from progress.md and im
 Select a model and agent:
 
 ```bash
-opencode-loopd --project . --every 0s --max-runs 1 --model provider/model --agent build --prompt-file loop-prompt.md
+opencode-loopd --project . --every 0s --max-runs 1 --timeout 30m --model provider/model --agent build --prompt-file loop-prompt.md
+```
+
+Pin a specific existing session when needed:
+
+```bash
+opencode-loopd --project . --session ses_xxx --every 5m --prompt-file loop-prompt.md
 ```
 
 Limit total runs:

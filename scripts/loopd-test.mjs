@@ -32,16 +32,7 @@ function runCli(cliArgs, env = {}) {
 async function makeFakeCommand(name) {
   const script = path.join(temporaryRoot, `${name}.mjs`)
   const log = path.join(temporaryRoot, `${name}.jsonl`)
-  await fs.writeFile(script, `
-import fs from "node:fs"
-const log = process.env.FAKE_COMMAND_LOG
-let previous = []
-try { previous = fs.readFileSync(log, "utf8").trim().split(/\\r?\\n/).filter(Boolean) } catch {}
-fs.appendFileSync(log, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd() }) + "\\n")
-const codes = String(process.env.FAKE_EXIT_CODES || "0").split(",").map((value) => Number(value.trim()))
-const code = codes[Math.min(previous.length, codes.length - 1)]
-process.exit(Number.isInteger(code) ? code : 0)
-`, "utf8")
+  await fs.writeFile(script, "\nimport fs from \"node:fs\"\nconst log = process.env.FAKE_COMMAND_LOG\nconst argv = process.argv.slice(2)\nlet previous = []\ntry { previous = fs.readFileSync(log, \"utf8\").trim().split(/\\r?\\n/).filter(Boolean).map((line) => JSON.parse(line)) } catch {}\nfs.appendFileSync(log, JSON.stringify({ args: argv, cwd: process.cwd() }) + \"\\n\")\nif (argv[0] === \"session\" && argv[1] === \"list\") {\n  console.log(process.env.FAKE_SESSION_LIST_JSON || \"[]\")\n  process.exit(0)\n}\nconst sleepMs = Number(process.env.FAKE_SLEEP_MS || 0)\nif (sleepMs > 0) await new Promise((resolve) => setTimeout(resolve, sleepMs))\nconst previousRuns = previous.filter((entry) => entry?.args?.[0] === \"run\").length\nconst codes = String(process.env.FAKE_EXIT_CODES || \"0\").split(\",\").map((value) => Number(value.trim()))\nconst code = codes[Math.min(previousRuns, codes.length - 1)]\nprocess.exit(Number.isInteger(code) ? code : 0)\n", "utf8")
 
   if (process.platform === "win32") {
     const command = path.join(temporaryRoot, `${name}.cmd`)
@@ -83,14 +74,16 @@ try {
   })
   assert.equal(result.code, 0, result.stderr)
   let calls = await readLog(fakeOpenCode.log)
-  assert.equal(calls.length, 1)
-  assert.equal(path.resolve(calls[0].cwd), path.resolve(project))
-  assert.deepEqual(calls[0].args, [
-    "run", "--continue",
+  let runCalls = calls.filter((item) => item.args[0] === "run")
+  assert.equal(runCalls.length, 1)
+  assert.equal(path.resolve(runCalls[0].cwd), path.resolve(project))
+  assert.deepEqual(runCalls[0].args, [
+    "run", "--title", runCalls[0].args[2],
     "--model", "opencode/nemotron-3-ultra-free",
     "--agent", "build",
     inlinePrompt,
   ], "loopd must preserve model, agent, quotes, and shell metacharacters as literal arguments")
+  assert.match(runCalls[0].args[2], /^OpenCode Loop daemon /)
 
   const promptFile = path.join(project, "goal prompt.md")
   await fs.writeFile(promptFile, "\uFEFFPrompt loaded from a BOM file.", "utf8")
@@ -105,7 +98,39 @@ try {
   })
   assert.equal(result.code, 0, result.stderr)
   calls = await readLog(fakeOpenCode.log)
-  assert.equal(calls.at(-1).args.at(-1), "Prompt loaded from a BOM file.")
+  runCalls = calls.filter((item) => item.args[0] === "run")
+  assert.equal(runCalls.at(-1).args.at(-1), "Prompt loaded from a BOM file.")
+
+  const pinnedLog = path.join(temporaryRoot, "pinned.jsonl")
+  result = await runCli([
+    "--project", project,
+    "--every", "0s",
+    "--max-runs", "2",
+    "--prompt", "pinned session work",
+  ], {
+    OPENCODE_BIN: fakeOpenCode.command,
+    FAKE_COMMAND_LOG: pinnedLog,
+    FAKE_SESSION_LIST_JSON: JSON.stringify([{ id: "ses_pinned", title: "Pinned" }]),
+  })
+  assert.equal(result.code, 0, result.stderr)
+  const pinnedRuns = (await readLog(pinnedLog)).filter((item) => item.args[0] === "run")
+  assert.equal(pinnedRuns.length, 2)
+  assert.ok(pinnedRuns.every((item) => item.args[1] === "--session" && item.args[2] === "ses_pinned"), "every daemon iteration must stay pinned to the same session")
+
+  const timeoutLog = path.join(temporaryRoot, "timeout.jsonl")
+  result = await runCli([
+    "--project", project,
+    "--every", "0s",
+    "--max-runs", "1",
+    "--timeout", "50ms",
+    "--prompt", "hang",
+  ], {
+    OPENCODE_BIN: fakeOpenCode.command,
+    FAKE_COMMAND_LOG: timeoutLog,
+    FAKE_SLEEP_MS: "5000",
+  })
+  assert.equal(result.code, 124, "a timed-out daemon run must return exit code 124")
+  assert.match(result.stdout, /timed out after 50ms/)
 
   const failureLog = path.join(temporaryRoot, "failure.jsonl")
   result = await runCli([
@@ -169,6 +194,7 @@ try {
     assert.equal(taskConfig.prompt, "scheduled task prompt")
     assert.equal(taskConfig.model, "opencode/nemotron-3-ultra-free")
     assert.equal(taskConfig.agent, "build")
+    assert.equal(taskConfig.timeout, "30m")
     assert.equal(taskConfig.opencodeBin, fakeOpenCode.command)
 
     const taskRunLog = path.join(temporaryRoot, "task-run.jsonl")
@@ -176,9 +202,10 @@ try {
       FAKE_COMMAND_LOG: taskRunLog,
     })
     assert.equal(result.code, 0, result.stderr)
-    const taskRunCall = (await readLog(taskRunLog))[0]
-    assert.deepEqual(taskRunCall.args, [
-      "run", "--continue",
+    const taskRunCalls = (await readLog(taskRunLog)).filter((item) => item.args[0] === "run")
+    assert.equal(taskRunCalls.length, 1)
+    assert.deepEqual(taskRunCalls[0].args, [
+      "run", "--title", taskRunCalls[0].args[2],
       "--model", "opencode/nemotron-3-ultra-free",
       "--agent", "build",
       "scheduled task prompt",

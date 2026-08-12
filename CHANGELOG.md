@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.27
+
+- Rebase stale Loop state snapshots against the latest persisted job state before writing, preventing scheduler bookkeeping from erasing unrelated user pause/resume or other state changes.
+- Add a deterministic concurrency regression that forces overlapping state reads/writes and proves a concurrent user pause survives a stale scheduler update.
+- Harden `opencode-loopd` by pinning one exact OpenCode session across iterations instead of resolving `--continue` on every run; a fresh daemon session is created and then pinned when no existing session is available.
+- Add per-run daemon timeouts (30 minutes by default, configurable with `--timeout`; `0s` disables) and timeout exit code 124, including descendant-process termination.
+- Add daemon regressions for session pinning, timeout termination, and scheduled-task timeout propagation.
+- Add a real OpenCode host canary that proves a three-run `/loop` performs exactly three autonomous turns on Ubuntu and Windows.
+- Narrow the OpenCode plugin peer range to `>=1.4.0 <2` so a future breaking 2.x release is not treated as automatically compatible.
+
 ## 0.5.26
 
 - Added an explicit npm-based OpenCode installation path: `npm install -g @bybrawe/opencode-loop@latest` followed by `opencode-loop`.

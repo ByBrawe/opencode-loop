@@ -61,13 +61,46 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function spawnOnce(command, commandArgs, cwd) {
+function terminateChild(child) {
+  if (!child || child.exitCode !== null) return
+  try {
+    if (process.platform === "win32" && child.pid) {
+      spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true })
+      return
+    }
+    if (child.pid) process.kill(-child.pid, "SIGTERM")
+    else child.kill("SIGTERM")
+    const force = setTimeout(() => {
+      try {
+        if (child.exitCode !== null) return
+        if (child.pid) process.kill(-child.pid, "SIGKILL")
+        else child.kill("SIGKILL")
+      } catch {}
+    }, 1_000)
+    force.unref?.()
+  } catch {
+    try { child.kill("SIGTERM") } catch {}
+  }
+}
+
+function spawnOnce(command, commandArgs, cwd, options = {}) {
   return new Promise((resolve) => {
     let settled = false
+    let timedOut = false
+    const capture = options.capture === true
+    const stdout = []
+    const stderr = []
+    let timer
     const done = (result) => {
       if (settled) return
       settled = true
-      resolve(result)
+      if (timer) clearTimeout(timer)
+      resolve({
+        ...result,
+        timedOut,
+        stdout: capture ? Buffer.concat(stdout).toString("utf8") : "",
+        stderr: capture ? Buffer.concat(stderr).toString("utf8") : "",
+      })
     }
 
     let child
@@ -75,17 +108,27 @@ function spawnOnce(command, commandArgs, cwd) {
       child = spawn(command, commandArgs, {
         cwd,
         shell: false,
-        stdio: "inherit",
+        stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit",
         env: process.env,
         windowsHide: true,
+        detached: process.platform !== "win32",
       })
     } catch (error) {
       done({ code: -1, error })
       return
     }
 
+    child.stdout?.on("data", (chunk) => stdout.push(Buffer.from(chunk)))
+    child.stderr?.on("data", (chunk) => stderr.push(Buffer.from(chunk)))
+    if (Number(options.timeoutMs) > 0) {
+      timer = setTimeout(() => {
+        timedOut = true
+        terminateChild(child)
+      }, Number(options.timeoutMs))
+      timer.unref?.()
+    }
     child.on("error", (error) => done({ code: -1, error }))
-    child.on("exit", (code, signal) => done({ code: code ?? (signal ? 1 : 0), signal }))
+    child.on("exit", (code, signal) => done({ code: timedOut ? 124 : (code ?? (signal ? 1 : 0)), signal }))
   })
 }
 
@@ -98,15 +141,25 @@ function stripBom(text) {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
 }
 
-async function run(command, commandArgs, cwd) {
-  const direct = await spawnOnce(command, commandArgs, cwd)
-  if (direct.code !== -1 || process.platform !== "win32" || !["ENOENT", "EINVAL"].includes(direct.error?.code)) return direct.code
+async function run(command, commandArgs, cwd, options = {}) {
+  const direct = await spawnOnce(command, commandArgs, cwd, options)
+  if (direct.code !== -1 || process.platform !== "win32" || !["ENOENT", "EINVAL"].includes(direct.error?.code)) return direct
 
-  const fallback = await spawnOnce("cmd.exe", ["/d", "/s", "/c", command, ...commandArgs], cwd)
+  const fallback = await spawnOnce("cmd.exe", ["/d", "/s", "/c", command, ...commandArgs], cwd, options)
   if (fallback.code === -1) {
     console.error(`[opencode-loopd] failed to start ${command}: ${fallback.error?.message || direct.error?.message || "unknown error"}`)
   }
-  return fallback.code
+  return fallback
+}
+
+async function resolveLatestSessionID(opencodeBin, project, preferredTitle) {
+  const result = await run(opencodeBin, ["session", "list", "--format", "json", "-n", "20"], project, { capture: true, timeoutMs: 15_000 })
+  if (result.code !== 0 || result.timedOut) return undefined
+  let parsed
+  try { parsed = JSON.parse(result.stdout || "[]") } catch { return undefined }
+  const sessions = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.data) ? parsed.data : []
+  const match = preferredTitle ? sessions.find((item) => item?.title === preferredTitle) : sessions[0]
+  return typeof match?.id === "string" && match.id ? match.id : undefined
 }
 
 function runSync(command, commandArgs) {
@@ -145,50 +198,63 @@ async function daemon(options = {}) {
   const every = options.every ?? arg("--every", "0s")
   const delay = parseMs(every)
   const maxRuns = parseMaxRuns(options.maxRuns ?? arg("--max-runs", "0"))
+  const timeoutText = options.timeout ?? arg("--timeout", "30m")
+  const timeoutMs = parseMs(timeoutText)
   const sleepFirst = options.sleepFirst ?? has("--sleep-first")
   const prompt = readPrompt(project, options)
   const model = options.model ?? arg("--model")
   const agent = options.agent ?? arg("--agent")
   const opencodeBin = options.opencodeBin || OPENCODE_BIN
+  const explicitSessionID = options.session ?? arg("--session")
+  let sessionID = explicitSessionID || await resolveLatestSessionID(opencodeBin, project)
+  const sessionTitle = `OpenCode Loop daemon ${process.pid}-${Date.now()}`
 
   console.log("OpenCode Loop daemon")
   console.log(`project: ${project}`)
   console.log(`every: ${every}`)
   console.log(`maxRuns: ${maxRuns || "unlimited"}`)
+  console.log(`timeout: ${timeoutText}`)
+  if (sessionID) console.log(`session: ${sessionID} (pinned)`)
 
   let count = 0
 
-  if (sleepFirst && delay > 0) {
-    await sleep(delay)
-  }
+  if (sleepFirst && delay > 0) await sleep(delay)
 
   while (true) {
     count += 1
-
     console.log("")
     console.log(`[opencode-loopd] run #${count} ${new Date().toISOString()}`)
 
-    const runArgs = ["run", "--continue"]
+    const runArgs = ["run"]
+    if (sessionID) runArgs.push("--session", sessionID)
+    else runArgs.push("--title", sessionTitle)
     if (model) runArgs.push("--model", model)
     if (agent) runArgs.push("--agent", agent)
     runArgs.push(prompt)
-    const code = await run(opencodeBin, runArgs, project)
 
-    if (code !== 0) {
-      console.log(`[opencode-loopd] opencode exited with code ${code}`)
-      if (delay === 0) {
-        await sleep(FAILED_RUN_RETRY_MS)
+    const result = await run(opencodeBin, runArgs, project, { timeoutMs })
+    const code = result.timedOut ? 124 : result.code
+    const moreRunsRemain = maxRuns === 0 || count < maxRuns
+
+    if (!sessionID && code === 0 && moreRunsRemain) {
+      sessionID = await resolveLatestSessionID(opencodeBin, project, sessionTitle)
+      if (!sessionID) {
+        console.error("[opencode-loopd] could not resolve the newly created session; refusing to continue unpinned")
+        return 1
       }
+      console.log(`[opencode-loopd] pinned session ${sessionID}`)
     }
+
+    if (result.timedOut) console.log(`[opencode-loopd] opencode run timed out after ${timeoutText}`)
+    else if (code !== 0) console.log(`[opencode-loopd] opencode exited with code ${code}`)
+    if (code !== 0 && delay === 0 && moreRunsRemain) await sleep(FAILED_RUN_RETRY_MS)
 
     if (maxRuns > 0 && count >= maxRuns) {
       console.log("[opencode-loopd] max runs reached")
       return Number.isInteger(code) && code > 0 ? code : code < 0 ? 1 : 0
     }
 
-    if (delay > 0) {
-      await sleep(delay)
-    }
+    if (delay > 0) await sleep(delay)
   }
 }
 
@@ -227,6 +293,7 @@ function installTask() {
   const promptArg = arg("--prompt")
   const model = arg("--model")
   const agent = arg("--agent")
+  const timeout = arg("--timeout", "30m")
   const node = process.execPath
   const script = fileURLToPath(import.meta.url)
   const artifacts = taskArtifacts(name)
@@ -239,6 +306,7 @@ function installTask() {
     prompt: promptArg || undefined,
     model: model || undefined,
     agent: agent || undefined,
+    timeout,
     opencodeBin: OPENCODE_BIN,
   }
   fs.writeFileSync(artifacts.config, JSON.stringify(taskConfig, null, 2) + "\n", "utf8")
@@ -296,6 +364,8 @@ Options:
   --prompt-file <file>   Read prompt from file relative to the project
   --model <provider/id>  OpenCode model used for each run
   --agent <name>         OpenCode agent used for each run
+  --session <id>         Pin an existing OpenCode session (auto-pinned otherwise)
+  --timeout <duration>   Max time per OpenCode run (default: 30m, 0s disables)
   --max-runs <n>         Stop after n runs
   --sleep-first          Wait before first run
 `)

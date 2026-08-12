@@ -1,6 +1,6 @@
 {
   "name": "@bybrawe/opencode-loop",
-  "version": "0.5.26",
+  "version": "0.5.27",
   "description": "Claude Code/Codex style /loop and experimental goal mode for OpenCode: heartbeat scheduler, idle-safe loops, scheduled commands, compact scheduling, verification, checkpoints, and persistent coding goals.",
   "type": "module",
   "main": "src/index.js",
@@ -18,8 +18,9 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "check": "node --check src/index.js && node --check scripts/install-node.mjs && node --check scripts/loopd.mjs && node --check scripts/install-test.mjs && node --check scripts/loopd-test.mjs && node --check scripts/smoke-test.mjs && node --check scripts/comprehensive-test.mjs",
+    "check": "node --check src/index.js && node --check scripts/install-node.mjs && node --check scripts/loopd.mjs && node --check scripts/install-test.mjs && node --check scripts/loopd-test.mjs && node --check scripts/smoke-test.mjs && node --check scripts/comprehensive-test.mjs && node --check scripts/host-loop-canary.mjs",
     "test": "node scripts/install-test.mjs && node scripts/loopd-test.mjs && node scripts/smoke-test.mjs && node scripts/comprehensive-test.mjs",
+    "canary:host": "node scripts/host-loop-canary.mjs",
     "install:global": "node scripts/install-node.mjs",
     "pack:zip": "node scripts/make-zip.mjs"
   },
@@ -54,7 +55,7 @@
     "url": "https://github.com/ByBrawe/opencode-loop/issues"
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": ">=1.4.0"
+    "@opencode-ai/plugin": ">=1.4.0 <2"
   },
   "devDependencies": {
     "@opencode-ai/plugin": "^1.18.15"

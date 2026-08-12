@@ -705,6 +705,36 @@ async function testStateReadRetriesTransientPartialJson() {
   }
 }
 
+async function testStateRebasePreservesConcurrentPause() {
+  const h = await createHarness()
+  const originalRename = fs.rename
+  try {
+    await h.command("loop", "10m --no-now --name race continue safely")
+    h.statuses.set(h.sessionID, "busy")
+    let delayed = false
+    fs.rename = async (source, target, ...rest) => {
+      if (!delayed && path.resolve(target) === path.resolve(h.stateFile)) {
+        delayed = true
+        await delay(120)
+      }
+      return await originalRename.call(fs, source, target, ...rest)
+    }
+
+    const pause = h.command("loop-pause", "race")
+    await delay(20)
+    const runNow = h.command("loop-now", "race")
+    await Promise.all([pause, runNow])
+
+    const state = await h.readState()
+    const job = state.jobs.find((item) => item.name === "race")
+    assert.ok(job, "the concurrent state update must keep the loop job")
+    assert.equal(job.paused, true, "a stale scheduler snapshot must not erase a concurrent user pause")
+  } finally {
+    fs.rename = originalRename
+    await h.cleanup()
+  }
+}
+
 await testParserAndPresets()
 await testLifecycleAndCommandDedupe()
 await testWatchScheduling()
@@ -718,5 +748,6 @@ await testInitializationDoesNotWaitForLocalApi()
 await testWindowsSafeStatePersistence()
 await testWindowsStateRenameRetriesBeforeFallback()
 await testStateReadRetriesTransientPartialJson()
+await testStateRebasePreservesConcurrentPause()
 
 console.log("OpenCode Loop comprehensive test passed")

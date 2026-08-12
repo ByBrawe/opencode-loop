@@ -23,6 +23,7 @@ const DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180_000
 const LOOP_OWNED_USER_MESSAGE_GUARD_MS = 10_000
 const LOOP_OWNED_USER_MESSAGE_RETENTION_MS = 10 * 60_000
 const LOCAL_COMMAND_AGENT = "opencode-loop-local"
+const STATE_BASELINE = Symbol("opencode-loop-state-baseline")
 
 const activeRuns = new Map()
 const handledCommands = new Map()
@@ -373,7 +374,7 @@ async function withStateWriteLock(directory, sessionID, fn) {
   }
 }
 
-async function readState(directory, sessionID) {
+async function readStateFile(directory, sessionID) {
   const target = statePath(directory, sessionID)
   const attempts = 5
   for (let attempt = 0; attempt < attempts; attempt++) {
@@ -392,6 +393,17 @@ async function readState(directory, sessionID) {
     await fs.copyFile(target, `${target}.corrupt-${Date.now()}`)
   } catch {}
   return { version: 4, jobs: [] }
+}
+
+async function readState(directory, sessionID) {
+  const state = await readStateFile(directory, sessionID)
+  Object.defineProperty(state, STATE_BASELINE, {
+    value: structuredClone(state.jobs || []),
+    enumerable: false,
+    configurable: false,
+    writable: true,
+  })
+  return state
 }
 
 function isRetriableStateWriteError(error) {
@@ -457,11 +469,79 @@ async function writeFileAtomically(target, contents, options = {}) {
   }
 }
 
+function stateValuesEqual(left, right) {
+  if (Object.is(left, right)) return true
+  try { return JSON.stringify(left) === JSON.stringify(right) } catch { return false }
+}
+
+function mergeStateJob(baseJob, intendedJob, currentJob) {
+  const merged = structuredClone(currentJob || {})
+  const keys = new Set([
+    ...Object.keys(baseJob || {}),
+    ...Object.keys(intendedJob || {}),
+  ])
+  for (const key of keys) {
+    const baseHas = Object.prototype.hasOwnProperty.call(baseJob || {}, key)
+    const intendedHas = Object.prototype.hasOwnProperty.call(intendedJob || {}, key)
+    const currentHas = Object.prototype.hasOwnProperty.call(currentJob || {}, key)
+    const intendedChanged = baseHas !== intendedHas || !stateValuesEqual(baseJob?.[key], intendedJob?.[key])
+    if (!intendedChanged) continue
+    const currentChanged = baseHas !== currentHas || !stateValuesEqual(baseJob?.[key], currentJob?.[key])
+    const sameResult = intendedHas === currentHas && stateValuesEqual(intendedJob?.[key], currentJob?.[key])
+    // First committed writer wins a true same-field conflict. A stale snapshot
+    // can still apply changes to unrelated fields without erasing newer state.
+    if (currentChanged && !sameResult) continue
+    if (intendedHas) merged[key] = structuredClone(intendedJob[key])
+    else delete merged[key]
+  }
+  return merged
+}
+
+function mergeStateJobs(baseJobs, intendedJobs, currentJobs) {
+  const byID = (jobs) => new Map((jobs || []).filter((job) => job?.id).map((job) => [job.id, job]))
+  const base = byID(baseJobs)
+  const intended = byID(intendedJobs)
+  const current = byID(currentJobs)
+  const merged = []
+
+  for (const currentJob of currentJobs || []) {
+    const id = currentJob?.id
+    if (!id || !base.has(id)) {
+      merged.push(structuredClone(currentJob))
+      continue
+    }
+    const baseJob = base.get(id)
+    const intendedJob = intended.get(id)
+    if (!intendedJob) {
+      // A deletion based on an old snapshot must not erase a job that changed
+      // after that snapshot was read.
+      if (!stateValuesEqual(baseJob, currentJob)) merged.push(structuredClone(currentJob))
+      continue
+    }
+    merged.push(mergeStateJob(baseJob, intendedJob, currentJob))
+  }
+
+  for (const intendedJob of intendedJobs || []) {
+    const id = intendedJob?.id
+    if (!id || base.has(id) || current.has(id)) continue
+    merged.push(structuredClone(intendedJob))
+  }
+  return merged
+}
+
 async function writeState(directory, sessionID, state) {
   await withStateWriteLock(directory, sessionID, async () => {
     await ensureDir(stateDir(directory))
     const target = statePath(directory, sessionID)
-    const payload = JSON.stringify({ version: 4, jobs: state.jobs || [] }, null, 2)
+    const baseline = state?.[STATE_BASELINE]
+    let jobs = structuredClone(state.jobs || [])
+    if (Array.isArray(baseline)) {
+      const current = await readStateFile(directory, sessionID)
+      jobs = mergeStateJobs(baseline, jobs, current.jobs || [])
+      state.jobs = structuredClone(jobs)
+      state[STATE_BASELINE] = structuredClone(jobs)
+    }
+    const payload = JSON.stringify({ version: 4, jobs }, null, 2)
     await writeFileAtomically(target, payload)
   })
 }
