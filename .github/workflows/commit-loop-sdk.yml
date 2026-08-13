@@ -1,0 +1,35 @@
+name: Commit SDK Split
+on:
+  push:
+    branches: [refactor-loop-sdk]
+    paths: [.github/workflows/commit-loop-sdk.yml]
+permissions:
+  contents: write
+jobs:
+  commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refactor-loop-sdk
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - uses: oven-sh/setup-bun@v2
+      - run: npm ci
+      - run: node scripts/refactor-loop-sdk.mjs
+      - run: node --check src/source/opencode/sdk.js
+      - run: npm run build:plugin
+      - run: npm run check
+      - run: npm test
+      - uses: actions/github-script@v8
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require('node:fs')
+            for (const path of ['src/source/opencode/sdk.js','src/source/legacy-v1.js','src/index.js']) {
+              let sha
+              try { sha = (await github.rest.repos.getContent({owner:context.repo.owner,repo:context.repo.repo,path,ref:'refactor-loop-sdk'})).data.sha } catch (e) { if (e.status !== 404) throw e }
+              await github.rest.repos.createOrUpdateFileContents({owner:context.repo.owner,repo:context.repo.repo,path,branch:'refactor-loop-sdk',message:'refactor: extract SDK compatibility helpers',content:fs.readFileSync(path).toString('base64'),...(sha?{sha}:{})})
+            }
