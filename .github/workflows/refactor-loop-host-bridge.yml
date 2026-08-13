@@ -1,0 +1,37 @@
+name: Verify OpenCode Host Bridge Split
+
+on:
+  push:
+    branches: [refactor-loop-host-bridge]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: npm ci
+      - name: Prepare host-bridge candidate
+        run: |
+          node -e "const fs=require('fs');const p='src/source/legacy-v1.js';let s=fs.readFileSync(p,'utf8');const a=s.indexOf('function fireSdk('),b=s.indexOf('function guardLoopOwnedUserMessage(');if(a<0||b<=a)throw Error('boundaries');s=s.slice(0,a)+s.slice(b);const x='import { normalizedModelRef, updateSessionExecutionContext, captureSessionExecutionContext, getSessionExecutionContext, setSessionExecutionContext, deleteSessionExecutionContext } from \\"./opencode/session-context.js\\"\\n';const y='import { fireSdk, executeTuiCommand, compactTuiCommandName, readRecentSessionMessages, orderedSessionMessages, activeRunCompletionFromMessages, resolveCompactionModel, compactSession, log, toast } from \\"./opencode/host.js\\"\\n';if(!s.includes(x))throw Error('anchor');fs.writeFileSync(p,s.replace(x,x+y));"
+      - run: node --check src/source/opencode/host.js
+      - run: npm run build:plugin
+      - run: npm run check
+      - run: npm test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: host-bridge-source
+          path: |
+            src/source/opencode/host.js
+            src/source/legacy-v1.js
+            src/index.js
