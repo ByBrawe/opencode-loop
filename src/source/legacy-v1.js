@@ -5,6 +5,7 @@ import { tool } from "@opencode-ai/plugin/tool"
 import { DEFAULT_GOAL_MAX_NO_PROGRESS, now, safeID, parseDuration, durationToText, splitFirst, stripOuterQuotes, escapeRegExp, takeFlag, takeFlagValue, takeAllFlagValues, parsePositiveInt, parseNonNegativeInt, parseCompactEvery, parseLoopArgs } from "./core/args.js"
 import { stateDir, ensureDir, pathExists, readState, writeState, removeState } from "./core/state.js"
 import { sdkErrorMessage, sdkCall } from "./opencode/sdk.js"
+import { normalizedModelRef, updateSessionExecutionContext, captureSessionExecutionContext, getSessionExecutionContext, setSessionExecutionContext, deleteSessionExecutionContext } from "./opencode/session-context.js"
 
 const SERVICE = "opencode-loop"
 const DEFAULT_ACTIVE_GUARD_MS = 45_000
@@ -22,12 +23,10 @@ const GOAL_PROMPT_PREFIX = "EXPERIMENTAL OPENCODE GOAL MODE ITERATION"
 const DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180_000
 const LOOP_OWNED_USER_MESSAGE_GUARD_MS = 10_000
 const LOOP_OWNED_USER_MESSAGE_RETENTION_MS = 10 * 60_000
-const LOCAL_COMMAND_AGENT = "opencode-loop-local"
 
 const activeRuns = new Map()
 const handledCommands = new Map()
 const handledCommandEvents = new Map()
-const sessionExecutionContexts = new Map()
 const loopOwnedUserMessageGuards = new Map()
 const idleTimers = new Map()
 const dueTimers = new Map()
@@ -139,7 +138,7 @@ async function activeRunCompletionFromMessages(directory, client, sessionID, act
 async function resolveCompactionModel(directory, client, sessionID, preferredModel) {
   const preferred = normalizedModelRef(preferredModel)
   if (preferred) return preferred
-  const cached = normalizedModelRef(sessionExecutionContexts.get(sessionID)?.model)
+  const cached = normalizedModelRef(getSessionExecutionContext(sessionID)?.model)
   if (cached) return cached
   const captured = await captureSessionExecutionContext(client, sessionID)
   const capturedModel = normalizedModelRef(captured?.model)
@@ -149,8 +148,8 @@ async function resolveCompactionModel(directory, client, sessionID, preferredMod
     const info = message?.info || message
     const model = normalizedModelRef(info?.model) || normalizedModelRef(info)
     if (!model) continue
-    const previous = sessionExecutionContexts.get(sessionID) || {}
-    sessionExecutionContexts.set(sessionID, { ...previous, model })
+    const previous = getSessionExecutionContext(sessionID) || {}
+    setSessionExecutionContext(sessionID, { ...previous, model })
     return model
   }
   return undefined
@@ -297,47 +296,6 @@ function rememberSession(directory, client, sessionID) {
   startHeartbeat()
 }
 
-function normalizedModelRef(model) {
-  if (typeof model === "string") {
-    const separator = model.indexOf("/")
-    if (separator > 0) return { providerID: model.slice(0, separator), modelID: model.slice(separator + 1) }
-    return undefined
-  }
-  const providerID = model?.providerID
-  const modelID = model?.modelID || model?.id
-  if (typeof providerID !== "string" || typeof modelID !== "string") return undefined
-  return { providerID, modelID }
-}
-
-function updateSessionExecutionContext(info) {
-  const sessionID = info?.sessionID || info?.id
-  if (typeof sessionID !== "string") return
-  const previous = sessionExecutionContexts.get(sessionID) || {}
-  const candidateAgent = info?.agent || (info?.role === "assistant" ? info?.mode : undefined)
-  const agent = typeof candidateAgent === "string" && candidateAgent !== LOCAL_COMMAND_AGENT
-    ? candidateAgent
-    : previous.agent
-  const model = normalizedModelRef(info?.model) || normalizedModelRef(info) || previous.model
-  sessionExecutionContexts.set(sessionID, { agent, model })
-}
-
-async function captureSessionExecutionContext(client, sessionID) {
-  if (client?.session?.get) {
-    try {
-      const info = await sdkCall(
-        client.session.get.bind(client.session),
-        { path: { id: sessionID } },
-        { path: { sessionID } },
-        { sessionID },
-      )
-      updateSessionExecutionContext(info)
-    } catch {}
-  }
-  const context = sessionExecutionContexts.get(sessionID) || {}
-  const normalized = { agent: context.agent || "build", model: context.model }
-  sessionExecutionContexts.set(sessionID, normalized)
-  return normalized
-}
 
 function hasActiveToolCalls(sessionID) {
   return (activeToolCalls.get(sessionID)?.size || 0) > 0
@@ -370,7 +328,7 @@ function updateSessionRelationship(info, removed = false) {
   if (removed || typeof info?.parentID !== "string") sessionParents.delete(sessionID)
   else sessionParents.set(sessionID, info.parentID)
   if (!removed) updateSessionExecutionContext(info)
-  else sessionExecutionContexts.delete(sessionID)
+  else deleteSessionExecutionContext(sessionID)
 }
 
 function updateSessionRelationshipFromEvent(event) {
@@ -476,7 +434,7 @@ function disposeRuntime(directory, client) {
     sessionParents.delete(sessionID)
     sessionStatuses.delete(sessionID)
     sessionStatusSeenAt.delete(sessionID)
-    sessionExecutionContexts.delete(sessionID)
+    deleteSessionExecutionContext(sessionID)
     loopCompactionRequests.delete(sessionID)
     for (const key of handledCommands.keys()) if (key.startsWith(`${sessionID}:`)) handledCommands.delete(key)
     for (const key of handledCommandEvents.keys()) if (key.startsWith(`${sessionID}:`)) handledCommandEvents.delete(key)
@@ -1747,7 +1705,7 @@ function sameLoopDefinition(a, b) {
 async function addLoop(directory, client, sessionID, args, defaults = {}) {
   const parsed = parseLoopArgs(args, defaults)
   if (!parsed.ok) { await toast(client, parsed.error, "warning"); return }
-  const executionContext = sessionExecutionContexts.get(sessionID) || { agent: "build" }
+  const executionContext = getSessionExecutionContext(sessionID) || { agent: "build" }
   parsed.job.agent = defaults.agent || executionContext.agent || "build"
   parsed.job.model = normalizedModelRef(defaults.model) || executionContext.model
   if (defaults.testfixPreset) {
