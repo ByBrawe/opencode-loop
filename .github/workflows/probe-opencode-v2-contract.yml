@@ -1,0 +1,29 @@
+name: Probe OpenCode V2 Contract
+
+on:
+  push:
+    branches: [probe-opencode-v2-contract]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Install current V2 CLI
+        run: npm install -g @opencode-ai/cli@next
+      - name: Show V2 version
+        run: opencode2 --version
+      - name: List active V2 plugins
+        working-directory: .v2-probe
+        run: opencode2 api get /api/plugin | tee plugin-list.txt
+      - name: Require Loop V2 sentinel
+        working-directory: .v2-probe
+        run: grep -F "bybrawe.loop.v2-probe" plugin-list.txt
