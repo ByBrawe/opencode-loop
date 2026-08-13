@@ -6,6 +6,18 @@ import path from "node:path"
 import OpenCodeLoopPlugin from "../src/index.js"
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+async function waitForValue(read, timeoutMs = 1_000, intervalMs = 10) {
+  const deadline = Date.now() + timeoutMs
+  let value
+  while (Date.now() < deadline) {
+    value = await read()
+    if (value) return value
+    await delay(intervalMs)
+  }
+  return await read()
+}
+
 let harnessNumber = 0
 
 async function createHarness(options = {}) {
@@ -405,9 +417,11 @@ async function testNativeCompactionLifecycleAndFallback() {
     await h.hooks["experimental.session.compacting"]({ sessionID: h.sessionID }, compactOutput)
     assert.deepEqual(compactOutput, { context: [], prompt: undefined }, "loop lifecycle tracking must not rewrite OpenCode's compaction prompt")
     await h.hooks.event({ event: { type: "session.compacted", properties: { sessionID: h.sessionID } } })
-    await delay(20)
-    const state = await h.readState()
-    assert.ok(state.jobs[0].lastFinishedAt > 0, "session.compacted must finalize an explicit compact job without waiting for stale status recovery")
+    const state = await waitForValue(async () => {
+      const candidate = await h.readState()
+      return candidate.jobs[0]?.lastFinishedAt > 0 ? candidate : undefined
+    })
+    assert.ok(state?.jobs[0]?.lastFinishedAt > 0, "session.compacted must finalize an explicit compact job without waiting for stale status recovery")
   } finally {
     await h.cleanup()
   }
