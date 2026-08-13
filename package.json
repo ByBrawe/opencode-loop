@@ -18,7 +18,7 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "check": "node --check src/index.js && node --check scripts/install-node.mjs && node --check scripts/loopd.mjs && node --check scripts/install-test.mjs && node --check scripts/loopd-test.mjs && node --check scripts/smoke-test.mjs && node --check scripts/comprehensive-test.mjs && node --check scripts/host-loop-canary.mjs",
+    "check": "node --check src/index.js && node --check src/opencode/v1.js && node --check scripts/install-node.mjs && node --check scripts/loopd.mjs && node --check scripts/install-test.mjs && node --check scripts/loopd-test.mjs && node --check scripts/smoke-test.mjs && node --check scripts/comprehensive-test.mjs && node --check scripts/host-loop-canary.mjs",
     "test": "node scripts/install-test.mjs && node scripts/loopd-test.mjs && node scripts/smoke-test.mjs && node scripts/comprehensive-test.mjs",
     "canary:host": "node scripts/host-loop-canary.mjs",
     "install:global": "node scripts/install-node.mjs",
