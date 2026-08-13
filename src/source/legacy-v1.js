@@ -4,6 +4,7 @@ import { spawn } from "node:child_process"
 import { tool } from "@opencode-ai/plugin/tool"
 import { DEFAULT_GOAL_MAX_NO_PROGRESS, now, safeID, parseDuration, durationToText, splitFirst, stripOuterQuotes, escapeRegExp, takeFlag, takeFlagValue, takeAllFlagValues, parsePositiveInt, parseNonNegativeInt, parseCompactEvery, parseLoopArgs } from "./core/args.js"
 import { stateDir, ensureDir, pathExists, readState, writeState, removeState } from "./core/state.js"
+import { sdkErrorMessage, sdkCall } from "./opencode/sdk.js"
 
 const SERVICE = "opencode-loop"
 const DEFAULT_ACTIVE_GUARD_MS = 45_000
@@ -69,43 +70,6 @@ Describe the current project goal here.
 
 
 
-function sdkError(result) {
-  if (!result || typeof result !== "object") return undefined
-  return result.error || result.error === null ? result.error : undefined
-}
-
-function sdkData(result) {
-  if (!result || typeof result !== "object") return result
-  return Object.prototype.hasOwnProperty.call(result, "data") ? result.data : result
-}
-
-function sdkErrorMessage(error) {
-  if (!error) return "unknown SDK error"
-  if (error instanceof Error) return error.message
-  if (typeof error === "string") return error
-  if (typeof error === "object") {
-    if (typeof error.message === "string") return error.message
-    if (typeof error.name === "string") return error.name
-    try { return JSON.stringify(error).slice(0, 400) } catch {}
-  }
-  return String(error)
-}
-
-async function sdkCall(method, ...argsList) {
-  let firstError
-  for (const args of argsList) {
-    if (args === undefined) continue
-    try {
-      const result = await method(args)
-      const error = sdkError(result)
-      if (!error) return sdkData(result)
-      firstError = firstError || new Error(sdkErrorMessage(error))
-    } catch (error) {
-      firstError = firstError || error
-    }
-  }
-  throw firstError || new Error("SDK call failed without arguments")
-}
 
 function fireSdk(client, label, method, ...argsList) {
   const pending = Promise.resolve().then(() => sdkCall(method, ...argsList))
