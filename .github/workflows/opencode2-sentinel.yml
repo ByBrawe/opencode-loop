@@ -1,0 +1,64 @@
+name: Experimental OpenCode 2 Sentinel
+
+on:
+  push:
+    branches:
+      - experimental-opencode2
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sentinel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install stable dependencies
+        run: npm ci
+
+      - name: Replace plugin package with current V2 beta
+        run: npm install --no-save --package-lock=false @opencode-ai/plugin@next
+
+      - name: Verify experimental adapter syntax
+        run: node --check src/source/opencode2/experimental.js
+
+      - name: Install current OpenCode 2 beta
+        run: npm install --global @opencode-ai/cli@next
+
+      - name: Show OpenCode 2 version
+        run: opencode2 --version
+
+      - name: Prepare isolated V2 project
+        shell: bash
+        run: |
+          project="$RUNNER_TEMP/opencode2-loop-sentinel"
+          mkdir -p "$project"
+          plugin="$GITHUB_WORKSPACE/src/source/opencode2/experimental.js"
+          node -e 'const fs=require("fs"); const path=process.argv[1]; const plugin=process.argv[2]; fs.writeFileSync(path, JSON.stringify({plugins:[plugin]}, null, 2));' "$project/opencode.json" "$plugin"
+          echo "OPENCODE2_SENTINEL_PROJECT=$project" >> "$GITHUB_ENV"
+
+      - name: Verify plugin activation in real OpenCode 2 host
+        shell: bash
+        run: |
+          cd "$OPENCODE2_SENTINEL_PROJECT"
+          opencode2 service stop >/dev/null 2>&1 || true
+          output="$(opencode2 api get /api/plugin)"
+          printf '%s\n' "$output"
+          printf '%s\n' "$output" | grep -F 'bybrawe.opencode-loop.v2'
+
+      - name: Show server log on failure
+        if: failure()
+        shell: bash
+        run: |
+          log="$HOME/.local/share/opencode/log/opencode.log"
+          if [ -f "$log" ]; then tail -n 120 "$log"; fi
