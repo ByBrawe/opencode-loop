@@ -1,0 +1,34 @@
+name: Diagnose Test Hang
+
+on:
+  push:
+    branches: [diagnose-test-hang]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: install-test
+        run: timeout 60s node scripts/install-test.mjs
+      - name: loopd-test
+        run: timeout 60s node scripts/loopd-test.mjs
+      - name: smoke-test
+        run: timeout 60s node scripts/smoke-test.mjs
+      - name: comprehensive stress
+        shell: bash
+        run: |
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            echo "=== comprehensive run $i ==="
+            timeout 60s node scripts/comprehensive-test.mjs
+          done
