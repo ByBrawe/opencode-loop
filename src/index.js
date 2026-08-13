@@ -594,6 +594,53 @@ async function removeState(directory, sessionID) {
   });
 }
 
+// src/source/opencode/sdk.js
+function sdkError2(result) {
+  if (!result || typeof result !== "object")
+    return;
+  return result.error || result.error === null ? result.error : undefined;
+}
+function sdkData2(result) {
+  if (!result || typeof result !== "object")
+    return result;
+  return Object.prototype.hasOwnProperty.call(result, "data") ? result.data : result;
+}
+function sdkErrorMessage(error) {
+  if (!error)
+    return "unknown SDK error";
+  if (error instanceof Error)
+    return error.message;
+  if (typeof error === "string")
+    return error;
+  if (typeof error === "object") {
+    if (typeof error.message === "string")
+      return error.message;
+    if (typeof error.name === "string")
+      return error.name;
+    try {
+      return JSON.stringify(error).slice(0, 400);
+    } catch {}
+  }
+  return String(error);
+}
+async function sdkCall(method, ...argsList) {
+  let firstError;
+  for (const args of argsList) {
+    if (args === undefined)
+      continue;
+    try {
+      const result = await method(args);
+      const error = sdkError2(result);
+      if (!error)
+        return sdkData2(result);
+      firstError = firstError || new Error(sdkErrorMessage(error));
+    } catch (error) {
+      firstError = firstError || error;
+    }
+  }
+  throw firstError || new Error("SDK call failed without arguments");
+}
+
 // src/source/legacy-v1.js
 var SERVICE = "opencode-loop";
 var DEFAULT_ACTIVE_GUARD_MS = 45000;
@@ -654,51 +701,6 @@ Describe the current project goal here.
 ## Blocked
 - None.
 `;
-function sdkError(result) {
-  if (!result || typeof result !== "object")
-    return;
-  return result.error || result.error === null ? result.error : undefined;
-}
-function sdkData(result) {
-  if (!result || typeof result !== "object")
-    return result;
-  return Object.prototype.hasOwnProperty.call(result, "data") ? result.data : result;
-}
-function sdkErrorMessage(error) {
-  if (!error)
-    return "unknown SDK error";
-  if (error instanceof Error)
-    return error.message;
-  if (typeof error === "string")
-    return error;
-  if (typeof error === "object") {
-    if (typeof error.message === "string")
-      return error.message;
-    if (typeof error.name === "string")
-      return error.name;
-    try {
-      return JSON.stringify(error).slice(0, 400);
-    } catch {}
-  }
-  return String(error);
-}
-async function sdkCall(method, ...argsList) {
-  let firstError;
-  for (const args of argsList) {
-    if (args === undefined)
-      continue;
-    try {
-      const result = await method(args);
-      const error = sdkError(result);
-      if (!error)
-        return sdkData(result);
-      firstError = firstError || new Error(sdkErrorMessage(error));
-    } catch (error) {
-      firstError = firstError || error;
-    }
-  }
-  throw firstError || new Error("SDK call failed without arguments");
-}
 function fireSdk(client, label, method, ...argsList) {
   const pending = Promise.resolve().then(() => sdkCall(method, ...argsList));
   pending.catch((error) => {
