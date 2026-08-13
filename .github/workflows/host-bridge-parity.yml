@@ -1,0 +1,27 @@
+name: Verify Shadow Host Bridge Parity
+
+on:
+  push:
+    branches: [refactor-loop-host-bridge]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: npm ci
+      - run: node --check src/source/opencode/host.js
+      - run: node --check scripts/host-bridge-parity-test.mjs
+      - run: node scripts/host-bridge-parity-test.mjs
+      - run: npm test
