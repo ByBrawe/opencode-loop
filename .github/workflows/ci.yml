@@ -41,6 +41,12 @@ jobs:
 
       - run: npm ci
 
+      - name: Verify shadow OpenCode host bridge parity
+        run: |
+          node --check src/source/opencode/host.js
+          node --check scripts/host-bridge-parity-test.mjs
+          node scripts/host-bridge-parity-test.mjs
+
       - run: npm run check
 
       - run: npm test
