@@ -61,7 +61,7 @@ jobs:
       - name: Verify plugin is active in real OpenCode 2 host
         shell: bash
         run: |
-          cd "$RUNNER_TEMP/opencode-loop-v2-activation"
-          plugins="$("$GITHUB_WORKSPACE/node_modules/.bin/opencode2" api get /api/plugin)"
+          project="$RUNNER_TEMP/opencode-loop-v2-activation"
+          plugins="$("$GITHUB_WORKSPACE/node_modules/.bin/opencode2" api get /api/plugin -H "x-opencode-directory: $project")"
           printf '%s\n' "$plugins"
           printf '%s\n' "$plugins" | grep -F "bybrawe.opencode-loop.v2.experimental"
