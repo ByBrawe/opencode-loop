@@ -49,11 +49,15 @@ jobs:
 
       - run: npm run check
 
-      - name: Verify V2 session registry contract
+      - name: Verify V2 runtime contracts
         run: |
           node --check src/source/runtime/session-registry.js
+          node --check src/source/runtime/scope.js
+          node --check src/source/runtime/timers.js
           node --check scripts/runtime-contract-test.mjs
+          node --check scripts/runtime-scope-test.mjs
           node scripts/runtime-contract-test.mjs
+          node scripts/runtime-scope-test.mjs
 
       - run: npm test
 
