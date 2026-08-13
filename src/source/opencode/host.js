@@ -89,6 +89,9 @@ export async function resolveCompactionModel(directory, client, sessionID, prefe
 }
 
 export async function compactSession(directory, client, sessionID, preferredModel) {
+  // Prefer the native TUI command when a TUI is present. Headless/server hosts
+  // fall back to session.summarize, whose current API requires an explicit
+  // provider/model pair.
   for (const command of ["session.compact", "session_compact"]) {
     try {
       await executeTuiCommand(client, command)
