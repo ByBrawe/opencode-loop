@@ -49,7 +49,25 @@ jobs:
 
       - run: npm run check
 
-      - run: npm test
+      - name: Installer regression
+        run: node scripts/install-test.mjs
+        timeout-minutes: 2
+
+      - name: Daemon regression
+        run: node scripts/loopd-test.mjs
+        timeout-minutes: 2
+
+      - name: Plugin smoke regression
+        run: node scripts/smoke-test.mjs
+        timeout-minutes: 2
+
+      - name: Host adapter contract
+        run: node scripts/host-adapter-contract-test.mjs
+        timeout-minutes: 2
+
+      - name: Comprehensive regression
+        run: node scripts/comprehensive-watchdog.mjs
+        timeout-minutes: 2
 
       - name: Verify Bun can load the plugin
         run: bun -e "await import('./src/index.js')"
@@ -94,7 +112,25 @@ jobs:
 
       - run: npm run check
 
-      - run: npm test
+      - name: Installer regression
+        run: node scripts/install-test.mjs
+        timeout-minutes: 2
+
+      - name: Daemon regression
+        run: node scripts/loopd-test.mjs
+        timeout-minutes: 2
+
+      - name: Plugin smoke regression
+        run: node scripts/smoke-test.mjs
+        timeout-minutes: 2
+
+      - name: Host adapter contract
+        run: node scripts/host-adapter-contract-test.mjs
+        timeout-minutes: 2
+
+      - name: Comprehensive regression
+        run: node scripts/comprehensive-watchdog.mjs
+        timeout-minutes: 2
 
       - name: Verify Bun can load with this OpenCode plugin
         run: bun -e "await import('./src/index.js')"
