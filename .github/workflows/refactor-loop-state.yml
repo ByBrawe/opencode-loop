@@ -1,0 +1,37 @@
+name: Verify Loop State Refactor
+
+on:
+  push:
+    branches: [refactor-loop-state]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refactor-loop-state
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: npm ci
+      - run: node scripts/refactor-loop-state.mjs
+      - run: npm run build:plugin
+      - run: npm run check
+      - run: npm test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-loop-state-refactor
+          path: |
+            src/source/core/state.js
+            src/source/legacy-v1.js
+            src/index.js
+          if-no-files-found: error
