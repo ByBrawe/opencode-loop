@@ -1,0 +1,35 @@
+name: Commit Process Split
+on:
+  push:
+    branches: [refactor-loop-process]
+    paths: [.github/workflows/commit-loop-process.yml]
+permissions:
+  contents: write
+jobs:
+  commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refactor-loop-process
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - uses: oven-sh/setup-bun@v2
+      - run: npm ci
+      - run: node scripts/refactor-loop-process.mjs
+      - run: node --check src/source/core/process.js
+      - run: npm run build:plugin
+      - run: npm run check
+      - run: npm test
+      - uses: actions/github-script@v8
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require('node:fs')
+            for (const path of ['src/source/core/process.js','src/source/legacy-v1.js','src/index.js']) {
+              let sha
+              try { sha = (await github.rest.repos.getContent({owner:context.repo.owner,repo:context.repo.repo,path,ref:'refactor-loop-process'})).data.sha } catch (e) { if (e.status !== 404) throw e }
+              await github.rest.repos.createOrUpdateFileContents({owner:context.repo.owner,repo:context.repo.repo,path,branch:'refactor-loop-process',message:'refactor: extract process helpers',content:fs.readFileSync(path).toString('base64'),...(sha?{sha}:{})})
+            }
