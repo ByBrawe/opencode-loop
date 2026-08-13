@@ -19,7 +19,7 @@
   ],
   "scripts": {
     "build:plugin": "bun build src/source/v1.js --outfile=src/index.js --target=bun --format=esm --external=@opencode-ai/plugin/tool",
-    "build:plugin:npm": "npx --yes bun@1.3.14 build src/source/v1.js --outfile=src/index.js --target=bun --format=esm --external=@opencode-ai/plugin/tool",
+    "build:plugin:npm": "npm exec --yes --package=bun@1.3.14 -- bun build src/source/v1.js --outfile=src/index.js --target=bun --format=esm --external=@opencode-ai/plugin/tool",
     "prepack": "npm run build:plugin:npm && node --check src/index.js",
     "check": "node --check src/source/v1.js && node --check src/source/legacy-v1.js && node --check src/index.js && node --check scripts/install-node.mjs && node --check scripts/loopd.mjs && node --check scripts/install-test.mjs && node --check scripts/loopd-test.mjs && node --check scripts/smoke-test.mjs && node --check scripts/comprehensive-test.mjs && node --check scripts/host-loop-canary.mjs",
     "test": "node scripts/install-test.mjs && node scripts/loopd-test.mjs && node scripts/smoke-test.mjs && node scripts/comprehensive-test.mjs",
