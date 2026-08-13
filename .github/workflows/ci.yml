@@ -49,6 +49,12 @@ jobs:
 
       - run: npm run check
 
+      - name: Verify V2 session registry contract
+        run: |
+          node --check src/source/runtime/session-registry.js
+          node --check scripts/runtime-contract-test.mjs
+          node scripts/runtime-contract-test.mjs
+
       - run: npm test
 
       - name: Verify Bun can load the plugin
