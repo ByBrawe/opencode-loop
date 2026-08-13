@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: v2-runtime-scope
+          ref: v2-session-runtime-manager
           persist-credentials: false
       - uses: actions/setup-node@v6
         with:
@@ -35,10 +35,13 @@ jobs:
           node --check src/source/runtime/session-registry.js
           node --check src/source/runtime/scope.js
           node --check src/source/runtime/timers.js
+          node --check src/source/runtime/session-manager.js
           node --check scripts/runtime-contract-test.mjs
           node --check scripts/runtime-scope-test.mjs
+          node --check scripts/session-manager-test.mjs
           node scripts/runtime-contract-test.mjs
           node scripts/runtime-scope-test.mjs
+          node scripts/session-manager-test.mjs
       - run: npm test
       - name: Verify stable V1 bundle remains unchanged
         shell: bash
