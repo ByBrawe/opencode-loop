@@ -1,8 +1,7 @@
 // @bun
 // src/source/legacy-v1.js
-import { promises as fs2 } from "fs";
-import path2 from "path";
-import { spawn } from "child_process";
+import { promises as fs3 } from "fs";
+import path3 from "path";
 import { tool } from "@opencode-ai/plugin/tool";
 
 // src/source/core/args.js
@@ -699,6 +698,78 @@ async function removeState(directory, sessionID) {
   });
 }
 
+// src/source/core/process.js
+import { promises as fs2 } from "fs";
+import path2 from "path";
+import { spawn } from "child_process";
+async function appendLoopLog(directory, line, extra = {}) {
+  try {
+    await ensureDir(stateDir(directory));
+    await fs2.appendFile(path2.join(stateDir(directory), "loop.log"), JSON.stringify({ time: new Date().toISOString(), line, ...extra }) + `
+`);
+  } catch {}
+}
+async function readSmallTextFile(filePath, maxBytes = 120000) {
+  try {
+    const stat = await fs2.stat(filePath);
+    if (!stat.isFile() || stat.size > maxBytes)
+      return "";
+    return await fs2.readFile(filePath, "utf8");
+  } catch {
+    return "";
+  }
+}
+async function runProcess(command, args, cwd, timeoutMs = 60000) {
+  return await new Promise((resolve) => {
+    const child = spawn(command, args, { cwd, shell: false, windowsHide: true });
+    const stdout = [];
+    const stderr = [];
+    const timer = setTimeout(() => {
+      try {
+        child.kill("SIGTERM");
+      } catch {}
+    }, timeoutMs);
+    child.stdout?.on("data", (data) => stdout.push(Buffer.from(data)));
+    child.stderr?.on("data", (data) => stderr.push(Buffer.from(data)));
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      resolve({ code: -1, stdout: "", stderr: String(error) });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ code: code ?? 0, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") });
+    });
+  });
+}
+async function runShellCommand(command, cwd, timeoutMs = 120000) {
+  return await new Promise((resolve) => {
+    const child = spawn(command, [], { cwd, shell: true, windowsHide: true });
+    const stdout = [];
+    const stderr = [];
+    const timer = setTimeout(() => {
+      try {
+        child.kill("SIGTERM");
+      } catch {}
+    }, timeoutMs);
+    child.stdout?.on("data", (data) => stdout.push(Buffer.from(data)));
+    child.stderr?.on("data", (data) => stderr.push(Buffer.from(data)));
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      resolve({ code: -1, stdout: "", stderr: String(error) });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ code: code ?? 0, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") });
+    });
+  });
+}
+async function notifyJob(directory, job, reason) {
+  if (!job.notifyCommand)
+    return;
+  const command = String(job.notifyCommand).replace(/\{reason\}/g, String(reason || "")).replace(/\{job\}/g, String(job.name || job.id || ""));
+  await runShellCommand(command, directory, 60000);
+}
+
 // src/source/opencode/sdk.js
 function sdkError2(result) {
   if (!result || typeof result !== "object")
@@ -1240,73 +1311,6 @@ function disposeRuntime(directory, client) {
     heartbeatTimer = undefined;
   }
 }
-async function appendLoopLog(directory, line, extra = {}) {
-  try {
-    await ensureDir(stateDir(directory));
-    await fs2.appendFile(path2.join(stateDir(directory), "loop.log"), JSON.stringify({ time: new Date().toISOString(), line, ...extra }) + `
-`);
-  } catch {}
-}
-async function readSmallTextFile(filePath, maxBytes = 120000) {
-  try {
-    const stat = await fs2.stat(filePath);
-    if (!stat.isFile() || stat.size > maxBytes)
-      return "";
-    return await fs2.readFile(filePath, "utf8");
-  } catch {
-    return "";
-  }
-}
-async function runProcess(command, args, cwd, timeoutMs = 60000) {
-  return await new Promise((resolve) => {
-    const child = spawn(command, args, { cwd, shell: false, windowsHide: true });
-    const stdout = [];
-    const stderr = [];
-    const timer = setTimeout(() => {
-      try {
-        child.kill("SIGTERM");
-      } catch {}
-    }, timeoutMs);
-    child.stdout?.on("data", (data) => stdout.push(Buffer.from(data)));
-    child.stderr?.on("data", (data) => stderr.push(Buffer.from(data)));
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      resolve({ code: -1, stdout: "", stderr: String(error) });
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ code: code ?? 0, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") });
-    });
-  });
-}
-async function runShellCommand(command, cwd, timeoutMs = 120000) {
-  return await new Promise((resolve) => {
-    const child = spawn(command, [], { cwd, shell: true, windowsHide: true });
-    const stdout = [];
-    const stderr = [];
-    const timer = setTimeout(() => {
-      try {
-        child.kill("SIGTERM");
-      } catch {}
-    }, timeoutMs);
-    child.stdout?.on("data", (data) => stdout.push(Buffer.from(data)));
-    child.stderr?.on("data", (data) => stderr.push(Buffer.from(data)));
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      resolve({ code: -1, stdout: "", stderr: String(error) });
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ code: code ?? 0, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") });
-    });
-  });
-}
-async function notifyJob(directory, job, reason) {
-  if (!job.notifyCommand)
-    return;
-  const command = String(job.notifyCommand).replace(/\{reason\}/g, String(reason || "")).replace(/\{job\}/g, String(job.name || job.id || ""));
-  await runShellCommand(command, directory, 60000);
-}
 function dangerousShell(command) {
   const text = String(command || "").toLowerCase();
   return [
@@ -1326,14 +1330,14 @@ function dangerousShell(command) {
 async function buildGoalPrompt(directory, job) {
   const sections = [];
   sections.push(`Working directory:
-${path2.resolve(directory)}
+${path3.resolve(directory)}
 Keep every file operation inside this directory. Prefer workspace-relative paths such as "src/index.js"; never turn a relative path into a root path such as "/src/index.js".`);
   const objective = String(job.action || "").trim();
   if (objective)
     sections.push(`Goal objective:
 ${objective}`);
   if (job.goalFile) {
-    const text = await readSmallTextFile(path2.resolve(directory, job.goalFile), 120000);
+    const text = await readSmallTextFile(path3.resolve(directory, job.goalFile), 120000);
     if (text.trim())
       sections.push(`Goal file ${job.goalFile}:
 ${text.trim()}`);
@@ -1341,7 +1345,7 @@ ${text.trim()}`);
       sections.push(`Goal file ${job.goalFile} was requested but could not be read. Continue from the inline goal objective.`);
   }
   if (job.promptFile) {
-    const text = await readSmallTextFile(path2.resolve(directory, job.promptFile), 120000);
+    const text = await readSmallTextFile(path3.resolve(directory, job.promptFile), 120000);
     if (text.trim())
       sections.push(`Extra goal instructions from ${job.promptFile}:
 ${text.trim()}`);
@@ -1374,7 +1378,7 @@ ${job.noProgressCount || 0}/${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS}
 ` + job.goalProgress.slice(-5).map((item) => `- ${item.time}: ${item.summary}`).join(`
 `));
   for (const file of job.includeFiles || []) {
-    const text = await readSmallTextFile(path2.resolve(directory, file), 80000);
+    const text = await readSmallTextFile(path3.resolve(directory, file), 80000);
     if (text.trim())
       sections.push(`Context from ${file}:
 ${text.trim().slice(0, 20000)}`);
@@ -1408,7 +1412,7 @@ async function buildPrompt(directory, job) {
     return await buildGoalPrompt(directory, job);
   const sections = [];
   if (job.promptFile) {
-    const text = await readSmallTextFile(path2.resolve(directory, job.promptFile));
+    const text = await readSmallTextFile(path3.resolve(directory, job.promptFile));
     if (text.trim())
       sections.push(`Instructions from ${job.promptFile}:
 ${text.trim()}`);
@@ -1418,7 +1422,7 @@ ${text.trim()}`);
   if (job.action)
     sections.push(decoratePrompt(job));
   for (const file of job.includeFiles || []) {
-    const text = await readSmallTextFile(path2.resolve(directory, file), 80000);
+    const text = await readSmallTextFile(path3.resolve(directory, file), 80000);
     if (text.trim())
       sections.push(`Context from ${file}:
 ${text.trim().slice(0, 20000)}`);
@@ -1464,7 +1468,7 @@ async function snapshotPaths(directory, files) {
   const snapshot = {};
   for (const file of files || []) {
     try {
-      const stat = await fs2.stat(path2.resolve(directory, file));
+      const stat = await fs3.stat(path3.resolve(directory, file));
       snapshot[file] = `${stat.mtimeMs}:${stat.size}`;
     } catch {
       snapshot[file] = "missing";
@@ -1484,10 +1488,10 @@ async function watchChanged(directory, job) {
 }
 async function fileContains(filePath, needle) {
   try {
-    const stat = await fs2.stat(filePath);
+    const stat = await fs3.stat(filePath);
     if (!stat.isFile() || stat.size > MAX_SCAN_BYTES)
       return false;
-    return (await fs2.readFile(filePath, "utf8")).includes(needle);
+    return (await fs3.readFile(filePath, "utf8")).includes(needle);
   } catch {
     return false;
   }
@@ -1495,9 +1499,9 @@ async function fileContains(filePath, needle) {
 async function untilReached(directory, job) {
   if (!job.until)
     return false;
-  const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path2.join(".opencode", "opencode-loop", "until.txt")];
+  const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path3.join(".opencode", "opencode-loop", "until.txt")];
   for (const file of files)
-    if (await fileContains(path2.resolve(directory, file), job.until))
+    if (await fileContains(path3.resolve(directory, file), job.until))
       return true;
   let scanned = 0;
   async function walk(current) {
@@ -1505,7 +1509,7 @@ async function untilReached(directory, job) {
       return false;
     let entries;
     try {
-      entries = await fs2.readdir(current, { withFileTypes: true });
+      entries = await fs3.readdir(current, { withFileTypes: true });
     } catch {
       return false;
     }
@@ -1514,7 +1518,7 @@ async function untilReached(directory, job) {
         return false;
       if ([".git", "node_modules", "dist", "build", ".next", "coverage"].includes(entry.name))
         continue;
-      const full = path2.join(current, entry.name);
+      const full = path3.join(current, entry.name);
       if (entry.isDirectory()) {
         if (await walk(full))
           return true;
@@ -1538,13 +1542,13 @@ async function createCheckpoint(directory, sessionID, job, client) {
   if (!status.stdout.trim())
     return;
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const checkpointDir = path2.join(stateDir(directory), "checkpoints", safeID(sessionID));
+  const checkpointDir = path3.join(stateDir(directory), "checkpoints", safeID(sessionID));
   await ensureDir(checkpointDir);
   const diff = await runProcess("git", ["diff", "--binary"], directory, 120000);
   const staged = await runProcess("git", ["diff", "--cached", "--binary"], directory, 120000);
   const prefix = `${timestamp}-${safeID(job.name || job.id)}`;
-  await fs2.writeFile(path2.join(checkpointDir, `${prefix}.status.txt`), status.stdout + status.stderr);
-  await fs2.writeFile(path2.join(checkpointDir, `${prefix}.patch`), `${diff.stdout}
+  await fs3.writeFile(path3.join(checkpointDir, `${prefix}.status.txt`), status.stdout + status.stderr);
+  await fs3.writeFile(path3.join(checkpointDir, `${prefix}.patch`), `${diff.stdout}
 ${staged.stdout}`);
   if (job.gitCheckpoint) {
     await runProcess("git", ["add", "-A"], directory, 120000);
@@ -1930,7 +1934,7 @@ async function recoverActiveDispatchFailure(directory, client, sessionID, jobId,
   return true;
 }
 function goalReportPath(directory, sessionID, job) {
-  return path2.join(stateDir(directory), GOAL_REPORT_DIR, `${safeID(sessionID)}-${safeID(job.name || job.id)}.md`);
+  return path3.join(stateDir(directory), GOAL_REPORT_DIR, `${safeID(sessionID)}-${safeID(job.name || job.id)}.md`);
 }
 function goalReportText(job) {
   const lines = [];
@@ -1984,9 +1988,9 @@ function goalReportText(job) {
 async function writeGoalReport(directory, sessionID, job) {
   if (!isGoalJob(job))
     return;
-  const target = job.goalEvidenceFile ? path2.resolve(directory, job.goalEvidenceFile) : goalReportPath(directory, sessionID, job);
-  await ensureDir(path2.dirname(target));
-  await fs2.writeFile(target, goalReportText(job), "utf8");
+  const target = job.goalEvidenceFile ? path3.resolve(directory, job.goalEvidenceFile) : goalReportPath(directory, sessionID, job);
+  await ensureDir(path3.dirname(target));
+  await fs3.writeFile(target, goalReportText(job), "utf8");
 }
 function pickGoalJob(state, target = "") {
   const goals = (state.jobs || []).filter(isGoalJob);
@@ -2381,7 +2385,7 @@ async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
       await reschedule();
       return;
     }
-    if (job.stopFile && await pathExists(path2.resolve(directory, job.stopFile))) {
+    if (job.stopFile && await pathExists(path3.resolve(directory, job.stopFile))) {
       state.jobs = (state.jobs || []).filter((candidate) => candidate.id !== job.id);
       await writeState(directory, sessionID, state);
       await notifyJob(directory, job, "stop_file");
@@ -2693,7 +2697,7 @@ async function statusLoop(directory, client, sessionID) {
 async function logsLoop(directory, client, sessionID) {
   let text = "No loop log found.";
   try {
-    text = (await fs2.readFile(path2.join(stateDir(directory), "loop.log"), "utf8")).trim().split(/\r?\n/).slice(-80).join(`
+    text = (await fs3.readFile(path3.join(stateDir(directory), "loop.log"), "utf8")).trim().split(/\r?\n/).slice(-80).join(`
 `) || text;
   } catch {}
   await say(client, sessionID, `OpenCode loop logs:
@@ -2749,12 +2753,12 @@ async function doctorLoop(directory, client, sessionID) {
 }
 async function initLoop(directory, client, sessionID, args) {
   const target = String(args || "").trim() || "progress.md";
-  const full = path2.resolve(directory, target);
+  const full = path3.resolve(directory, target);
   if (await pathExists(full)) {
     await toast(client, `${target} already exists.`, "warning");
     return;
   }
-  await fs2.writeFile(full, DEFAULT_PROGRESS_MD, "utf8");
+  await fs3.writeFile(full, DEFAULT_PROGRESS_MD, "utf8");
   await toast(client, `Created ${target}.`, "success");
   await appendLoopLog(directory, "init", { sessionID, file: target });
 }
