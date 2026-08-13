@@ -37,6 +37,10 @@ jobs:
 
       - run: npm ci
 
+      - name: Verify npm prepack build path
+        if: matrix.os == 'ubuntu-latest'
+        run: npm pack --dry-run
+
       - name: Build a single-file stable plugin from source
         run: npm run build:plugin
 
