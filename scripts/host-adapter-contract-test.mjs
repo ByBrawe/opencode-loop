@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { createOpenCodeHostAdapter } from "../src/source/opencode/adapter.js"
 import {
   activeRunCompletionFromMessages,
   compactSession,
@@ -104,6 +105,43 @@ assert.equal(compactTuiCommandName("other"), undefined)
     path: { id: "ses_summary" },
     body: { providerID: "provider", modelID: "model", auto: false },
   })
+}
+
+{
+  const calls = []
+  const client = {
+    app: { log: async (args) => { calls.push(["log", args]); return { data: true } } },
+    tui: {
+      executeCommand: async (args) => { calls.push(["command", args]); return { data: true } },
+      showToast: async (args) => { calls.push(["toast", args]); return { data: true } },
+    },
+    session: {
+      messages: async (args) => {
+        calls.push(["messages", args])
+        return { data: [{ info: { role: "assistant", time: { created: 10, completed: 20 } } }] }
+      },
+    },
+  }
+  const adapter = createOpenCodeHostAdapter(client, "/bound/project")
+  assert.equal(Object.isFrozen(adapter), true)
+  assert.deepEqual(Object.keys(adapter).sort(), [
+    "activeRunCompletion",
+    "compactSession",
+    "executeTuiCommand",
+    "log",
+    "readRecentMessages",
+    "resolveCompactionModel",
+    "toast",
+  ])
+  await adapter.executeTuiCommand("session_compact")
+  await adapter.readRecentMessages("ses_adapter", 7)
+  assert.equal(await adapter.activeRunCompletion("ses_adapter", { startedAt: 5 }), "completed")
+  assert.deepEqual(await adapter.resolveCompactionModel("ses_adapter", "provider/model"), { providerID: "provider", modelID: "model" })
+  await adapter.log("info", "adapter log")
+  await adapter.toast("adapter toast", "warning")
+  const messageCall = calls.find(([kind]) => kind === "messages")?.[1]
+  assert.equal(messageCall?.query?.directory, "/bound/project")
+  assert.equal(messageCall?.query?.limit, 7)
 }
 
 console.log("OpenCode host adapter contract test passed")
