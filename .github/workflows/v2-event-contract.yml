@@ -1,0 +1,34 @@
+name: V2 Event Contract
+
+on:
+  pull_request:
+    paths:
+      - "src/source/runtime/events.js"
+      - "scripts/runtime-event-test.mjs"
+      - ".github/workflows/v2-event-contract.yml"
+  push:
+    branches:
+      - main
+      - v2-event-normalizer
+    paths:
+      - "src/source/runtime/events.js"
+      - "scripts/runtime-event-test.mjs"
+      - ".github/workflows/v2-event-contract.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  event-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - run: node --check src/source/runtime/events.js
+      - run: node --check scripts/runtime-event-test.mjs
+      - run: node scripts/runtime-event-test.mjs
