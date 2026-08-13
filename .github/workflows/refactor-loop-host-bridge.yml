@@ -23,7 +23,7 @@ jobs:
       - run: npm ci
       - name: Prepare host-bridge candidate
         run: |
-          node -e "const fs=require('fs');const p='src/source/legacy-v1.js';let s=fs.readFileSync(p,'utf8');const a=s.indexOf('function fireSdk('),b=s.indexOf('function guardLoopOwnedUserMessage(');if(a<0||b<=a)throw Error('boundaries');s=s.slice(0,a)+s.slice(b);const x='import { normalizedModelRef, updateSessionExecutionContext, captureSessionExecutionContext, getSessionExecutionContext, setSessionExecutionContext, deleteSessionExecutionContext } from \\"./opencode/session-context.js\\"\\n';const y='import { fireSdk, executeTuiCommand, compactTuiCommandName, readRecentSessionMessages, orderedSessionMessages, activeRunCompletionFromMessages, resolveCompactionModel, compactSession, log, toast } from \\"./opencode/host.js\\"\\n';if(!s.includes(x))throw Error('anchor');fs.writeFileSync(p,s.replace(x,x+y));"
+          node -e 'const fs=require("fs");const p="src/source/legacy-v1.js";let s=fs.readFileSync(p,"utf8");const a=s.indexOf("function fireSdk("),b=s.indexOf("function guardLoopOwnedUserMessage(");if(a<0||b<=a)throw Error("boundaries");s=s.slice(0,a)+s.slice(b);const y="import { fireSdk, executeTuiCommand, compactTuiCommandName, readRecentSessionMessages, orderedSessionMessages, activeRunCompletionFromMessages, resolveCompactionModel, compactSession, log, toast } from \"./opencode/host.js\"\n";const m="const SERVICE = \"opencode-loop\"";const i=s.indexOf(m);if(i<0)throw Error("service marker");fs.writeFileSync(p,s.slice(0,i)+y+"\n"+s.slice(i));'
       - run: node --check src/source/opencode/host.js
       - run: npm run build:plugin
       - run: npm run check
