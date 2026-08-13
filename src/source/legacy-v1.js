@@ -1,12 +1,11 @@
 import { promises as fs } from "node:fs"
-import os from "node:os"
 import path from "node:path"
 import { spawn } from "node:child_process"
 import { tool } from "@opencode-ai/plugin/tool"
 import { DEFAULT_GOAL_MAX_NO_PROGRESS, now, safeID, parseDuration, durationToText, splitFirst, stripOuterQuotes, escapeRegExp, takeFlag, takeFlagValue, takeAllFlagValues, parsePositiveInt, parseNonNegativeInt, parseCompactEvery, parseLoopArgs } from "./core/args.js"
+import { stateDir, ensureDir, pathExists, readState, writeState, removeState } from "./core/state.js"
 
 const SERVICE = "opencode-loop"
-const STATE_DIR = ".opencode/opencode-loop"
 const DEFAULT_ACTIVE_GUARD_MS = 45_000
 const STALE_ACTIVE_RECOVERY_MS = 45_000
 const IDLE_DEBOUNCE_MS = 1_200
@@ -23,7 +22,6 @@ const DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180_000
 const LOOP_OWNED_USER_MESSAGE_GUARD_MS = 10_000
 const LOOP_OWNED_USER_MESSAGE_RETENTION_MS = 10 * 60_000
 const LOCAL_COMMAND_AGENT = "opencode-loop-local"
-const STATE_BASELINE = Symbol("opencode-loop-state-baseline")
 
 const activeRuns = new Map()
 const handledCommands = new Map()
@@ -35,7 +33,6 @@ const dueTimers = new Map()
 const watchdogTimers = new Map()
 const runLocks = new Map()
 const knownSessions = new Map()
-const stateWriteLocks = new Map()
 const activeToolCalls = new Map()
 const sessionParents = new Map()
 let heartbeatTimer
@@ -71,208 +68,6 @@ Describe the current project goal here.
 `
 
 
-function stateDir(directory) { return path.join(directory, STATE_DIR) }
-function statePath(directory, sessionID) { return path.join(stateDir(directory), `${safeID(sessionID)}.json`) }
-async function ensureDir(directory) { await fs.mkdir(directory, { recursive: true }) }
-async function pathExists(filePath) { try { await fs.access(filePath); return true } catch { return false } }
-
-function stateLockKey(directory, sessionID) {
-  return `${path.resolve(directory)}:${safeID(sessionID)}`
-}
-
-async function withStateWriteLock(directory, sessionID, fn) {
-  const key = stateLockKey(directory, sessionID)
-  const previous = stateWriteLocks.get(key) || Promise.resolve()
-  let release
-  const current = new Promise((resolve) => { release = resolve })
-  const next = previous.catch(() => {}).then(() => current)
-  stateWriteLocks.set(key, next)
-  await previous.catch(() => {})
-  try {
-    return await fn()
-  } finally {
-    release()
-    if (stateWriteLocks.get(key) === next) stateWriteLocks.delete(key)
-  }
-}
-
-async function readStateFile(directory, sessionID) {
-  const target = statePath(directory, sessionID)
-  const attempts = 5
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    try {
-      const parsed = JSON.parse(await fs.readFile(target, "utf8"))
-      return { version: 4, jobs: Array.isArray(parsed.jobs) ? parsed.jobs : [] }
-    } catch (error) {
-      if (error?.code === "ENOENT") return { version: 4, jobs: [] }
-      const transient = error instanceof SyntaxError || isRetriableStateWriteError(error)
-      if (!transient || attempt === attempts - 1) break
-      await delay(25 * (attempt + 1))
-    }
-  }
-  try {
-    await ensureDir(stateDir(directory))
-    await fs.copyFile(target, `${target}.corrupt-${Date.now()}`)
-  } catch {}
-  return { version: 4, jobs: [] }
-}
-
-async function readState(directory, sessionID) {
-  const state = await readStateFile(directory, sessionID)
-  Object.defineProperty(state, STATE_BASELINE, {
-    value: structuredClone(state.jobs || []),
-    enumerable: false,
-    configurable: false,
-    writable: true,
-  })
-  return state
-}
-
-function isRetriableStateWriteError(error) {
-  const code = error?.code
-  return code === "EPERM" || code === "EACCES" || code === "EBUSY" || code === "EEXIST" || code === "EAGAIN"
-}
-
-async function delay(ms) {
-  await new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-// Windows often fails POSIX-style "write temp next to target, then rename over it":
-// existing destinations can return EPERM/EEXIST while antivirus, IDE indexers, or
-// OpenCode's own snapshotter briefly hold the state file. Temp files next to the
-// target also show up in project git snapshots as *.tmp pathspec noise.
-//
-// Write the payload outside the project first, then replace the target with
-// rename when possible and a copy/unlink fallback with short retries.
-async function writeFileAtomically(target, contents, options = {}) {
-  const encoding = options.encoding || "utf8"
-  const attempts = Math.max(1, Number(options.attempts) || 5)
-  const temp = path.join(
-    os.tmpdir(),
-    `opencode-loop-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`,
-  )
-  await fs.writeFile(temp, contents, encoding)
-  try {
-    let lastError
-    // Prefer an atomic rename and retry transient Windows destination locks
-    // before falling back to a non-atomic copy/overwrite.
-    for (let attempt = 0; attempt < attempts; attempt++) {
-      try {
-        await fs.rename(temp, target)
-        return
-      } catch (error) {
-        lastError = error
-        if (error?.code === "EXDEV") break
-        if (!isRetriableStateWriteError(error)) throw error
-        if (attempt < attempts - 1) await delay(25 * (attempt + 1))
-      }
-    }
-
-    for (let attempt = 0; attempt < attempts; attempt++) {
-      try {
-        await fs.copyFile(temp, target)
-        return
-      } catch (error) {
-        lastError = error
-        if (!isRetriableStateWriteError(error)) throw error
-        if (attempt < attempts - 1) await delay(25 * (attempt + 1))
-      }
-    }
-
-    try {
-      await fs.writeFile(target, contents, encoding)
-      return
-    } catch (error) {
-      if (lastError && !error.cause) error.cause = lastError
-      throw error
-    }
-  } finally {
-    try { await fs.rm(temp, { force: true }) } catch {}
-  }
-}
-
-function stateValuesEqual(left, right) {
-  if (Object.is(left, right)) return true
-  try { return JSON.stringify(left) === JSON.stringify(right) } catch { return false }
-}
-
-function mergeStateJob(baseJob, intendedJob, currentJob) {
-  const merged = structuredClone(currentJob || {})
-  const keys = new Set([
-    ...Object.keys(baseJob || {}),
-    ...Object.keys(intendedJob || {}),
-  ])
-  for (const key of keys) {
-    const baseHas = Object.prototype.hasOwnProperty.call(baseJob || {}, key)
-    const intendedHas = Object.prototype.hasOwnProperty.call(intendedJob || {}, key)
-    const currentHas = Object.prototype.hasOwnProperty.call(currentJob || {}, key)
-    const intendedChanged = baseHas !== intendedHas || !stateValuesEqual(baseJob?.[key], intendedJob?.[key])
-    if (!intendedChanged) continue
-    const currentChanged = baseHas !== currentHas || !stateValuesEqual(baseJob?.[key], currentJob?.[key])
-    const sameResult = intendedHas === currentHas && stateValuesEqual(intendedJob?.[key], currentJob?.[key])
-    // First committed writer wins a true same-field conflict. A stale snapshot
-    // can still apply changes to unrelated fields without erasing newer state.
-    if (currentChanged && !sameResult) continue
-    if (intendedHas) merged[key] = structuredClone(intendedJob[key])
-    else delete merged[key]
-  }
-  return merged
-}
-
-function mergeStateJobs(baseJobs, intendedJobs, currentJobs) {
-  const byID = (jobs) => new Map((jobs || []).filter((job) => job?.id).map((job) => [job.id, job]))
-  const base = byID(baseJobs)
-  const intended = byID(intendedJobs)
-  const current = byID(currentJobs)
-  const merged = []
-
-  for (const currentJob of currentJobs || []) {
-    const id = currentJob?.id
-    if (!id || !base.has(id)) {
-      merged.push(structuredClone(currentJob))
-      continue
-    }
-    const baseJob = base.get(id)
-    const intendedJob = intended.get(id)
-    if (!intendedJob) {
-      // A deletion based on an old snapshot must not erase a job that changed
-      // after that snapshot was read.
-      if (!stateValuesEqual(baseJob, currentJob)) merged.push(structuredClone(currentJob))
-      continue
-    }
-    merged.push(mergeStateJob(baseJob, intendedJob, currentJob))
-  }
-
-  for (const intendedJob of intendedJobs || []) {
-    const id = intendedJob?.id
-    if (!id || base.has(id) || current.has(id)) continue
-    merged.push(structuredClone(intendedJob))
-  }
-  return merged
-}
-
-async function writeState(directory, sessionID, state) {
-  await withStateWriteLock(directory, sessionID, async () => {
-    await ensureDir(stateDir(directory))
-    const target = statePath(directory, sessionID)
-    const baseline = state?.[STATE_BASELINE]
-    let jobs = structuredClone(state.jobs || [])
-    if (Array.isArray(baseline)) {
-      const current = await readStateFile(directory, sessionID)
-      jobs = mergeStateJobs(baseline, jobs, current.jobs || [])
-      state.jobs = structuredClone(jobs)
-      state[STATE_BASELINE] = structuredClone(jobs)
-    }
-    const payload = JSON.stringify({ version: 4, jobs }, null, 2)
-    await writeFileAtomically(target, payload)
-  })
-}
-
-async function removeState(directory, sessionID) {
-  await withStateWriteLock(directory, sessionID, async () => {
-    try { await fs.unlink(statePath(directory, sessionID)) } catch {}
-  })
-}
 
 function sdkError(result) {
   if (!result || typeof result !== "object") return undefined
