@@ -641,6 +641,55 @@ async function sdkCall(method, ...argsList) {
   throw firstError || new Error("SDK call failed without arguments");
 }
 
+// src/source/opencode/session-context.js
+var LOCAL_COMMAND_AGENT = "opencode-loop-local";
+var sessionExecutionContexts = new Map;
+function normalizedModelRef(model) {
+  if (typeof model === "string") {
+    const separator = model.indexOf("/");
+    if (separator > 0)
+      return { providerID: model.slice(0, separator), modelID: model.slice(separator + 1) };
+    return;
+  }
+  const providerID = model?.providerID;
+  const modelID = model?.modelID || model?.id;
+  if (typeof providerID !== "string" || typeof modelID !== "string")
+    return;
+  return { providerID, modelID };
+}
+function updateSessionExecutionContext(info) {
+  const sessionID = info?.sessionID || info?.id;
+  if (typeof sessionID !== "string")
+    return;
+  const previous = sessionExecutionContexts.get(sessionID) || {};
+  const candidateAgent = info?.agent || (info?.role === "assistant" ? info?.mode : undefined);
+  const agent = typeof candidateAgent === "string" && candidateAgent !== LOCAL_COMMAND_AGENT ? candidateAgent : previous.agent;
+  const model = normalizedModelRef(info?.model) || normalizedModelRef(info) || previous.model;
+  sessionExecutionContexts.set(sessionID, { agent, model });
+}
+async function captureSessionExecutionContext(client, sessionID) {
+  if (client?.session?.get) {
+    try {
+      const info = await sdkCall(client.session.get.bind(client.session), { path: { id: sessionID } }, { path: { sessionID } }, { sessionID });
+      updateSessionExecutionContext(info);
+    } catch {}
+  }
+  const context = sessionExecutionContexts.get(sessionID) || {};
+  const normalized = { agent: context.agent || "build", model: context.model };
+  sessionExecutionContexts.set(sessionID, normalized);
+  return normalized;
+}
+function getSessionExecutionContext(sessionID) {
+  return sessionExecutionContexts.get(sessionID);
+}
+function setSessionExecutionContext(sessionID, context) {
+  sessionExecutionContexts.set(sessionID, context);
+  return context;
+}
+function deleteSessionExecutionContext(sessionID) {
+  sessionExecutionContexts.delete(sessionID);
+}
+
 // src/source/legacy-v1.js
 var SERVICE = "opencode-loop";
 var DEFAULT_ACTIVE_GUARD_MS = 45000;
@@ -658,11 +707,9 @@ var GOAL_PROMPT_PREFIX = "EXPERIMENTAL OPENCODE GOAL MODE ITERATION";
 var DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180000;
 var LOOP_OWNED_USER_MESSAGE_GUARD_MS = 1e4;
 var LOOP_OWNED_USER_MESSAGE_RETENTION_MS = 10 * 60000;
-var LOCAL_COMMAND_AGENT = "opencode-loop-local";
 var activeRuns = new Map;
 var handledCommands = new Map;
 var handledCommandEvents = new Map;
-var sessionExecutionContexts = new Map;
 var loopOwnedUserMessageGuards = new Map;
 var idleTimers = new Map;
 var dueTimers = new Map;
@@ -760,7 +807,7 @@ async function resolveCompactionModel(directory, client, sessionID, preferredMod
   const preferred = normalizedModelRef(preferredModel);
   if (preferred)
     return preferred;
-  const cached = normalizedModelRef(sessionExecutionContexts.get(sessionID)?.model);
+  const cached = normalizedModelRef(getSessionExecutionContext(sessionID)?.model);
   if (cached)
     return cached;
   const captured = await captureSessionExecutionContext(client, sessionID);
@@ -773,8 +820,8 @@ async function resolveCompactionModel(directory, client, sessionID, preferredMod
     const model = normalizedModelRef(info?.model) || normalizedModelRef(info);
     if (!model)
       continue;
-    const previous = sessionExecutionContexts.get(sessionID) || {};
-    sessionExecutionContexts.set(sessionID, { ...previous, model });
+    const previous = getSessionExecutionContext(sessionID) || {};
+    setSessionExecutionContext(sessionID, { ...previous, model });
     return model;
   }
   return;
@@ -932,41 +979,6 @@ function rememberSession(directory, client, sessionID) {
   knownSessions.set(sessionID, { directory, client, seenAt: now() });
   startHeartbeat();
 }
-function normalizedModelRef(model) {
-  if (typeof model === "string") {
-    const separator = model.indexOf("/");
-    if (separator > 0)
-      return { providerID: model.slice(0, separator), modelID: model.slice(separator + 1) };
-    return;
-  }
-  const providerID = model?.providerID;
-  const modelID = model?.modelID || model?.id;
-  if (typeof providerID !== "string" || typeof modelID !== "string")
-    return;
-  return { providerID, modelID };
-}
-function updateSessionExecutionContext(info) {
-  const sessionID = info?.sessionID || info?.id;
-  if (typeof sessionID !== "string")
-    return;
-  const previous = sessionExecutionContexts.get(sessionID) || {};
-  const candidateAgent = info?.agent || (info?.role === "assistant" ? info?.mode : undefined);
-  const agent = typeof candidateAgent === "string" && candidateAgent !== LOCAL_COMMAND_AGENT ? candidateAgent : previous.agent;
-  const model = normalizedModelRef(info?.model) || normalizedModelRef(info) || previous.model;
-  sessionExecutionContexts.set(sessionID, { agent, model });
-}
-async function captureSessionExecutionContext(client, sessionID) {
-  if (client?.session?.get) {
-    try {
-      const info = await sdkCall(client.session.get.bind(client.session), { path: { id: sessionID } }, { path: { sessionID } }, { sessionID });
-      updateSessionExecutionContext(info);
-    } catch {}
-  }
-  const context = sessionExecutionContexts.get(sessionID) || {};
-  const normalized = { agent: context.agent || "build", model: context.model };
-  sessionExecutionContexts.set(sessionID, normalized);
-  return normalized;
-}
 function hasActiveToolCalls(sessionID) {
   return (activeToolCalls.get(sessionID)?.size || 0) > 0;
 }
@@ -1004,7 +1016,7 @@ function updateSessionRelationship(info, removed = false) {
   if (!removed)
     updateSessionExecutionContext(info);
   else
-    sessionExecutionContexts.delete(sessionID);
+    deleteSessionExecutionContext(sessionID);
 }
 function updateSessionRelationshipFromEvent(event) {
   if (!["session.created", "session.updated", "session.deleted"].includes(event?.type))
@@ -1109,7 +1121,7 @@ function disposeRuntime(directory, client) {
     sessionParents.delete(sessionID);
     sessionStatuses.delete(sessionID);
     sessionStatusSeenAt.delete(sessionID);
-    sessionExecutionContexts.delete(sessionID);
+    deleteSessionExecutionContext(sessionID);
     loopCompactionRequests.delete(sessionID);
     for (const key of handledCommands.keys())
       if (key.startsWith(`${sessionID}:`))
@@ -2508,7 +2520,7 @@ async function addLoop(directory, client, sessionID, args, defaults = {}) {
     await toast(client, parsed.error, "warning");
     return;
   }
-  const executionContext = sessionExecutionContexts.get(sessionID) || { agent: "build" };
+  const executionContext = getSessionExecutionContext(sessionID) || { agent: "build" };
   parsed.job.agent = defaults.agent || executionContext.agent || "build";
   parsed.job.model = normalizedModelRef(defaults.model) || executionContext.model;
   if (defaults.testfixPreset) {
