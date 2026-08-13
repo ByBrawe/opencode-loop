@@ -23,7 +23,7 @@ jobs:
         run: opencode2 --version
       - name: List active V2 plugins
         working-directory: .v2-probe
-        run: opencode2 --cwd . api get /api/plugin | tee plugin-list.txt
+        run: opencode2 api -H "x-opencode-directory:$(pwd)" get /api/plugin | tee plugin-list.txt
       - name: Require Loop V2 sentinel
         working-directory: .v2-probe
         run: grep -F "bybrawe.loop.v2-probe" plugin-list.txt
