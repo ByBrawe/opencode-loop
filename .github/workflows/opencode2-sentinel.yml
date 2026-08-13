@@ -42,9 +42,10 @@ jobs:
         shell: bash
         run: |
           project="$RUNNER_TEMP/opencode2-loop-sentinel"
-          mkdir -p "$project"
-          plugin="$GITHUB_WORKSPACE/src/source/opencode2/experimental.js"
-          node -e 'const fs=require("fs"); const path=process.argv[1]; const plugin=process.argv[2]; fs.writeFileSync(path, JSON.stringify({plugins:[plugin]}, null, 2));' "$project/opencode.json" "$plugin"
+          mkdir -p "$project/.opencode/plugins"
+          git init -q "$project"
+          cp "$GITHUB_WORKSPACE/src/source/opencode2/experimental.js" "$project/.opencode/plugins/opencode-loop-v2.js"
+          ln -s "$GITHUB_WORKSPACE/node_modules" "$project/node_modules"
           echo "OPENCODE2_SENTINEL_PROJECT=$project" >> "$GITHUB_ENV"
 
       - name: Verify plugin activation in real OpenCode 2 host
@@ -62,4 +63,4 @@ jobs:
         shell: bash
         run: |
           log="$HOME/.local/share/opencode/log/opencode.log"
-          if [ -f "$log" ]; then tail -n 160 "$log"; fi
+          if [ -f "$log" ]; then tail -n 200 "$log"; fi
