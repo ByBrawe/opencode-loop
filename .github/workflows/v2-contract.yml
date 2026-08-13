@@ -1,0 +1,41 @@
+name: V2 Experimental Contract
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  v2-adapter-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install V2 plugin contract target
+        run: npm install --no-save --package-lock=false @opencode-ai/plugin@1.18.18
+
+      - name: Show V2 plugin package version
+        run: node -p "require('./node_modules/@opencode-ai/plugin/package.json').version"
+
+      - name: Verify V2 adapter contract
+        run: |
+          node --check src/source/opencode2/experimental.js
+          node --check test/v2-adapter.test.mjs
+          node test/v2-adapter.test.mjs
+          node scripts/session-manager-test.mjs
