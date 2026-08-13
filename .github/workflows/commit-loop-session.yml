@@ -33,3 +33,4 @@ jobs:
               try { sha = (await github.rest.repos.getContent({owner:context.repo.owner,repo:context.repo.repo,path,ref:'refactor-loop-session'})).data.sha } catch (e) { if (e.status !== 404) throw e }
               await github.rest.repos.createOrUpdateFileContents({owner:context.repo.owner,repo:context.repo.repo,path,branch:'refactor-loop-session',message:'refactor: extract session context cache',content:fs.readFileSync(path).toString('base64'),...(sha?{sha}:{})})
             }
+# jobs-artifact-pass
