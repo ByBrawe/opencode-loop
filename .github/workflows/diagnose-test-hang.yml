@@ -13,34 +13,27 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
-    runs-on: ubuntu-latest
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: v2-host-adapter-factory
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version: "24"
           cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
       - run: npm ci
-      - name: Prepare traced comprehensive test
+      - run: npm run check
+      - run: npm test
+      - name: Verify stable V1 bundle remains unchanged
         shell: bash
         run: |
-          cp scripts/comprehensive-test.mjs scripts/comprehensive-traced.mjs
-          node --input-type=module <<'NODE'
-          import fs from "node:fs"
-          const file = "scripts/comprehensive-traced.mjs"
-          let source = fs.readFileSync(file, "utf8")
-          source = source.replace(
-            /^await (test[A-Za-z0-9_]+)\(\)$/gm,
-            'console.error("START $1"); await $1(); console.error("END $1")',
-          )
-          fs.writeFileSync(file, source)
-          NODE
-      - name: Comprehensive traced stress
-        shell: bash
-        run: |
-          for i in $(seq 1 20); do
-            echo "=== shard ${{ matrix.shard }} comprehensive run $i ==="
-            timeout -k 2s 20s node scripts/comprehensive-traced.mjs
-          done
+          npm run build:plugin
+          git diff --exit-code -- src/index.js
+      - run: bun -e "await import('./src/index.js')"
