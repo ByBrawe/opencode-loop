@@ -2,7 +2,7 @@ name: Probe OpenCode V2 Contract
 
 on:
   push:
-    branches: [probe-opencode-v2-contract]
+    branches: [probe-opencode-v2-discovery]
   workflow_dispatch:
 
 permissions:
