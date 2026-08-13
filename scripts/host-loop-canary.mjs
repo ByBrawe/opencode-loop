@@ -213,6 +213,20 @@ async function waitFor(predicate, description, diagnostics, timeoutMs = 45_000) 
   throw new Error(`timed out waiting for ${description}\n${diagnostics()}`)
 }
 
+function isFetchTimeout(error) {
+  return error?.name === "TimeoutError" || /aborted due to timeout/i.test(String(error?.message ?? error))
+}
+
+async function bootstrapSessions(api, diagnostics) {
+  try {
+    return await api("/session", { method: "GET", signal: AbortSignal.timeout(30_000) })
+  } catch (error) {
+    if (!isFetchTimeout(error)) throw error
+    console.error(`OpenCode session API was not ready after 30s; retrying once.\n${diagnostics()}`)
+    return await api("/session", { method: "GET", signal: AbortSignal.timeout(45_000) })
+  }
+}
+
 async function main() {
   const workspace = await mkdtemp(path.join(os.tmpdir(), "opencode-loop-host-canary-"))
   const home = path.join(workspace, ".home")
@@ -286,7 +300,7 @@ async function main() {
       try { return JSON.parse(text) } catch { return text }
     }
 
-    const sessionsBefore = await api("/session", { method: "GET", signal: AbortSignal.timeout(45_000) })
+    const sessionsBefore = await bootstrapSessions(api, () => `server log:\n${serverLog}`)
     assert.ok(Array.isArray(sessionsBefore?.data ?? sessionsBefore), "GET /session bootstrap did not return an array")
     const createdPayload = await api("/session", { method: "POST", body: JSON.stringify({ title: "opencode-loop host canary" }) })
     const session = createdPayload?.data ?? createdPayload
