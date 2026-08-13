@@ -52,7 +52,8 @@ jobs:
         run: |
           cd "$OPENCODE2_SENTINEL_PROJECT"
           opencode2 service stop >/dev/null 2>&1 || true
-          output="$(opencode2 api get /api/plugin)"
+          request="$(node -e 'const d=encodeURIComponent(process.argv[1]); console.log(`/api/plugin?directory=${d}&location%5Bdirectory%5D=${d}`)' "$OPENCODE2_SENTINEL_PROJECT")"
+          output="$(opencode2 api get "$request")"
           printf '%s\n' "$output"
           printf '%s\n' "$output" | grep -F 'bybrawe.opencode-loop.v2'
 
@@ -61,4 +62,4 @@ jobs:
         shell: bash
         run: |
           log="$HOME/.local/share/opencode/log/opencode.log"
-          if [ -f "$log" ]; then tail -n 120 "$log"; fi
+          if [ -f "$log" ]; then tail -n 160 "$log"; fi
