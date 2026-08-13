@@ -2,7 +2,7 @@ import { DEFAULT_SESSION_STALE_MS, createSessionRegistry } from "./session-regis
 import { createRuntimeScope } from "./scope.js"
 import { createRuntimeTimers } from "./timers.js"
 
-function createSessionRuntime(sessionID, timerAPI) {
+function defaultRuntimeFactory({ sessionID, timerAPI }) {
   const scope = createRuntimeScope()
   return Object.freeze({
     sessionID,
@@ -12,21 +12,32 @@ function createSessionRuntime(sessionID, timerAPI) {
   })
 }
 
+function validateRuntime(runtime, sessionID) {
+  if (!runtime || runtime.sessionID !== sessionID) throw new TypeError("session runtime factory must preserve the session ID")
+  if (typeof runtime?.scope?.isActive !== "function") throw new TypeError("session runtime factory must provide an active scope")
+  if (typeof runtime.dispose !== "function") throw new TypeError("session runtime factory must provide dispose()")
+  return runtime
+}
+
 export function createSessionRuntimeManager({
   now = Date.now,
   staleAfterMs = DEFAULT_SESSION_STALE_MS,
   timerAPI = globalThis,
+  runtimeFactory = defaultRuntimeFactory,
 } = {}) {
+  if (typeof runtimeFactory !== "function") throw new TypeError("session runtime manager requires a runtime factory")
   const registry = createSessionRegistry({ now, staleAfterMs })
   let disposed = false
 
   function observeExternal(sessionID) {
     if (disposed) throw new Error("session runtime manager is disposed")
-    const current = registry.peek(sessionID)
+    const key = String(sessionID || "").trim()
+    if (!key) throw new TypeError("session runtime manager requires a session ID")
+    const current = registry.peek(key)
     const runtime = current?.runtime?.scope?.isActive?.()
       ? current.runtime
-      : createSessionRuntime(String(sessionID || "").trim(), timerAPI)
-    registry.observeExternal(sessionID, runtime)
+      : validateRuntime(runtimeFactory({ sessionID: key, timerAPI }), key)
+    registry.observeExternal(key, runtime)
     return runtime
   }
 
