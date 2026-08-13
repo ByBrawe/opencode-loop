@@ -1,0 +1,58 @@
+name: Single-file Bundle Gate
+
+on:
+  pull_request:
+    paths:
+      - "src/source/**"
+      - ".github/workflows/bundle-gate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bundled-host:
+    name: bundled Loop host (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: npm ci
+
+      - name: Build a single-file stable plugin from source
+        run: bun build src/source/v1.js --outfile=src/index.js --target=bun --format=esm --external=@opencode-ai/plugin/tool
+
+      - name: Verify generated entry syntax and tests
+        run: |
+          node --check src/index.js
+          npm test
+          bun -e "await import('./src/index.js')"
+
+      - name: Install current OpenCode CLI
+        run: npm install --no-save --package-lock=false opencode-ai@latest
+
+      - name: Show OpenCode version
+        run: npx --no-install opencode --version
+
+      - name: Run real-host canary against generated bundle
+        run: node scripts/host-loop-canary.mjs
+        env:
+          OPENCODE_PRINT_LOGS: "1"
+          OPENCODE_LOG_LEVEL: DEBUG
