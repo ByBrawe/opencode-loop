@@ -20,11 +20,6 @@ jobs:
   activation:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      HOME: ${{ runner.temp }}/opencode2-home
-      XDG_CONFIG_HOME: ${{ runner.temp }}/opencode2-home/.config
-      XDG_DATA_HOME: ${{ runner.temp }}/opencode2-home/.local/share
-      XDG_STATE_HOME: ${{ runner.temp }}/opencode2-home/.local/state
     steps:
       - uses: actions/checkout@v6
         with:
@@ -34,6 +29,14 @@ jobs:
         with:
           node-version: "24"
           cache: npm
+
+      - name: Initialize isolated OpenCode 2 paths
+        shell: bash
+        run: |
+          echo "HOME=$RUNNER_TEMP/opencode2-home" >> "$GITHUB_ENV"
+          echo "XDG_CONFIG_HOME=$RUNNER_TEMP/opencode2-home/.config" >> "$GITHUB_ENV"
+          echo "XDG_DATA_HOME=$RUNNER_TEMP/opencode2-home/.local/share" >> "$GITHUB_ENV"
+          echo "XDG_STATE_HOME=$RUNNER_TEMP/opencode2-home/.local/state" >> "$GITHUB_ENV"
 
       - run: npm ci
 
