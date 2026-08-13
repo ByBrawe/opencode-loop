@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: v2-session-registry
+          ref: v2-runtime-scope
           persist-credentials: false
       - uses: actions/setup-node@v6
         with:
@@ -30,11 +30,14 @@ jobs:
           bun-version: latest
       - run: npm ci
       - run: npm run check
-      - name: Verify V2 session registry contract
+      - name: Verify V2 runtime contracts
         run: |
           node --check src/source/runtime/session-registry.js
+          node --check src/source/runtime/scope.js
           node --check scripts/runtime-contract-test.mjs
+          node --check scripts/runtime-scope-test.mjs
           node scripts/runtime-contract-test.mjs
+          node scripts/runtime-scope-test.mjs
       - run: npm test
       - name: Verify stable V1 bundle remains unchanged
         shell: bash
