@@ -1,8 +1,7 @@
 // @bun
 // src/source/legacy-v1.js
-import { promises as fs } from "fs";
-import os from "os";
-import path from "path";
+import { promises as fs2 } from "fs";
+import path2 from "path";
 import { spawn } from "child_process";
 import { tool } from "@opencode-ai/plugin/tool";
 
@@ -378,69 +377,13 @@ function parseLoopArgs(raw, defaults = {}) {
   return { ok: true, job };
 }
 
-// src/source/legacy-v1.js
-var SERVICE = "opencode-loop";
+// src/source/core/state.js
+import { promises as fs } from "fs";
+import os from "os";
+import path from "path";
 var STATE_DIR = ".opencode/opencode-loop";
-var DEFAULT_ACTIVE_GUARD_MS = 45000;
-var STALE_ACTIVE_RECOVERY_MS = 45000;
-var IDLE_DEBOUNCE_MS = 1200;
-var BUSY_RETRY_MS = 5000;
-var SESSION_STATUS_CACHE_MS = 1500;
-var MIN_DUE_TIMER_MS = 250;
-var MAX_DUE_TIMER_MS = 2147000000;
-var HEARTBEAT_MS = 2500;
-var MAX_SCAN_FILES = 200;
-var MAX_SCAN_BYTES = 2000000;
-var GOAL_REPORT_DIR = "goals";
-var GOAL_PROMPT_PREFIX = "EXPERIMENTAL OPENCODE GOAL MODE ITERATION";
-var DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180000;
-var LOOP_OWNED_USER_MESSAGE_GUARD_MS = 1e4;
-var LOOP_OWNED_USER_MESSAGE_RETENTION_MS = 10 * 60000;
-var LOCAL_COMMAND_AGENT = "opencode-loop-local";
 var STATE_BASELINE = Symbol("opencode-loop-state-baseline");
-var activeRuns = new Map;
-var handledCommands = new Map;
-var handledCommandEvents = new Map;
-var sessionExecutionContexts = new Map;
-var loopOwnedUserMessageGuards = new Map;
-var idleTimers = new Map;
-var dueTimers = new Map;
-var watchdogTimers = new Map;
-var runLocks = new Map;
-var knownSessions = new Map;
 var stateWriteLocks = new Map;
-var activeToolCalls = new Map;
-var sessionParents = new Map;
-var heartbeatTimer;
-var sessionStatuses = new Map;
-var sessionStatusSeenAt = new Map;
-var loopCompactionRequests = new Map;
-var DEFAULT_PROGRESS_MD = `# Progress
-
-## Current Goal
-Describe the current project goal here.
-
-## Agent Rules
-- Do not ask questions unless truly blocked.
-- Make reasonable assumptions and continue.
-- Work on unfinished TODOs in order.
-- Mark completed TODOs with [x].
-- Add new bugs, ideas, and follow-up work as TODOs.
-- Run tests, lint, or build when available.
-- Do not run destructive commands, force pushes, production deploys, or database resets.
-
-## Active TODO
-- [ ] Review the project structure and pick the next safe improvement.
-
-## Completed
-- [x] Created progress.md.
-
-## Backlog Ideas
-- [ ] Add more project-specific tasks here.
-
-## Blocked
-- None.
-`;
 function stateDir(directory) {
   return path.join(directory, STATE_DIR);
 }
@@ -650,6 +593,67 @@ async function removeState(directory, sessionID) {
     } catch {}
   });
 }
+
+// src/source/legacy-v1.js
+var SERVICE = "opencode-loop";
+var DEFAULT_ACTIVE_GUARD_MS = 45000;
+var STALE_ACTIVE_RECOVERY_MS = 45000;
+var IDLE_DEBOUNCE_MS = 1200;
+var BUSY_RETRY_MS = 5000;
+var SESSION_STATUS_CACHE_MS = 1500;
+var MIN_DUE_TIMER_MS = 250;
+var MAX_DUE_TIMER_MS = 2147000000;
+var HEARTBEAT_MS = 2500;
+var MAX_SCAN_FILES = 200;
+var MAX_SCAN_BYTES = 2000000;
+var GOAL_REPORT_DIR = "goals";
+var GOAL_PROMPT_PREFIX = "EXPERIMENTAL OPENCODE GOAL MODE ITERATION";
+var DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180000;
+var LOOP_OWNED_USER_MESSAGE_GUARD_MS = 1e4;
+var LOOP_OWNED_USER_MESSAGE_RETENTION_MS = 10 * 60000;
+var LOCAL_COMMAND_AGENT = "opencode-loop-local";
+var activeRuns = new Map;
+var handledCommands = new Map;
+var handledCommandEvents = new Map;
+var sessionExecutionContexts = new Map;
+var loopOwnedUserMessageGuards = new Map;
+var idleTimers = new Map;
+var dueTimers = new Map;
+var watchdogTimers = new Map;
+var runLocks = new Map;
+var knownSessions = new Map;
+var activeToolCalls = new Map;
+var sessionParents = new Map;
+var heartbeatTimer;
+var sessionStatuses = new Map;
+var sessionStatusSeenAt = new Map;
+var loopCompactionRequests = new Map;
+var DEFAULT_PROGRESS_MD = `# Progress
+
+## Current Goal
+Describe the current project goal here.
+
+## Agent Rules
+- Do not ask questions unless truly blocked.
+- Make reasonable assumptions and continue.
+- Work on unfinished TODOs in order.
+- Mark completed TODOs with [x].
+- Add new bugs, ideas, and follow-up work as TODOs.
+- Run tests, lint, or build when available.
+- Do not run destructive commands, force pushes, production deploys, or database resets.
+
+## Active TODO
+- [ ] Review the project structure and pick the next safe improvement.
+
+## Completed
+- [x] Created progress.md.
+
+## Backlog Ideas
+- [ ] Add more project-specific tasks here.
+
+## Blocked
+- None.
+`;
 function sdkError(result) {
   if (!result || typeof result !== "object")
     return;
@@ -1161,16 +1165,16 @@ function matchJob(job, target, index) {
 async function appendLoopLog(directory, line, extra = {}) {
   try {
     await ensureDir(stateDir(directory));
-    await fs.appendFile(path.join(stateDir(directory), "loop.log"), JSON.stringify({ time: new Date().toISOString(), line, ...extra }) + `
+    await fs2.appendFile(path2.join(stateDir(directory), "loop.log"), JSON.stringify({ time: new Date().toISOString(), line, ...extra }) + `
 `);
   } catch {}
 }
 async function readSmallTextFile(filePath, maxBytes = 120000) {
   try {
-    const stat = await fs.stat(filePath);
+    const stat = await fs2.stat(filePath);
     if (!stat.isFile() || stat.size > maxBytes)
       return "";
-    return await fs.readFile(filePath, "utf8");
+    return await fs2.readFile(filePath, "utf8");
   } catch {
     return "";
   }
@@ -1306,14 +1310,14 @@ function goalStatusText(job) {
 async function buildGoalPrompt(directory, job) {
   const sections = [];
   sections.push(`Working directory:
-${path.resolve(directory)}
+${path2.resolve(directory)}
 Keep every file operation inside this directory. Prefer workspace-relative paths such as "src/index.js"; never turn a relative path into a root path such as "/src/index.js".`);
   const objective = String(job.action || "").trim();
   if (objective)
     sections.push(`Goal objective:
 ${objective}`);
   if (job.goalFile) {
-    const text = await readSmallTextFile(path.resolve(directory, job.goalFile), 120000);
+    const text = await readSmallTextFile(path2.resolve(directory, job.goalFile), 120000);
     if (text.trim())
       sections.push(`Goal file ${job.goalFile}:
 ${text.trim()}`);
@@ -1321,7 +1325,7 @@ ${text.trim()}`);
       sections.push(`Goal file ${job.goalFile} was requested but could not be read. Continue from the inline goal objective.`);
   }
   if (job.promptFile) {
-    const text = await readSmallTextFile(path.resolve(directory, job.promptFile), 120000);
+    const text = await readSmallTextFile(path2.resolve(directory, job.promptFile), 120000);
     if (text.trim())
       sections.push(`Extra goal instructions from ${job.promptFile}:
 ${text.trim()}`);
@@ -1354,7 +1358,7 @@ ${job.noProgressCount || 0}/${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS}
 ` + job.goalProgress.slice(-5).map((item) => `- ${item.time}: ${item.summary}`).join(`
 `));
   for (const file of job.includeFiles || []) {
-    const text = await readSmallTextFile(path.resolve(directory, file), 80000);
+    const text = await readSmallTextFile(path2.resolve(directory, file), 80000);
     if (text.trim())
       sections.push(`Context from ${file}:
 ${text.trim().slice(0, 20000)}`);
@@ -1388,7 +1392,7 @@ async function buildPrompt(directory, job) {
     return await buildGoalPrompt(directory, job);
   const sections = [];
   if (job.promptFile) {
-    const text = await readSmallTextFile(path.resolve(directory, job.promptFile));
+    const text = await readSmallTextFile(path2.resolve(directory, job.promptFile));
     if (text.trim())
       sections.push(`Instructions from ${job.promptFile}:
 ${text.trim()}`);
@@ -1398,7 +1402,7 @@ ${text.trim()}`);
   if (job.action)
     sections.push(decoratePrompt(job));
   for (const file of job.includeFiles || []) {
-    const text = await readSmallTextFile(path.resolve(directory, file), 80000);
+    const text = await readSmallTextFile(path2.resolve(directory, file), 80000);
     if (text.trim())
       sections.push(`Context from ${file}:
 ${text.trim().slice(0, 20000)}`);
@@ -1444,7 +1448,7 @@ async function snapshotPaths(directory, files) {
   const snapshot = {};
   for (const file of files || []) {
     try {
-      const stat = await fs.stat(path.resolve(directory, file));
+      const stat = await fs2.stat(path2.resolve(directory, file));
       snapshot[file] = `${stat.mtimeMs}:${stat.size}`;
     } catch {
       snapshot[file] = "missing";
@@ -1464,10 +1468,10 @@ async function watchChanged(directory, job) {
 }
 async function fileContains(filePath, needle) {
   try {
-    const stat = await fs.stat(filePath);
+    const stat = await fs2.stat(filePath);
     if (!stat.isFile() || stat.size > MAX_SCAN_BYTES)
       return false;
-    return (await fs.readFile(filePath, "utf8")).includes(needle);
+    return (await fs2.readFile(filePath, "utf8")).includes(needle);
   } catch {
     return false;
   }
@@ -1475,9 +1479,9 @@ async function fileContains(filePath, needle) {
 async function untilReached(directory, job) {
   if (!job.until)
     return false;
-  const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path.join(".opencode", "opencode-loop", "until.txt")];
+  const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path2.join(".opencode", "opencode-loop", "until.txt")];
   for (const file of files)
-    if (await fileContains(path.resolve(directory, file), job.until))
+    if (await fileContains(path2.resolve(directory, file), job.until))
       return true;
   let scanned = 0;
   async function walk(current) {
@@ -1485,7 +1489,7 @@ async function untilReached(directory, job) {
       return false;
     let entries;
     try {
-      entries = await fs.readdir(current, { withFileTypes: true });
+      entries = await fs2.readdir(current, { withFileTypes: true });
     } catch {
       return false;
     }
@@ -1494,7 +1498,7 @@ async function untilReached(directory, job) {
         return false;
       if ([".git", "node_modules", "dist", "build", ".next", "coverage"].includes(entry.name))
         continue;
-      const full = path.join(current, entry.name);
+      const full = path2.join(current, entry.name);
       if (entry.isDirectory()) {
         if (await walk(full))
           return true;
@@ -1518,13 +1522,13 @@ async function createCheckpoint(directory, sessionID, job, client) {
   if (!status.stdout.trim())
     return;
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const checkpointDir = path.join(stateDir(directory), "checkpoints", safeID(sessionID));
+  const checkpointDir = path2.join(stateDir(directory), "checkpoints", safeID(sessionID));
   await ensureDir(checkpointDir);
   const diff = await runProcess("git", ["diff", "--binary"], directory, 120000);
   const staged = await runProcess("git", ["diff", "--cached", "--binary"], directory, 120000);
   const prefix = `${timestamp}-${safeID(job.name || job.id)}`;
-  await fs.writeFile(path.join(checkpointDir, `${prefix}.status.txt`), status.stdout + status.stderr);
-  await fs.writeFile(path.join(checkpointDir, `${prefix}.patch`), `${diff.stdout}
+  await fs2.writeFile(path2.join(checkpointDir, `${prefix}.status.txt`), status.stdout + status.stderr);
+  await fs2.writeFile(path2.join(checkpointDir, `${prefix}.patch`), `${diff.stdout}
 ${staged.stdout}`);
   if (job.gitCheckpoint) {
     await runProcess("git", ["add", "-A"], directory, 120000);
@@ -1910,7 +1914,7 @@ async function recoverActiveDispatchFailure(directory, client, sessionID, jobId,
   return true;
 }
 function goalReportPath(directory, sessionID, job) {
-  return path.join(stateDir(directory), GOAL_REPORT_DIR, `${safeID(sessionID)}-${safeID(job.name || job.id)}.md`);
+  return path2.join(stateDir(directory), GOAL_REPORT_DIR, `${safeID(sessionID)}-${safeID(job.name || job.id)}.md`);
 }
 function goalReportText(job) {
   const lines = [];
@@ -1964,9 +1968,9 @@ function goalReportText(job) {
 async function writeGoalReport(directory, sessionID, job) {
   if (!isGoalJob(job))
     return;
-  const target = job.goalEvidenceFile ? path.resolve(directory, job.goalEvidenceFile) : goalReportPath(directory, sessionID, job);
-  await ensureDir(path.dirname(target));
-  await fs.writeFile(target, goalReportText(job), "utf8");
+  const target = job.goalEvidenceFile ? path2.resolve(directory, job.goalEvidenceFile) : goalReportPath(directory, sessionID, job);
+  await ensureDir(path2.dirname(target));
+  await fs2.writeFile(target, goalReportText(job), "utf8");
 }
 function pickGoalJob(state, target = "") {
   const goals = (state.jobs || []).filter(isGoalJob);
@@ -2361,7 +2365,7 @@ async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
       await reschedule();
       return;
     }
-    if (job.stopFile && await pathExists(path.resolve(directory, job.stopFile))) {
+    if (job.stopFile && await pathExists(path2.resolve(directory, job.stopFile))) {
       state.jobs = (state.jobs || []).filter((candidate) => candidate.id !== job.id);
       await writeState(directory, sessionID, state);
       await notifyJob(directory, job, "stop_file");
@@ -2673,7 +2677,7 @@ async function statusLoop(directory, client, sessionID) {
 async function logsLoop(directory, client, sessionID) {
   let text = "No loop log found.";
   try {
-    text = (await fs.readFile(path.join(stateDir(directory), "loop.log"), "utf8")).trim().split(/\r?\n/).slice(-80).join(`
+    text = (await fs2.readFile(path2.join(stateDir(directory), "loop.log"), "utf8")).trim().split(/\r?\n/).slice(-80).join(`
 `) || text;
   } catch {}
   await say(client, sessionID, `OpenCode loop logs:
@@ -2729,12 +2733,12 @@ async function doctorLoop(directory, client, sessionID) {
 }
 async function initLoop(directory, client, sessionID, args) {
   const target = String(args || "").trim() || "progress.md";
-  const full = path.resolve(directory, target);
+  const full = path2.resolve(directory, target);
   if (await pathExists(full)) {
     await toast(client, `${target} already exists.`, "warning");
     return;
   }
-  await fs.writeFile(full, DEFAULT_PROGRESS_MD, "utf8");
+  await fs2.writeFile(full, DEFAULT_PROGRESS_MD, "utf8");
   await toast(client, `Created ${target}.`, "success");
   await appendLoopLog(directory, "init", { sessionID, file: target });
 }
