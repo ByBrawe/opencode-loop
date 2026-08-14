@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/v2-host-activation.yml"
+      - "scripts/opencode2-host-canary.mjs"
 
 permissions:
   contents: read
