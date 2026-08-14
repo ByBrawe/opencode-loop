@@ -21,6 +21,9 @@ jobs:
         run: npm install -g @opencode-ai/cli@next
       - name: Show V2 version
         run: opencode2 --version
+      - name: Warm V2 location
+        working-directory: .v2-probe
+        run: opencode2 api -H "x-opencode-directory:$(pwd)" get /api/plugin
       - name: List active V2 plugins
         working-directory: .v2-probe
         run: opencode2 api -H "x-opencode-directory:$(pwd)" get /api/plugin | tee plugin-list.txt
