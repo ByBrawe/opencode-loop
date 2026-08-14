@@ -3,14 +3,15 @@ import path from "node:path"
 import { spawn } from "node:child_process"
 import { tool } from "@opencode-ai/plugin/tool"
 import { DEFAULT_GOAL_MAX_NO_PROGRESS, now, safeID, parseDuration, durationToText, splitFirst, stripOuterQuotes, escapeRegExp, takeFlag, takeFlagValue, takeAllFlagValues, parsePositiveInt, parseNonNegativeInt, parseCompactEvery, parseLoopArgs } from "./core/args.js"
-import { presetDefaults, jobLabel, matchJob, actionKind, decoratePrompt, isGoalJob, goalStatusText } from "./core/jobs.js"
+import { jobLabel, matchJob, actionKind, decoratePrompt, isGoalJob, goalStatusText } from "./core/jobs.js"
 import { stateDir, ensureDir, pathExists, readState, writeState, removeState } from "./core/state.js"
 import { appendLoopLog, readSmallTextFile, runProcess, runShellCommand, notifyJob } from "./core/process.js"
 import { sdkErrorMessage, sdkCall } from "./opencode/sdk.js"
-import { normalizedModelRef, updateSessionExecutionContext, captureSessionExecutionContext, getSessionExecutionContext, setSessionExecutionContext } from "./opencode/session-context.js"
+import { normalizedModelRef, updateSessionExecutionContext, getSessionExecutionContext, setSessionExecutionContext } from "./opencode/session-context.js"
 import { fireSdk, executeTuiCommand, compactTuiCommandName, readRecentSessionMessages, orderedSessionMessages, activeRunCompletionFromMessages, resolveCompactionModel, compactSession, log, toast } from "./opencode/host.js"
 import { guardLoopOwnedUserMessage, loopOwnedUserMessageGuardActive, say, clearLoopOwnedUserMessageGuard } from "./opencode/messages.js"
-import { markHandled, consumeHandled, hasHandledCommandEvent, markHandledCommandEvent, forgetHandledCommandEvent, clearCommandLifecycle, commandName, isPreset, isLoopCommandName, commandArgsText } from "./opencode/commands.js"
+import { clearCommandLifecycle } from "./opencode/commands.js"
+import { createCommandRouter } from "./opencode/command-router.js"
 import { activeToolCalls, sessionParents, sessionStatuses, sessionStatusSeenAt, hasActiveToolCalls, markToolCallActive, markToolCallFinished, updateSessionRelationshipFromEvent, isDescendantSession, hasBusyDescendant, refreshSessionRelationships, updateToolActivityFromEvent, clearSessionActivity } from "./runtime/session-activity.js"
 import { createSchedulerRuntime } from "./runtime/scheduler.js"
 import { buildGoalPrompt, writeGoalReport, setGoalComplete, setGoalBlocked, setGoalProgress } from "./runtime/goal-runtime.js"
@@ -74,6 +75,29 @@ const schedulerRuntime = createSchedulerRuntime({
   errorMessage: sdkErrorMessage,
 })
 const { rememberSession, scheduleIdleWork, scheduleDueWork, stopWatchdog, cancelDueWork } = schedulerRuntime
+
+const handleCommand = createCommandRouter({
+  rememberSession,
+  handlers: {
+    addGoal,
+    statusGoal,
+    pauseGoal,
+    resumeGoal,
+    clearGoal,
+    completeGoalCommand,
+    blockGoalCommand,
+    addLoop,
+    stopLoop,
+    statusLoop,
+    logsLoop,
+    helpLoop,
+    runNow,
+    updateJobState,
+    doctorLoop,
+    initLoop,
+    exportLoop,
+  },
+})
 
 function disposeRuntime(directory, client) {
   const sessions = schedulerRuntime.sessionIDsForHost(directory, client)
@@ -1057,58 +1081,6 @@ async function initLoop(directory, client, sessionID, args) {
 async function exportLoop(directory, client, sessionID) {
   const state = await readState(directory, sessionID)
   await say(client, sessionID, "OpenCode loop state export:\n```json\n" + JSON.stringify(state, null, 2) + "\n```")
-}
-
-async function handleCommand(directory, client, input, fallbackName, fallbackArgs, output, source = "before") {
-  const name = commandName(input?.command ?? input?.name ?? fallbackName)
-  const sessionID = input?.sessionID
-  const args = commandArgsText(input?.arguments ?? fallbackArgs ?? "")
-  if (!sessionID || !name) return false
-  rememberSession(directory, client, sessionID)
-  if (isLoopCommandName(name)) await captureSessionExecutionContext(client, sessionID)
-  if (source === "event") {
-    if (consumeHandled(sessionID, name, args)) return true
-    if (hasHandledCommandEvent(sessionID, input?.messageID)) return true
-    markHandledCommandEvent(sessionID, input?.messageID)
-  } else {
-    // Every before-hook invocation is an intentional command. Keep a pending
-    // count only so the matching command.executed compatibility event can be
-    // consumed without suppressing a genuine repeated command.
-    markHandled(sessionID, name, args)
-  }
-  if (isLoopCommandName(name)) guardLoopOwnedUserMessage(sessionID)
-
-  const handled = () => {
-    // OpenCode 1.18.x ignores unknown hook output fields, while proposed/newer
-    // hosts can honor noReply to skip the otherwise unavoidable model turn.
-    // Keep acknowledgement parts intact as the compatibility fallback.
-    if (output && typeof output === "object") output.noReply = true
-    return true
-  }
-
-  if (name === "loop-goal") return await addGoal(directory, client, sessionID, args), handled()
-  if (name === "loop-goal-status") return await statusGoal(directory, client, sessionID), handled()
-  if (name === "loop-goal-pause") return await pauseGoal(directory, client, sessionID, args), handled()
-  if (name === "loop-goal-resume") return await resumeGoal(directory, client, sessionID, args), handled()
-  if (name === "loop-goal-clear") return await clearGoal(directory, client, sessionID, args), handled()
-  if (name === "loop-goal-done" || name === "loop-goal-complete") return await completeGoalCommand(directory, client, sessionID, args), handled()
-  if (name === "loop-goal-blocked") return await blockGoalCommand(directory, client, sessionID, args), handled()
-  if (name === "loop") return await addLoop(directory, client, sessionID, args), handled()
-  if (isPreset(name)) return await addLoop(directory, client, sessionID, args, presetDefaults(name, args)), handled()
-  if (name === "loop-stop" || name === "loop-remove") return await stopLoop(directory, client, sessionID, args), handled()
-  if (name === "loop-clear") return await stopLoop(directory, client, sessionID, "all"), handled()
-  if (name === "loop-status") return await statusLoop(directory, client, sessionID), handled()
-  if (name === "loop-logs") return await logsLoop(directory, client, sessionID), handled()
-  if (name === "loop-help") return await helpLoop(client, sessionID), handled()
-  if (name === "loop-now") return await runNow(directory, client, sessionID, args), handled()
-  if (name === "loop-pause") return await updateJobState(directory, client, sessionID, args, (job) => ({ ...job, paused: true }), "Paused"), handled()
-  if (name === "loop-resume") return await updateJobState(directory, client, sessionID, args, (job) => ({ ...job, paused: false, lastRunAt: 0 }), "Resumed"), handled()
-  if (name === "loop-doctor") return await doctorLoop(directory, client, sessionID), handled()
-  if (name === "loop-init") return await initLoop(directory, client, sessionID, args), handled()
-  if (name === "loop-export") return await exportLoop(directory, client, sessionID), handled()
-  if (source === "event") forgetHandledCommandEvent(sessionID, input?.messageID)
-  else consumeHandled(sessionID, name, args)
-  return false
 }
 
 function goalTools(defaultDirectory) {

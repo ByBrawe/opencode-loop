@@ -1125,6 +1125,111 @@ function commandArgsText(args) {
   return String(args);
 }
 
+// src/source/opencode/command-router.js
+var HANDLER_NAMES = [
+  "addGoal",
+  "statusGoal",
+  "pauseGoal",
+  "resumeGoal",
+  "clearGoal",
+  "completeGoalCommand",
+  "blockGoalCommand",
+  "addLoop",
+  "stopLoop",
+  "statusLoop",
+  "logsLoop",
+  "helpLoop",
+  "runNow",
+  "updateJobState",
+  "doctorLoop",
+  "initLoop",
+  "exportLoop"
+];
+function requireFunction(value, name) {
+  if (typeof value !== "function")
+    throw new TypeError(`createCommandRouter requires ${name}`);
+  return value;
+}
+function createCommandRouter(options = {}) {
+  const rememberSession = requireFunction(options.rememberSession, "rememberSession");
+  const captureSessionExecutionContext2 = typeof options.captureSessionExecutionContext === "function" ? options.captureSessionExecutionContext : captureSessionExecutionContext;
+  const guardLoopOwnedUserMessage2 = typeof options.guardLoopOwnedUserMessage === "function" ? options.guardLoopOwnedUserMessage : guardLoopOwnedUserMessage;
+  const handlers = {};
+  for (const name of HANDLER_NAMES)
+    handlers[name] = requireFunction(options.handlers?.[name], `handlers.${name}`);
+  return async function handleCommand(directory, client, input, fallbackName, fallbackArgs, output, source = "before") {
+    const name = commandName(input?.command ?? input?.name ?? fallbackName);
+    const sessionID = input?.sessionID;
+    const args = commandArgsText(input?.arguments ?? fallbackArgs ?? "");
+    if (!sessionID || !name)
+      return false;
+    rememberSession(directory, client, sessionID);
+    if (isLoopCommandName(name))
+      await captureSessionExecutionContext2(client, sessionID);
+    if (source === "event") {
+      if (consumeHandled(sessionID, name, args))
+        return true;
+      if (hasHandledCommandEvent(sessionID, input?.messageID))
+        return true;
+      markHandledCommandEvent(sessionID, input?.messageID);
+    } else {
+      markHandled(sessionID, name, args);
+    }
+    if (isLoopCommandName(name))
+      guardLoopOwnedUserMessage2(sessionID);
+    const handled = () => {
+      if (output && typeof output === "object")
+        output.noReply = true;
+      return true;
+    };
+    if (name === "loop-goal")
+      return await handlers.addGoal(directory, client, sessionID, args), handled();
+    if (name === "loop-goal-status")
+      return await handlers.statusGoal(directory, client, sessionID), handled();
+    if (name === "loop-goal-pause")
+      return await handlers.pauseGoal(directory, client, sessionID, args), handled();
+    if (name === "loop-goal-resume")
+      return await handlers.resumeGoal(directory, client, sessionID, args), handled();
+    if (name === "loop-goal-clear")
+      return await handlers.clearGoal(directory, client, sessionID, args), handled();
+    if (name === "loop-goal-done" || name === "loop-goal-complete")
+      return await handlers.completeGoalCommand(directory, client, sessionID, args), handled();
+    if (name === "loop-goal-blocked")
+      return await handlers.blockGoalCommand(directory, client, sessionID, args), handled();
+    if (name === "loop")
+      return await handlers.addLoop(directory, client, sessionID, args), handled();
+    if (isPreset(name))
+      return await handlers.addLoop(directory, client, sessionID, args, presetDefaults(name, args)), handled();
+    if (name === "loop-stop" || name === "loop-remove")
+      return await handlers.stopLoop(directory, client, sessionID, args), handled();
+    if (name === "loop-clear")
+      return await handlers.stopLoop(directory, client, sessionID, "all"), handled();
+    if (name === "loop-status")
+      return await handlers.statusLoop(directory, client, sessionID), handled();
+    if (name === "loop-logs")
+      return await handlers.logsLoop(directory, client, sessionID), handled();
+    if (name === "loop-help")
+      return await handlers.helpLoop(client, sessionID), handled();
+    if (name === "loop-now")
+      return await handlers.runNow(directory, client, sessionID, args), handled();
+    if (name === "loop-pause")
+      return await handlers.updateJobState(directory, client, sessionID, args, (job) => ({ ...job, paused: true }), "Paused"), handled();
+    if (name === "loop-resume")
+      return await handlers.updateJobState(directory, client, sessionID, args, (job) => ({ ...job, paused: false, lastRunAt: 0 }), "Resumed"), handled();
+    if (name === "loop-doctor")
+      return await handlers.doctorLoop(directory, client, sessionID), handled();
+    if (name === "loop-init")
+      return await handlers.initLoop(directory, client, sessionID, args), handled();
+    if (name === "loop-export")
+      return await handlers.exportLoop(directory, client, sessionID), handled();
+    if (source === "event")
+      forgetHandledCommandEvent(sessionID, input?.messageID);
+    else
+      consumeHandled(sessionID, name, args);
+    return false;
+  };
+}
+
 // src/source/runtime/session-activity.js
 var activeToolCalls = new Map;
 var sessionParents = new Map;
@@ -1718,15 +1823,15 @@ async function setGoalProgress(directory, sessionID, args = {}) {
 }
 
 // src/source/runtime/goal-policy.js
-function requireFunction(value, name) {
+function requireFunction2(value, name) {
   if (typeof value !== "function")
     throw new TypeError(`createGoalExecutionPolicy requires ${name}`);
   return value;
 }
 function createGoalExecutionPolicy(options = {}) {
-  const runShellCommand2 = requireFunction(options.runShellCommand, "runShellCommand");
-  const dangerousShell = requireFunction(options.dangerousShell, "dangerousShell");
-  const toast2 = requireFunction(options.toast, "toast");
+  const runShellCommand2 = requireFunction2(options.runShellCommand, "runShellCommand");
+  const dangerousShell = requireFunction2(options.dangerousShell, "dangerousShell");
+  const toast2 = requireFunction2(options.toast, "toast");
   const now2 = typeof options.now === "function" ? options.now : now;
   const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
   async function applyGoalNoProgressGuard(directory, client, sessionID, job, beforeJob) {
@@ -1846,6 +1951,28 @@ var schedulerRuntime = createSchedulerRuntime({
   errorMessage: sdkErrorMessage
 });
 var { rememberSession, scheduleIdleWork, scheduleDueWork, stopWatchdog, cancelDueWork } = schedulerRuntime;
+var handleCommand = createCommandRouter({
+  rememberSession,
+  handlers: {
+    addGoal,
+    statusGoal,
+    pauseGoal,
+    resumeGoal,
+    clearGoal,
+    completeGoalCommand,
+    blockGoalCommand,
+    addLoop,
+    stopLoop,
+    statusLoop,
+    logsLoop,
+    helpLoop,
+    runNow,
+    updateJobState,
+    doctorLoop,
+    initLoop,
+    exportLoop
+  }
+});
 function disposeRuntime(directory, client) {
   const sessions = schedulerRuntime.sessionIDsForHost(directory, client);
   for (const sessionID of sessions) {
@@ -2859,77 +2986,6 @@ async function initLoop(directory, client, sessionID, args) {
 async function exportLoop(directory, client, sessionID) {
   const state = await readState(directory, sessionID);
   await say(client, sessionID, "OpenCode loop state export:\n```json\n" + JSON.stringify(state, null, 2) + "\n```");
-}
-async function handleCommand(directory, client, input, fallbackName, fallbackArgs, output, source = "before") {
-  const name = commandName(input?.command ?? input?.name ?? fallbackName);
-  const sessionID = input?.sessionID;
-  const args = commandArgsText(input?.arguments ?? fallbackArgs ?? "");
-  if (!sessionID || !name)
-    return false;
-  rememberSession(directory, client, sessionID);
-  if (isLoopCommandName(name))
-    await captureSessionExecutionContext(client, sessionID);
-  if (source === "event") {
-    if (consumeHandled(sessionID, name, args))
-      return true;
-    if (hasHandledCommandEvent(sessionID, input?.messageID))
-      return true;
-    markHandledCommandEvent(sessionID, input?.messageID);
-  } else {
-    markHandled(sessionID, name, args);
-  }
-  if (isLoopCommandName(name))
-    guardLoopOwnedUserMessage(sessionID);
-  const handled = () => {
-    if (output && typeof output === "object")
-      output.noReply = true;
-    return true;
-  };
-  if (name === "loop-goal")
-    return await addGoal(directory, client, sessionID, args), handled();
-  if (name === "loop-goal-status")
-    return await statusGoal(directory, client, sessionID), handled();
-  if (name === "loop-goal-pause")
-    return await pauseGoal(directory, client, sessionID, args), handled();
-  if (name === "loop-goal-resume")
-    return await resumeGoal(directory, client, sessionID, args), handled();
-  if (name === "loop-goal-clear")
-    return await clearGoal(directory, client, sessionID, args), handled();
-  if (name === "loop-goal-done" || name === "loop-goal-complete")
-    return await completeGoalCommand(directory, client, sessionID, args), handled();
-  if (name === "loop-goal-blocked")
-    return await blockGoalCommand(directory, client, sessionID, args), handled();
-  if (name === "loop")
-    return await addLoop(directory, client, sessionID, args), handled();
-  if (isPreset(name))
-    return await addLoop(directory, client, sessionID, args, presetDefaults(name, args)), handled();
-  if (name === "loop-stop" || name === "loop-remove")
-    return await stopLoop(directory, client, sessionID, args), handled();
-  if (name === "loop-clear")
-    return await stopLoop(directory, client, sessionID, "all"), handled();
-  if (name === "loop-status")
-    return await statusLoop(directory, client, sessionID), handled();
-  if (name === "loop-logs")
-    return await logsLoop(directory, client, sessionID), handled();
-  if (name === "loop-help")
-    return await helpLoop(client, sessionID), handled();
-  if (name === "loop-now")
-    return await runNow(directory, client, sessionID, args), handled();
-  if (name === "loop-pause")
-    return await updateJobState(directory, client, sessionID, args, (job) => ({ ...job, paused: true }), "Paused"), handled();
-  if (name === "loop-resume")
-    return await updateJobState(directory, client, sessionID, args, (job) => ({ ...job, paused: false, lastRunAt: 0 }), "Resumed"), handled();
-  if (name === "loop-doctor")
-    return await doctorLoop(directory, client, sessionID), handled();
-  if (name === "loop-init")
-    return await initLoop(directory, client, sessionID, args), handled();
-  if (name === "loop-export")
-    return await exportLoop(directory, client, sessionID), handled();
-  if (source === "event")
-    forgetHandledCommandEvent(sessionID, input?.messageID);
-  else
-    consumeHandled(sessionID, name, args);
-  return false;
 }
 function goalTools(defaultDirectory) {
   return {
