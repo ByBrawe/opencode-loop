@@ -31,6 +31,11 @@ function continuationText(iteration, maxRuns, objective) {
   ].join("\n")
 }
 
+const STEP_ENDED_EVENTS = new Set([
+  "session.step.ended",
+  "session.next.step.ended",
+])
+
 export const OPENCODE_LOOP_V2_HOST_REQUIREMENTS = Object.freeze([
   "event.subscribe",
   "session.prompt",
@@ -116,7 +121,7 @@ export function startOpenCode2CanaryRuntime(ctx, options = {}) {
           dataKeys: raw?.data && typeof raw.data === "object" ? Object.keys(raw.data) : [],
         }))
       }
-      if (event?.type !== "session.next.step.ended") continue
+      if (!STEP_ENDED_EVENTS.has(event?.type)) continue
 
       const sessionID = eventField(event, "sessionID")
       if (!sessionID) continue
