@@ -19,9 +19,13 @@ jobs:
         run: npm install --no-save --package-lock=false @opencode-ai/cli@0.0.0-next-17430 @opencode-ai/plugin@0.0.0-next-17430
       - name: Show plugin package manifest
         run: cat node_modules/@opencode-ai/plugin/package.json
-      - name: List plugin package files
-        run: find node_modules/@opencode-ai/plugin -maxdepth 4 -type f -print
-      - name: Show V2 promise declarations
-        run: sed -n '1,260p' node_modules/@opencode-ai/plugin/dist/v2/promise/index.d.ts
+      - name: Show promise API entry declarations
+        run: sed -n '1,280p' node_modules/@opencode-ai/plugin/dist/promise/index.d.ts
+      - name: Show promise plugin declarations
+        run: sed -n '1,360p' node_modules/@opencode-ai/plugin/dist/promise/plugin.d.ts
+      - name: Show promise plugin implementation
+        run: sed -n '1,320p' node_modules/@opencode-ai/plugin/dist/promise/plugin.js
+      - name: Show registration declarations
+        run: sed -n '1,320p' node_modules/@opencode-ai/plugin/dist/promise/registration.d.ts
       - name: Show CLI package manifest
         run: cat node_modules/@opencode-ai/cli/package.json
