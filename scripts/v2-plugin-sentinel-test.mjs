@@ -11,7 +11,7 @@ assert.equal(plugin.id, OPENCODE_LOOP_V2_PLUGIN_ID)
 assert.equal(plugin.id, "bybrawe.opencode-loop.v2.experimental")
 assert.equal(typeof plugin.setup, "function")
 assert.deepEqual(OPENCODE_LOOP_V2_RUNTIME_REQUIREMENTS, [
-  "command.add",
+  "command.update",
   "session.events",
   "session.prompt",
 ])
@@ -52,7 +52,6 @@ assert.deepEqual(inspectOpenCode2CommandDraft(currentDraft), {
   add: false,
 })
 assert.deepEqual(openCode2LoopRuntimeStatus(currentContext, currentDraft).blockers, [
-  "command.add",
   "session.events",
   "session.prompt",
 ])
@@ -63,9 +62,16 @@ const futureContext = {
   event: { subscribe: async () => ({ dispose: async () => {} }) },
   session: { prompt: async () => ({}) },
 }
-const futureDraft = { ...currentDraft, add: () => {} }
-assert.deepEqual(openCode2LoopRuntimeStatus(futureContext, futureDraft).blockers, [])
-assert.equal(openCode2LoopRuntimeStatus(futureContext, futureDraft).ready, true)
+assert.deepEqual(openCode2LoopRuntimeStatus(futureContext, currentDraft).blockers, [])
+assert.equal(openCode2LoopRuntimeStatus(futureContext, currentDraft).ready, true)
+
+const missingUpdateDraft = {
+  list: () => [],
+  get: () => undefined,
+  remove: () => {},
+  add: () => {},
+}
+assert.deepEqual(openCode2LoopRuntimeStatus(futureContext, missingUpdateDraft).blockers, ["command.update"])
 
 let missingCapabilityFailed = false
 try {
