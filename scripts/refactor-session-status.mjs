@@ -69,8 +69,12 @@ while (legacy.includes(clearPair)) {
 if (clearCount !== 1) throw new Error(`expected 1 remaining session-status clear pair, found ${clearCount}`)
 
 const busyPair = 'sessionStatuses.set(sessionID, "busy")\n      sessionStatusSeenAt.set(sessionID, now())'
-requireOnce(legacy, busyPair, "remaining busy status update")
-legacy = legacy.replace(busyPair, 'markSessionStatus(sessionID, "busy")')
+let busyCount = 0
+while (legacy.includes(busyPair)) {
+  legacy = legacy.replace(busyPair, 'markSessionStatus(sessionID, "busy")')
+  busyCount++
+}
+if (busyCount !== 2) throw new Error(`expected 2 remaining busy status updates, found ${busyCount}`)
 
 for (const moved of [
   "function updateSessionStatusFromEvent(event)",
@@ -103,7 +107,7 @@ for (const staleReference of ["sessionStatuses", "sessionStatusSeenAt", "session
   if (legacy.includes(staleReference)) throw new Error(`stale session-status reference remains: ${staleReference}`)
 }
 if (!imports.includes("createSessionStatusRuntime")) throw new Error("session status runtime import missing")
-if (!legacy.includes('markSessionStatus(sessionID, "busy")')) throw new Error("busy status helper wiring missing")
+if ((legacy.match(/markSessionStatus\(sessionID, "busy"\)/g) || []).length !== 2) throw new Error("expected two busy status helper calls in executor")
 if ((legacy.match(/clearSessionStatus\(sessionID\)/g) || []).length !== 1) throw new Error("expected one clearSessionStatus call in executor")
 
 await fs.writeFile(legacyPath, legacy)
