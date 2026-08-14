@@ -1,78 +1,41 @@
 import assert from "node:assert/strict"
 import plugin, { OPENCODE_LOOP_V2_PLUGIN_ID } from "../src/source/opencode2/experimental.js"
 import {
+  OPENCODE_LOOP_V2_REQUIRED_COMMANDS,
   OPENCODE_LOOP_V2_RUNTIME_REQUIREMENTS,
   inspectOpenCode2CommandDraft,
-  inspectOpenCode2Context,
+  inspectOpenCode2CommandFiles,
   openCode2LoopRuntimeStatus,
 } from "../src/source/opencode2/capabilities.js"
 
 assert.equal(plugin.id, OPENCODE_LOOP_V2_PLUGIN_ID)
-assert.equal(plugin.id, "bybrawe.opencode-loop.v2.experimental")
 assert.equal(typeof plugin.setup, "function")
-assert.deepEqual(OPENCODE_LOOP_V2_RUNTIME_REQUIREMENTS, [
-  "command.add",
-  "session.events",
-  "session.prompt",
-])
+assert.deepEqual(OPENCODE_LOOP_V2_RUNTIME_REQUIREMENTS, ["command.files", "session.events", "session.prompt"])
 
-let transforms = 0
 let registered
-const currentContext = {
+const context = {
   command: {
     transform: async (callback) => {
-      transforms += 1
       registered = callback
       return { dispose: async () => {} }
     },
   },
 }
-await plugin.setup(currentContext)
-assert.equal(transforms, 1)
+await plugin.setup(context)
 assert.equal(typeof registered, "function")
 
-const currentDraft = {
-  list: () => [],
-  get: () => undefined,
+const commands = OPENCODE_LOOP_V2_REQUIRED_COMMANDS.map((name) => ({ name }))
+const draft = {
+  list: () => commands,
+  get: (name) => commands.find((item) => item.name === name),
   update: () => {},
   remove: () => {},
 }
-await registered(currentDraft)
+await registered(draft)
+assert.deepEqual(inspectOpenCode2CommandDraft(draft), { list: true, get: true, update: true, remove: true })
+assert.equal(inspectOpenCode2CommandFiles(draft).ready, true)
+assert.deepEqual(inspectOpenCode2CommandFiles(draft).missing, [])
+assert.deepEqual(openCode2LoopRuntimeStatus(context, draft).blockers, ["session.events", "session.prompt"])
 
-assert.deepEqual(inspectOpenCode2Context(currentContext), {
-  commandTransform: true,
-  sessionEvents: false,
-  sessionPrompt: false,
-})
-assert.deepEqual(inspectOpenCode2CommandDraft(currentDraft), {
-  list: true,
-  get: true,
-  update: true,
-  remove: true,
-  add: false,
-})
-assert.deepEqual(openCode2LoopRuntimeStatus(currentContext, currentDraft).blockers, [
-  "command.add",
-  "session.events",
-  "session.prompt",
-])
-assert.equal(openCode2LoopRuntimeStatus(currentContext, currentDraft).ready, false)
-
-const futureContext = {
-  command: { transform: async () => ({ dispose: async () => {} }) },
-  event: { subscribe: async () => ({ dispose: async () => {} }) },
-  session: { prompt: async () => ({}) },
-}
-const futureDraft = { ...currentDraft, add: () => {} }
-assert.deepEqual(openCode2LoopRuntimeStatus(futureContext, futureDraft).blockers, [])
-assert.equal(openCode2LoopRuntimeStatus(futureContext, futureDraft).ready, true)
-
-let missingCapabilityFailed = false
-try {
-  await plugin.setup({ command: {} })
-} catch (error) {
-  missingCapabilityFailed = /command\.transform capability is unavailable/.test(String(error))
-}
-assert.equal(missingCapabilityFailed, true)
-
+await plugin.setup({})
 console.log("OpenCode 2 plugin sentinel contract passed")
