@@ -97,9 +97,9 @@ export function startOpenCode2CanaryRuntime(ctx, options = {}) {
   const sent = new Map()
   const seen = new Set()
   const dispatching = new Set()
-  const events = ctx.event.subscribe()
 
   const done = (async () => {
+    const events = await ctx.event.subscribe()
     for await (const raw of events) {
       const event = unwrapEvent(raw)
       if (event?.type !== "session.next.step.ended") continue
