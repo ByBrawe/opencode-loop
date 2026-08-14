@@ -1,0 +1,44 @@
+name: V2 Lifecycle Contract
+
+on:
+  pull_request:
+    paths:
+      - "src/source/opencode2/**"
+      - "src/source/runtime/**"
+      - "scripts/v2-event-bridge-test.mjs"
+      - "scripts/v2-plugin-sentinel-test.mjs"
+      - ".github/workflows/v2-lifecycle-contract.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/source/opencode2/**"
+      - "src/source/runtime/**"
+      - "scripts/v2-event-bridge-test.mjs"
+      - "scripts/v2-plugin-sentinel-test.mjs"
+      - ".github/workflows/v2-lifecycle-contract.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  lifecycle-contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: node --check src/source/opencode2/event-bridge.js
+      - run: node --check src/source/opencode2/experimental.js
+      - run: node --check scripts/v2-event-bridge-test.mjs
+      - run: node scripts/v2-event-bridge-test.mjs
+      - run: node scripts/v2-plugin-sentinel-test.mjs
