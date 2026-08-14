@@ -88,12 +88,12 @@ export function createOpenCode2PromptRuntime(options = {}) {
     return { handled: true, accepted: true, count, target }
   }
 
-  async function stopPromptLoops(event) {
+  async function stopPromptLoops(event, forcedTarget) {
     const directory = directoryFrom(event)
     const sessionID = String(event?.sessionID || "").trim()
     if (!directory || !sessionID) return { handled: false, reason: "missing-scope" }
 
-    const target = commandTarget(event)
+    const target = forcedTarget || commandTarget(event)
     if (target.toLowerCase() === "all") {
       const state = await readState(directory, sessionID)
       const count = (state.jobs || []).length
@@ -137,7 +137,8 @@ export function createOpenCode2PromptRuntime(options = {}) {
       if (event?.name === "loop") return addPromptLoop(event)
       if (event?.name === "loop-pause") return updatePromptLoops(event, (job) => ({ ...job, paused: true }))
       if (event?.name === "loop-resume") return updatePromptLoops(event, (job) => ({ ...job, paused: false, lastRunAt: 0 }))
-      if (["loop-stop", "loop-remove", "loop-clear"].includes(event?.name)) return stopPromptLoops(event)
+      if (["loop-stop", "loop-remove"].includes(event?.name)) return stopPromptLoops(event)
+      if (event?.name === "loop-clear") return stopPromptLoops(event, "all")
     }
     if (event?.kind === "session" && event?.action === "idle") {
       return runIdlePrompt(event)
