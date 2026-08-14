@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const adapterFile = path.join(root, "src", "source", "opencode2", "experimental.js")
 const expectedID = "bybrawe.opencode-loop.v2.experimental"
+const opencode2Command = process.platform === "win32" ? "opencode2.cmd" : "opencode2"
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function run(command, args, { cwd, env, timeout = 60_000 } = {}) {
@@ -68,7 +69,7 @@ async function main() {
 
   try {
     const request = run(
-      "opencode2",
+      opencode2Command,
       ["api", "get", "/api/command", "-H", `x-opencode-directory: ${project}`],
       { cwd: project, env, timeout: 90_000 },
     )
@@ -90,7 +91,7 @@ async function main() {
       `stderr: ${String(request.stderr ?? "")}`,
     ].join("\n"))
   } finally {
-    run("opencode2", ["service", "stop"], { cwd: project, env, timeout: 15_000 })
+    run(opencode2Command, ["service", "stop"], { cwd: project, env, timeout: 15_000 })
     await rm(temp, { recursive: true, force: true })
   }
 }
