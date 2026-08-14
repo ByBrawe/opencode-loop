@@ -2160,6 +2160,120 @@ function createSessionStatusRuntime(options = {}) {
   };
 }
 
+// src/source/runtime/compaction.js
+function createCompactionRuntime(options = {}) {
+  const activeRuns = options.activeRuns;
+  if (!(activeRuns instanceof Map))
+    throw new TypeError("createCompactionRuntime requires activeRuns Map");
+  if (typeof options.finalizeActiveRun !== "function")
+    throw new TypeError("createCompactionRuntime requires finalizeActiveRun");
+  const now2 = typeof options.now === "function" ? options.now : now;
+  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
+  const compactSession2 = typeof options.compactSession === "function" ? options.compactSession : compactSession;
+  const log2 = typeof options.log === "function" ? options.log : log;
+  const errorMessage = typeof options.errorMessage === "function" ? options.errorMessage : sdkErrorMessage;
+  const finalizeActiveRun = options.finalizeActiveRun;
+  const requests = new Map;
+  function begin(sessionID, jobId, resumeAfter = false) {
+    if (typeof sessionID !== "string" || typeof jobId !== "string")
+      return;
+    const request = {
+      jobId,
+      resumeAfter: Boolean(resumeAfter),
+      requestedAt: now2(),
+      startedAt: 0,
+      completedAt: 0
+    };
+    requests.set(sessionID, request);
+    return request;
+  }
+  function getPending(sessionID) {
+    return requests.get(sessionID);
+  }
+  function clear(sessionID) {
+    return requests.delete(sessionID);
+  }
+  function clearForActiveRun(sessionID, active) {
+    const pending = requests.get(sessionID);
+    if (!pending || !active || pending.jobId === active.jobId)
+      requests.delete(sessionID);
+  }
+  function isCompleted(sessionID, jobId) {
+    const pending = requests.get(sessionID);
+    return Boolean(pending && pending.jobId === jobId && pending.completedAt);
+  }
+  async function start(directory, client, sessionID, jobId, model, resumeAfter = false) {
+    begin(sessionID, jobId, resumeAfter);
+    const ok = await compactSession2(directory, client, sessionID, model);
+    if (!ok)
+      clear(sessionID);
+    return ok;
+  }
+  async function maybeCompact(directory, client, sessionID, job) {
+    const dueRuns = job.compactEveryRuns > 0 && (job.runCount || 0) > 0 && (job.runCount || 0) % job.compactEveryRuns === 0 && job.lastCompactRunCount !== job.runCount;
+    const dueTime = job.compactEveryMs > 0 && (!job.lastCompactAt || now2() - job.lastCompactAt >= job.compactEveryMs);
+    if (!dueRuns && !dueTime)
+      return { job, started: false };
+    if (await start(directory, client, sessionID, job.id, job.model, true)) {
+      job.lastCompactAt = now2();
+      job.lastCompactRunCount = job.runCount || 0;
+      return { job, started: true };
+    }
+    return { job, started: false };
+  }
+  async function noteStarted(directory, sessionID) {
+    const pending = requests.get(sessionID);
+    if (!pending)
+      return false;
+    if (!pending.startedAt) {
+      pending.startedAt = now2();
+      requests.set(sessionID, pending);
+      await appendLoopLog2(directory, "compact-started", {
+        sessionID,
+        job: pending.jobId,
+        resumeAfter: pending.resumeAfter
+      });
+    }
+    return true;
+  }
+  async function finalize(directory, client, sessionID) {
+    const pending = requests.get(sessionID);
+    const active = activeRuns.get(sessionID);
+    if (!pending || !active || pending.jobId !== active.jobId)
+      return false;
+    return await finalizeActiveRun(directory, client, sessionID);
+  }
+  async function noteCompleted(directory, client, sessionID) {
+    const pending = requests.get(sessionID);
+    if (!pending)
+      return false;
+    pending.completedAt = now2();
+    requests.set(sessionID, pending);
+    await appendLoopLog2(directory, "compact-event", {
+      sessionID,
+      job: pending.jobId,
+      resumeAfter: pending.resumeAfter
+    });
+    const timer = setTimeout(() => {
+      finalize(directory, client, sessionID).catch((error) => log2(client, "error", "compaction finalization failed", { error: errorMessage(error) }));
+    }, 0);
+    timer.unref?.();
+    return true;
+  }
+  return {
+    begin,
+    getPending,
+    clear,
+    clearForActiveRun,
+    isCompleted,
+    start,
+    maybeCompact,
+    noteStarted,
+    finalize,
+    noteCompleted
+  };
+}
+
 // src/source/runtime/scheduler.js
 var DEFAULT_IDLE_DEBOUNCE_MS = 1200;
 var DEFAULT_BUSY_RETRY_MS = 5000;
@@ -2632,7 +2746,6 @@ var {
 var { runGoalChecks, applyGoalNoProgressGuard } = createGoalExecutionPolicy({ runShellCommand, dangerousShell, toast, appendLoopLog, now });
 var activeRuns = new Map;
 var runLocks = new Map;
-var loopCompactionRequests = new Map;
 var {
   updateSessionStatusFromEvent,
   staleActiveRun,
@@ -2645,6 +2758,19 @@ var {
   appendLoopLog,
   now
 });
+var compactionRuntime = createCompactionRuntime({
+  activeRuns,
+  finalizeActiveRun,
+  appendLoopLog,
+  log,
+  errorMessage: sdkErrorMessage,
+  now
+});
+var {
+  maybeCompact,
+  noteStarted: noteLoopCompactionStarted,
+  noteCompleted: noteLoopCompactionCompleted
+} = compactionRuntime;
 var schedulerRuntime = createSchedulerRuntime({
   busyRetryMs: BUSY_RETRY_MS,
   sessionIsIdle,
@@ -2728,23 +2854,9 @@ function disposeRuntime(directory, client) {
     runLocks.delete(sessionID);
     clearLoopOwnedUserMessageGuard(sessionID);
     clearSessionActivity(sessionID);
-    loopCompactionRequests.delete(sessionID);
+    compactionRuntime.clear(sessionID);
     clearCommandLifecycle(sessionID);
   }
-}
-async function maybeCompact(directory, client, sessionID, job) {
-  const dueRuns = job.compactEveryRuns > 0 && (job.runCount || 0) > 0 && (job.runCount || 0) % job.compactEveryRuns === 0 && job.lastCompactRunCount !== job.runCount;
-  const dueTime = job.compactEveryMs > 0 && (!job.lastCompactAt || now() - job.lastCompactAt >= job.compactEveryMs);
-  if (!dueRuns && !dueTime)
-    return { job, started: false };
-  beginLoopCompaction(sessionID, job.id, true);
-  if (await compactSession(directory, client, sessionID, job.model)) {
-    job.lastCompactAt = now();
-    job.lastCompactRunCount = job.runCount || 0;
-    return { job, started: true };
-  }
-  loopCompactionRequests.delete(sessionID);
-  return { job, started: false };
 }
 function userInterruptSessionFromEvent(event) {
   if (!["message.updated", "message.created"].includes(String(event?.type || "")))
@@ -2805,50 +2917,8 @@ function clearActiveRun(sessionID) {
   const active = activeRuns.get(sessionID);
   if (active?.timer)
     clearTimeout(active.timer);
-  const compact = loopCompactionRequests.get(sessionID);
-  if (!compact || !active || compact.jobId === active.jobId)
-    loopCompactionRequests.delete(sessionID);
+  compactionRuntime.clearForActiveRun(sessionID, active);
   activeRuns.delete(sessionID);
-}
-function beginLoopCompaction(sessionID, jobId, resumeAfter = false) {
-  loopCompactionRequests.set(sessionID, {
-    jobId,
-    resumeAfter,
-    requestedAt: now(),
-    startedAt: 0,
-    completedAt: 0
-  });
-}
-async function noteLoopCompactionStarted(directory, sessionID) {
-  const pending = loopCompactionRequests.get(sessionID);
-  if (!pending)
-    return false;
-  if (!pending.startedAt) {
-    pending.startedAt = now();
-    loopCompactionRequests.set(sessionID, pending);
-    await appendLoopLog(directory, "compact-started", { sessionID, job: pending.jobId, resumeAfter: pending.resumeAfter });
-  }
-  return true;
-}
-async function finalizeLoopCompaction(directory, client, sessionID) {
-  const pending = loopCompactionRequests.get(sessionID);
-  const active = activeRuns.get(sessionID);
-  if (!pending || !active || pending.jobId !== active.jobId)
-    return false;
-  return await finalizeActiveRun(directory, client, sessionID);
-}
-async function noteLoopCompactionCompleted(directory, client, sessionID) {
-  const pending = loopCompactionRequests.get(sessionID);
-  if (!pending)
-    return false;
-  pending.completedAt = now();
-  loopCompactionRequests.set(sessionID, pending);
-  await appendLoopLog(directory, "compact-event", { sessionID, job: pending.jobId, resumeAfter: pending.resumeAfter });
-  const timer = setTimeout(() => {
-    finalizeLoopCompaction(directory, client, sessionID).catch((error) => log(client, "error", "compaction finalization failed", { error: sdkErrorMessage(error) }));
-  }, 0);
-  timer.unref?.();
-  return true;
 }
 async function recoverActiveDispatchFailure(directory, client, sessionID, jobId, runToken, error) {
   const active = activeRuns.get(sessionID);
@@ -2884,7 +2954,7 @@ async function finalizeActiveRun(directory, client, sessionID, options = {}) {
     return false;
   const recoveredStale = staleActiveRun(sessionID);
   if (active.compactionOnly) {
-    const pending = loopCompactionRequests.get(sessionID);
+    const pending = compactionRuntime.getPending(sessionID);
     clearActiveRun(sessionID);
     clearSessionStatus(sessionID);
     await appendLoopLog(directory, pending?.completedAt ? "compact-finished" : "compact-idle-fallback", {
@@ -2965,10 +3035,7 @@ async function fireAction(directory, client, sessionID, job) {
   const agent = job.agent || "build";
   const model = normalizedModelRef(job.model);
   if (kind === "compact") {
-    beginLoopCompaction(sessionID, job.id, false);
-    const ok = await compactSession(directory, client, sessionID, model);
-    if (!ok)
-      loopCompactionRequests.delete(sessionID);
+    const ok = await compactionRuntime.start(directory, client, sessionID, job.id, model, false);
     return { startsAssistantTurn: ok, pause: !ok, reason: "compact_failed", compaction: ok };
   }
   if (kind === "command") {
@@ -2981,10 +3048,7 @@ async function fireAction(directory, client, sessionID, job) {
     const tuiCommand = compactTuiCommandName(command);
     if (tuiCommand) {
       guardLoopOwnedUserMessage(sessionID);
-      beginLoopCompaction(sessionID, job.id, false);
-      const ok = await compactSession(directory, client, sessionID, model);
-      if (!ok)
-        loopCompactionRequests.delete(sessionID);
+      const ok = await compactionRuntime.start(directory, client, sessionID, job.id, model, false);
       return { startsAssistantTurn: ok, pause: !ok, reason: "compact_failed", compaction: ok };
     }
     guardLoopOwnedUserMessage(sessionID);
@@ -3125,9 +3189,8 @@ exit=` + preflight.code + `
         }, job.timeoutMs);
       const runToken = `${job.id}:compact:${now().toString(36)}:${Math.random().toString(16).slice(2)}`;
       activeRuns.set(sessionID, { jobId: job.id, job, startedAt: now(), timer, runToken, compactionOnly: true });
-      const pending = loopCompactionRequests.get(sessionID);
-      if (pending?.jobId === job.id && pending.completedAt) {
-        await finalizeLoopCompaction(directory, client, sessionID);
+      if (compactionRuntime.isCompleted(sessionID, job.id)) {
+        await compactionRuntime.finalize(directory, client, sessionID);
         return;
       }
       markSessionStatus(sessionID, "busy");
@@ -3171,9 +3234,8 @@ exit=` + preflight.code + `
       const runToken = `${job.id}:${now().toString(36)}:${Math.random().toString(16).slice(2)}`;
       activeRuns.set(sessionID, { jobId: job.id, job, startedAt: now(), timer, runToken, compactionAction: result.compaction === true });
       if (result.compaction) {
-        const pending = loopCompactionRequests.get(sessionID);
-        if (pending?.jobId === job.id && pending.completedAt) {
-          await finalizeLoopCompaction(directory, client, sessionID);
+        if (compactionRuntime.isCompleted(sessionID, job.id)) {
+          await compactionRuntime.finalize(directory, client, sessionID);
           return;
         }
       }
