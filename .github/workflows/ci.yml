@@ -52,6 +52,7 @@ jobs:
       - name: Verify V2 runtime contracts
         run: |
           node --check src/source/runtime/events.js
+          node --check src/source/runtime/observer.js
           node --check src/source/runtime/session-registry.js
           node --check src/source/runtime/scope.js
           node --check src/source/runtime/timers.js
@@ -59,10 +60,12 @@ jobs:
           node --check src/source/opencode2/capabilities.js
           node --check src/source/opencode2/experimental.js
           node --check scripts/runtime-contract-test.mjs
+          node --check scripts/runtime-observer-test.mjs
           node --check scripts/runtime-scope-test.mjs
           node --check scripts/session-manager-test.mjs
           node --check scripts/v2-plugin-sentinel-test.mjs
           node scripts/runtime-contract-test.mjs
+          node scripts/runtime-observer-test.mjs
           node scripts/runtime-scope-test.mjs
           node scripts/session-manager-test.mjs
           node scripts/v2-plugin-sentinel-test.mjs
