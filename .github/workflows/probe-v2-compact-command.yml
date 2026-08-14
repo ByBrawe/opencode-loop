@@ -1,0 +1,58 @@
+name: Probe V2 compact command
+
+on:
+  push:
+    branches: [feat-v2-compact-runtime-20260814]
+    paths:
+      - .github/workflows/probe-v2-compact-command.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feat-v2-compact-runtime-20260814
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Isolate OpenCode 2 paths
+        shell: bash
+        run: |
+          echo "HOME=$RUNNER_TEMP/opencode2-home" >> "$GITHUB_ENV"
+          echo "XDG_CONFIG_HOME=$RUNNER_TEMP/opencode2-home/.config" >> "$GITHUB_ENV"
+          echo "XDG_DATA_HOME=$RUNNER_TEMP/opencode2-home/.local/share" >> "$GITHUB_ENV"
+          echo "XDG_STATE_HOME=$RUNNER_TEMP/opencode2-home/.local/state" >> "$GITHUB_ENV"
+      - run: npm install -g --allow-scripts=@opencode-ai/cli @opencode-ai/cli@next
+      - name: Prepare empty project
+        shell: bash
+        run: |
+          project="$RUNNER_TEMP/opencode-loop-v2-compact-probe"
+          mkdir -p "$project" "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
+          git init --quiet "$project"
+          git -C "$project" config user.email "opencode-loop-ci@example.invalid"
+          git -C "$project" config user.name "OpenCode Loop CI"
+          touch "$project/README.md"
+          git -C "$project" add README.md
+          git -C "$project" commit --quiet -m "init"
+          echo "OPENCODE_LOOP_V2_PROJECT=$project" >> "$GITHUB_ENV"
+      - name: Inspect command registry
+        shell: bash
+        run: |
+          out="$RUNNER_TEMP/opencode2-command-registry.json"
+          opencode2 api get /api/command -H "x-opencode-directory: $OPENCODE_LOOP_V2_PROJECT" > "$out"
+          cat "$out"
+          node - <<'NODE' "$out"
+          const fs = require('node:fs')
+          const file = process.argv[2]
+          const value = JSON.parse(fs.readFileSync(file, 'utf8'))
+          const rows = Array.isArray(value) ? value : value?.data || value?.commands || []
+          const ids = rows.map((item) => String(item?.id || item?.name || item?.command || '')).filter(Boolean)
+          console.log('COMMAND_IDS=' + JSON.stringify(ids))
+          console.log('COMPACT_MATCHES=' + JSON.stringify(rows.filter((item) => /compact/i.test(JSON.stringify(item)))))
+          NODE
