@@ -38,7 +38,6 @@ requireOnce(legacy, loopCommandsImport, "Loop commands import")
 legacy = legacy.replace(loopCommandsImport, loopCommandsImport + 'import { createLoopRegistration } from "./opencode/loop-registration.js"\n')
 
 legacy = legacy.replace('const DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180_000\n', "")
-if (legacy.includes("DEFAULT_GOAL_ACTIVE_RECOVERY_MS")) throw new Error("legacy Goal active-recovery constant remains")
 
 const schedulerBinding = 'const { rememberSession, scheduleIdleWork, scheduleDueWork, stopWatchdog, cancelDueWork } = schedulerRuntime\n\n'
 requireOnce(legacy, schedulerBinding, "scheduler binding")
@@ -68,6 +67,7 @@ for (const moved of [
 ]) {
   if (legacy.includes(moved)) throw new Error(`moved Loop registration helper remains in legacy source: ${moved}`)
 }
+if (legacy.includes("DEFAULT_GOAL_ACTIVE_RECOVERY_MS")) throw new Error("legacy Goal active-recovery constant remains")
 if (!legacy.includes("const { addLoop } = createLoopRegistration({")) throw new Error("Loop registration wiring missing")
 if (!legacy.includes("async function snapshotPaths(directory, files)")) throw new Error("snapshotPaths must remain in legacy runtime")
 if (!legacy.includes("function goalTools(defaultDirectory) {")) throw new Error("goalTools must remain in legacy source")
