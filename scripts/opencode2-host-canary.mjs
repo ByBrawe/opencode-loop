@@ -78,6 +78,16 @@ async function waitForTcp(port, child, logs, timeoutMs = 30_000) {
   throw new Error(`timed out waiting for OpenCode 2 server on ${port}\n${logs()}`)
 }
 
+async function waitForServerPassword(logs, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const match = logs().match(/server password\s+([^\s]+)/)
+    if (match?.[1]) return match[1]
+    await delay(25)
+  }
+  throw new Error(`timed out waiting for OpenCode 2 server password\n${logs()}`)
+}
+
 async function stopProcess(child) {
   if (!child || child.exitCode !== null) return
   child.kill()
@@ -289,9 +299,8 @@ async function main() {
     server.stderr?.on("data", (chunk) => { serverLog = (serverLog + String(chunk)).slice(-80_000) })
     await waitForTcp(port, server, () => serverLog)
 
-    const passwordMatch = serverLog.match(/server password\s+([^\s]+)/)
-    assert.ok(passwordMatch?.[1], `OpenCode 2 serve did not expose its canary password\n${serverLog}`)
-    const serverAuthorization = `Basic ${Buffer.from(`opencode:${passwordMatch[1]}`).toString("base64")}`
+    const serverPassword = await waitForServerPassword(() => serverLog)
+    const serverAuthorization = `Basic ${Buffer.from(`opencode:${serverPassword}`).toString("base64")}`
     const baseURL = `http://127.0.0.1:${port}`
     const locationQuery = `location%5Bdirectory%5D=${encodeURIComponent(project)}`
     const api = async (pathname, init = {}) => {
