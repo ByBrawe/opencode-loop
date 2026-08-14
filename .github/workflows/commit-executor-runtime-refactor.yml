@@ -1,5 +1,6 @@
 name: Commit executor runtime refactor
 
+# Temporary branch-only workflow; rerun after preserving registration active guard config.
 on:
   push:
     branches: [refactor-executor-runtime-20260814]
