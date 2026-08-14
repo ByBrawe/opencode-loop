@@ -2,7 +2,7 @@ name: Probe OpenCode V2 Contract
 
 on:
   push:
-    branches: [probe-opencode-v2-command-activation]
+    branches: [probe-opencode-v2-root-command]
   workflow_dispatch:
 
 permissions:
@@ -21,13 +21,12 @@ jobs:
         run: npm install -g @opencode-ai/cli@next
       - name: Show V2 version
         run: opencode2 --version
-      - name: Verify command transform on registered V2 daemon
-        working-directory: .v2-probe
+      - name: Verify command transform from canonical project root
         shell: bash
         run: |
           for attempt in $(seq 1 12); do
             opencode2 api -H "x-opencode-directory:$(pwd)" get /api/command > command-list.txt
-            grep -F "v2-probe" command-list.txt
+            grep -F "V2 activation seed" command-list.txt
             if grep -F "LOOP_V2_PROBE_ACTIVE" command-list.txt; then
               exit 0
             fi
