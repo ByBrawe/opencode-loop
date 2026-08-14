@@ -7,7 +7,7 @@ function frozenRecord(value) {
 }
 
 export const OPENCODE_LOOP_V2_RUNTIME_REQUIREMENTS = Object.freeze([
-  "command.add",
+  "command.update",
   "session.events",
   "session.prompt",
 ])
@@ -41,7 +41,7 @@ export function openCode2LoopRuntimeStatus(ctx, commandDraft) {
   const blockers = []
 
   if (!context.commandTransform) blockers.push("command.transform")
-  if (!command.add) blockers.push("command.add")
+  if (!command.update) blockers.push("command.update")
   if (!context.sessionEvents) blockers.push("session.events")
   if (!context.sessionPrompt) blockers.push("session.prompt")
 
