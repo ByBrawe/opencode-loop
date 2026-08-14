@@ -1,6 +1,11 @@
 export default {
   id: "bybrawe.loop.v2-probe",
   setup: async (ctx) => {
-    console.log("LOOP_V2_CONTEXT_KEYS=" + Object.keys(ctx || {}).sort().join(","))
+    await ctx.agent.transform((draft) => {
+      if (!draft.get("build")) return
+      draft.update("build", (agent) => {
+        agent.description = `${agent.description || ""} LOOP_V2_PROBE_ACTIVE`.trim()
+      })
+    })
   },
 }
