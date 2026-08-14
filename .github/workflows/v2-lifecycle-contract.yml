@@ -6,6 +6,7 @@ on:
       - "src/source/opencode2/**"
       - "src/source/runtime/**"
       - "scripts/v2-event-bridge-test.mjs"
+      - "scripts/v2-host-contract-test.mjs"
       - "scripts/v2-plugin-sentinel-test.mjs"
       - ".github/workflows/v2-lifecycle-contract.yml"
   push:
@@ -14,6 +15,7 @@ on:
       - "src/source/opencode2/**"
       - "src/source/runtime/**"
       - "scripts/v2-event-bridge-test.mjs"
+      - "scripts/v2-host-contract-test.mjs"
       - "scripts/v2-plugin-sentinel-test.mjs"
       - ".github/workflows/v2-lifecycle-contract.yml"
 
@@ -38,7 +40,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node --check src/source/opencode2/event-bridge.js
+      - run: node --check src/source/opencode2/host-contract.js
       - run: node --check src/source/opencode2/experimental.js
       - run: node --check scripts/v2-event-bridge-test.mjs
+      - run: node --check scripts/v2-host-contract-test.mjs
       - run: node scripts/v2-event-bridge-test.mjs
+      - run: node scripts/v2-host-contract-test.mjs
       - run: node scripts/v2-plugin-sentinel-test.mjs
