@@ -1,9 +1,8 @@
-import { define } from "@opencode-ai/plugin/v2/promise"
 import { inspectOpenCode2Context } from "./capabilities.js"
 
 export const OPENCODE_LOOP_V2_PLUGIN_ID = "bybrawe.opencode-loop.v2.experimental"
 
-export const OpenCodeLoopV2ExperimentalPlugin = define({
+export const OpenCodeLoopV2ExperimentalPlugin = {
   id: OPENCODE_LOOP_V2_PLUGIN_ID,
   async setup(ctx) {
     const capabilities = inspectOpenCode2Context(ctx)
@@ -12,6 +11,6 @@ export const OpenCodeLoopV2ExperimentalPlugin = define({
     }
     await ctx.command.transform(() => {})
   },
-})
+}
 
 export default OpenCodeLoopV2ExperimentalPlugin
