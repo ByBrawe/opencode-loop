@@ -11,6 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const isWindows = process.platform === "win32"
 const LOOP_OBJECTIVE = "real host loop canary"
+const hostApiMode = process.env.OPENCODE_HOST_API_MODE === "v2" ? "v2" : "v1"
 
 function resolveOpenCodeBinary() {
   if (!isWindows) return path.join(repoRoot, "node_modules", ".bin", "opencode")
@@ -218,12 +219,13 @@ function isFetchTimeout(error) {
 }
 
 async function bootstrapSessions(api, diagnostics) {
+  const pathname = hostApiMode === "v2" ? "/api/session" : "/session"
   try {
-    return await api("/session", { method: "GET", signal: AbortSignal.timeout(30_000) })
+    return await api(pathname, { method: "GET", signal: AbortSignal.timeout(30_000) })
   } catch (error) {
     if (!isFetchTimeout(error)) throw error
     console.error(`OpenCode session API was not ready after 30s; retrying once.\n${diagnostics()}`)
-    return await api("/session", { method: "GET", signal: AbortSignal.timeout(45_000) })
+    return await api(pathname, { method: "GET", signal: AbortSignal.timeout(45_000) })
   }
 }
 
@@ -287,11 +289,20 @@ async function main() {
 
     const baseURL = `http://127.0.0.1:${port}`
     const directoryQuery = `directory=${encodeURIComponent(workspace)}`
+    const authHeaders = {}
+    if (hostApiMode === "v2") {
+      const passwordFile = path.join(env.XDG_DATA_HOME, "opencode", "password")
+      await waitFor(async () => {
+        try { return (await readFile(passwordFile, "utf8")).trim().length > 0 } catch { return false }
+      }, "OpenCode 2 daemon password", () => `passwordFile=${passwordFile}\nserver log:\n${serverLog}`, 10_000)
+      const password = (await readFile(passwordFile, "utf8")).trim()
+      authHeaders.authorization = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`
+    }
     const api = async (pathname, init = {}) => {
       const separator = pathname.includes("?") ? "&" : "?"
       const response = await fetch(`${baseURL}${pathname}${separator}${directoryQuery}`, {
         ...init,
-        headers: { "content-type": "application/json", ...(init.headers ?? {}) },
+        headers: { "content-type": "application/json", ...authHeaders, ...(init.headers ?? {}) },
         signal: init.signal ?? AbortSignal.timeout(30_000),
       })
       const text = await response.text()
@@ -301,8 +312,12 @@ async function main() {
     }
 
     const sessionsBefore = await bootstrapSessions(api, () => `server log:\n${serverLog}`)
-    assert.ok(Array.isArray(sessionsBefore?.data ?? sessionsBefore), "GET /session bootstrap did not return an array")
-    const createdPayload = await api("/session", { method: "POST", body: JSON.stringify({ title: "opencode-loop host canary" }) })
+    assert.ok(Array.isArray(sessionsBefore?.data ?? sessionsBefore), `${hostApiMode === "v2" ? "GET /api/session" : "GET /session"} bootstrap did not return an array`)
+    const createPath = hostApiMode === "v2" ? "/api/session" : "/session"
+    const createBody = hostApiMode === "v2"
+      ? { agent: "build", model: { id: "canary", providerID: "canary" }, location: { directory: workspace } }
+      : { title: "opencode-loop host canary" }
+    const createdPayload = await api(createPath, { method: "POST", body: JSON.stringify(createBody) })
     const session = createdPayload?.data ?? createdPayload
     const sessionID = String(session?.id ?? "")
     assert.ok(sessionID, `OpenCode did not create a session: ${JSON.stringify(createdPayload)}`)
@@ -320,7 +335,7 @@ async function main() {
     const diagnostics = async () => {
       let state = "missing"
       try { state = await readFile(stateFile, "utf8") } catch {}
-      return `provider=${JSON.stringify(provider.stats)}\ncommandError=${String(commandError ?? "none")}\nstate=${state}\nserver log:\n${serverLog}`
+      return `hostApiMode=${hostApiMode}\nprovider=${JSON.stringify(provider.stats)}\ncommandError=${String(commandError ?? "none")}\nstate=${state}\nserver log:\n${serverLog}`
     }
 
     await waitFor(() => provider.stats.loopRequests >= 3, "three real autonomous Loop turns", () => `provider=${JSON.stringify(provider.stats)}\nserver log:\n${serverLog}`)
@@ -338,6 +353,7 @@ async function main() {
     console.log(JSON.stringify({
       ok: true,
       platform: process.platform,
+      hostApiMode,
       sessionID,
       loopRequests: provider.stats.loopRequests,
       chatRequests: provider.stats.chatRequests,
