@@ -1,7 +1,7 @@
 // @bun
 // src/source/legacy-v1.js
-import { promises as fs3 } from "fs";
-import path3 from "path";
+import { promises as fs4 } from "fs";
+import path4 from "path";
 import { tool } from "@opencode-ai/plugin/tool";
 
 // src/source/core/args.js
@@ -1438,84 +1438,11 @@ function createSchedulerRuntime(options = {}) {
   };
 }
 
-// src/source/legacy-v1.js
-var SERVICE2 = "opencode-loop";
-var DEFAULT_ACTIVE_GUARD_MS = 45000;
-var STALE_ACTIVE_RECOVERY_MS = 45000;
-var BUSY_RETRY_MS = 5000;
-var SESSION_STATUS_CACHE_MS = 1500;
-var MAX_SCAN_FILES = 200;
-var MAX_SCAN_BYTES = 2000000;
+// src/source/runtime/goal-runtime.js
+import { promises as fs3 } from "fs";
+import path3 from "path";
 var GOAL_REPORT_DIR = "goals";
 var GOAL_PROMPT_PREFIX = "EXPERIMENTAL OPENCODE GOAL MODE ITERATION";
-var DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180000;
-var activeRuns = new Map;
-var runLocks = new Map;
-var loopCompactionRequests = new Map;
-var DEFAULT_PROGRESS_MD = `# Progress
-
-## Current Goal
-Describe the current project goal here.
-
-## Agent Rules
-- Do not ask questions unless truly blocked.
-- Make reasonable assumptions and continue.
-- Work on unfinished TODOs in order.
-- Mark completed TODOs with [x].
-- Add new bugs, ideas, and follow-up work as TODOs.
-- Run tests, lint, or build when available.
-- Do not run destructive commands, force pushes, production deploys, or database resets.
-
-## Active TODO
-- [ ] Review the project structure and pick the next safe improvement.
-
-## Completed
-- [x] Created progress.md.
-
-## Backlog Ideas
-- [ ] Add more project-specific tasks here.
-
-## Blocked
-- None.
-`;
-var schedulerRuntime = createSchedulerRuntime({
-  busyRetryMs: BUSY_RETRY_MS,
-  sessionIsIdle,
-  finalizeActiveRun,
-  maybeRunDueJobs,
-  appendLoopLog,
-  toast,
-  errorMessage: sdkErrorMessage
-});
-var { rememberSession, scheduleIdleWork, scheduleDueWork, stopWatchdog, cancelDueWork } = schedulerRuntime;
-function disposeRuntime(directory, client) {
-  const sessions = schedulerRuntime.sessionIDsForHost(directory, client);
-  for (const sessionID of sessions) {
-    clearActiveRun(sessionID);
-    schedulerRuntime.clearSessionScheduling(sessionID);
-    runLocks.delete(sessionID);
-    clearLoopOwnedUserMessageGuard(sessionID);
-    clearSessionActivity(sessionID);
-    loopCompactionRequests.delete(sessionID);
-    clearCommandLifecycle(sessionID);
-  }
-}
-function dangerousShell(command) {
-  const text = String(command || "").toLowerCase();
-  return [
-    /\brm\b(?=[^\r\n]*\s-{1,2}(?:[a-z]*r[a-z]*|recursive)\b)(?=[^\r\n]*\s-{1,2}(?:[a-z]*f[a-z]*|force)\b)/,
-    /\bremove-item\b[^\r\n]*(?:-recurse|-force)/,
-    /\bgit\s+reset\b/,
-    /\bgit\s+clean\b/,
-    /\bgit\s+push\b/,
-    /\bdel\b[^\r\n]*\s\/s\b/,
-    /\b(?:rmdir|rd)\b[^\r\n]*\s\/s\b/,
-    /(?:^|[;&|]\s*)format(?:\.com)?\s+(?:[a-z]:|\/(?:fs|q)\b)/,
-    /\bterraform\s+destroy\b/,
-    /\bkubectl\s+delete\b/,
-    /\bdeploy\b.*\bproduction\b/
-  ].some((pattern) => pattern.test(text));
-}
 async function buildGoalPrompt(directory, job) {
   const sections = [];
   sections.push(`Working directory:
@@ -1596,12 +1523,205 @@ ${sections.join(`
 
 `)}`;
 }
+function goalReportPath(directory, sessionID, job) {
+  return path3.join(stateDir(directory), GOAL_REPORT_DIR, `${safeID(sessionID)}-${safeID(job.name || job.id)}.md`);
+}
+function goalReportText(job) {
+  const lines = [];
+  lines.push(`# OpenCode Loop Goal Report`);
+  lines.push("");
+  lines.push(`Status: ${goalStatusText(job) || "unknown"}`);
+  lines.push(`Goal: ${job.action || job.goalFile || ""}`);
+  lines.push(`Created: ${job.createdAt || ""}`);
+  if (job.goalCompletedAt)
+    lines.push(`Completed: ${new Date(job.goalCompletedAt).toISOString()}`);
+  if (job.goalBlockedAt)
+    lines.push(`Blocked: ${new Date(job.goalBlockedAt).toISOString()}`);
+  if (job.lastUserInterruptAt)
+    lines.push(`Paused by user message: ${new Date(job.lastUserInterruptAt).toISOString()}`);
+  if (job.goalNoProgressPausedAt)
+    lines.push(`Paused by no-progress guard: ${new Date(job.goalNoProgressPausedAt).toISOString()}`);
+  if (job.runCount)
+    lines.push(`Turns: ${job.runCount}`);
+  if ((job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0)
+    lines.push(`No-progress: ${job.noProgressCount || 0}/${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS}`);
+  lines.push("");
+  if (job.goalSummary)
+    lines.push("## Summary", "", String(job.goalSummary), "");
+  if (job.goalEvidence)
+    lines.push("## Evidence", "", String(job.goalEvidence), "");
+  if (job.goalBlockedReason)
+    lines.push("## Blocked reason", "", String(job.goalBlockedReason), "");
+  if (job.goalCompletionRejectedReason)
+    lines.push("## Last completion rejection", "", String(job.goalCompletionRejectedReason), "");
+  if (job.goalInterruptedReason)
+    lines.push("## Interrupt", "", String(job.goalInterruptedReason), "");
+  if (job.goalNoProgressReason)
+    lines.push("## No-progress guard", "", String(job.goalNoProgressReason), "");
+  if (job.goalAcceptance?.length)
+    lines.push("## Acceptance criteria", "", ...job.goalAcceptance.map((item) => `- ${item}`), "");
+  if (job.lastGoalChecks?.length) {
+    lines.push("## Latest checks", "");
+    for (const item of job.lastGoalChecks)
+      lines.push(`- ${item.command}: exit ${item.code}`);
+    lines.push("");
+  }
+  if (job.goalProgress?.length) {
+    lines.push("## Progress", "");
+    for (const item of job.goalProgress)
+      lines.push(`- ${item.time}: ${item.summary}${item.next ? ` Next: ${item.next}` : ""}`);
+    lines.push("");
+  }
+  return lines.join(`
+`);
+}
+async function writeGoalReport(directory, sessionID, job) {
+  if (!isGoalJob(job))
+    return;
+  const target = job.goalEvidenceFile ? path3.resolve(directory, job.goalEvidenceFile) : goalReportPath(directory, sessionID, job);
+  await ensureDir(path3.dirname(target));
+  await fs3.writeFile(target, goalReportText(job), "utf8");
+}
+function pickGoalJob(state, target = "") {
+  const goals = (state.jobs || []).filter(isGoalJob);
+  if (!goals.length)
+    return;
+  const text = String(target || "").trim();
+  if (!text || ["active", "current", "goal"].includes(text.toLowerCase()))
+    return goals.find((job) => job.goalStatus === "active" && job.enabled !== false) || goals[0];
+  return goals.find((job, index) => matchJob(job, text, index));
+}
+function parseGoalToolText(args, fields) {
+  const result = {};
+  for (const field of fields)
+    result[field] = String(args?.[field] || "").trim();
+  return result;
+}
+function hasConcreteGoalEvidence(value) {
+  const text = String(value || "").trim();
+  if (text.length < 24)
+    return false;
+  const normalized = text.toLowerCase().replace(/\s+/g, " ");
+  const weak = new Set(["done", "complete", "completed", "ok", "looks good", "n/a", "none", "no evidence", "no evidence provided", "goal completed", "marked complete"]);
+  if (weak.has(normalized) || normalized.startsWith("marked complete by /loop-goal-done"))
+    return false;
+  return /(\b(npm|pnpm|yarn|bun|node|pytest|cargo|dotnet|go test|tsc|typecheck|test|tests|lint|build|check|checks|exit\s*\d|passed|verified|changed|updated|created|fixed|file|files|diff|commit)\b|[`\\/][\w./:-]+)/i.test(text) || text.length >= 80;
+}
+function goalChecksPassed(job) {
+  return Array.isArray(job?.lastGoalChecks) && job.lastGoalChecks.length > 0 && job.lastGoalChecks.every((item) => Number(item?.code) === 0);
+}
+function goalRequiresPassingChecks(job) {
+  return job?.goalRequireChecksPass !== false && Array.isArray(job?.goalChecks) && job.goalChecks.length > 0;
+}
+function goalProgressSnapshot(job) {
+  return {
+    status: job?.goalStatus || "",
+    progressCount: Array.isArray(job?.goalProgress) ? job.goalProgress.length : 0,
+    evidence: String(job?.goalEvidence || ""),
+    checksPassedAt: Number(job?.goalChecksPassedAt || 0),
+    lastGoalCheckAt: Number(job?.lastGoalCheckAt || 0),
+    lastVerifyAt: Number(job?.lastVerifyAt || 0),
+    lastVerifyCode: Number.isFinite(Number(job?.lastVerifyCode)) ? Number(job.lastVerifyCode) : undefined
+  };
+}
+function goalMadeMeaningfulProgress(beforeJob, afterJob) {
+  const before = goalProgressSnapshot(beforeJob || {});
+  const after = goalProgressSnapshot(afterJob || {});
+  if (["completed", "blocked"].includes(after.status) && after.status !== before.status)
+    return true;
+  if (after.progressCount > before.progressCount)
+    return true;
+  if (after.evidence !== before.evidence && hasConcreteGoalEvidence(after.evidence))
+    return true;
+  if (after.checksPassedAt > before.checksPassedAt || goalChecksPassed(afterJob) && after.lastGoalCheckAt > before.lastGoalCheckAt)
+    return true;
+  if (after.lastVerifyAt > before.lastVerifyAt && after.lastVerifyCode === 0)
+    return true;
+  return false;
+}
+
+// src/source/legacy-v1.js
+var SERVICE2 = "opencode-loop";
+var DEFAULT_ACTIVE_GUARD_MS = 45000;
+var STALE_ACTIVE_RECOVERY_MS = 45000;
+var BUSY_RETRY_MS = 5000;
+var SESSION_STATUS_CACHE_MS = 1500;
+var MAX_SCAN_FILES = 200;
+var MAX_SCAN_BYTES = 2000000;
+var DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180000;
+var activeRuns = new Map;
+var runLocks = new Map;
+var loopCompactionRequests = new Map;
+var DEFAULT_PROGRESS_MD = `# Progress
+
+## Current Goal
+Describe the current project goal here.
+
+## Agent Rules
+- Do not ask questions unless truly blocked.
+- Make reasonable assumptions and continue.
+- Work on unfinished TODOs in order.
+- Mark completed TODOs with [x].
+- Add new bugs, ideas, and follow-up work as TODOs.
+- Run tests, lint, or build when available.
+- Do not run destructive commands, force pushes, production deploys, or database resets.
+
+## Active TODO
+- [ ] Review the project structure and pick the next safe improvement.
+
+## Completed
+- [x] Created progress.md.
+
+## Backlog Ideas
+- [ ] Add more project-specific tasks here.
+
+## Blocked
+- None.
+`;
+var schedulerRuntime = createSchedulerRuntime({
+  busyRetryMs: BUSY_RETRY_MS,
+  sessionIsIdle,
+  finalizeActiveRun,
+  maybeRunDueJobs,
+  appendLoopLog,
+  toast,
+  errorMessage: sdkErrorMessage
+});
+var { rememberSession, scheduleIdleWork, scheduleDueWork, stopWatchdog, cancelDueWork } = schedulerRuntime;
+function disposeRuntime(directory, client) {
+  const sessions = schedulerRuntime.sessionIDsForHost(directory, client);
+  for (const sessionID of sessions) {
+    clearActiveRun(sessionID);
+    schedulerRuntime.clearSessionScheduling(sessionID);
+    runLocks.delete(sessionID);
+    clearLoopOwnedUserMessageGuard(sessionID);
+    clearSessionActivity(sessionID);
+    loopCompactionRequests.delete(sessionID);
+    clearCommandLifecycle(sessionID);
+  }
+}
+function dangerousShell(command) {
+  const text = String(command || "").toLowerCase();
+  return [
+    /\brm\b(?=[^\r\n]*\s-{1,2}(?:[a-z]*r[a-z]*|recursive)\b)(?=[^\r\n]*\s-{1,2}(?:[a-z]*f[a-z]*|force)\b)/,
+    /\bremove-item\b[^\r\n]*(?:-recurse|-force)/,
+    /\bgit\s+reset\b/,
+    /\bgit\s+clean\b/,
+    /\bgit\s+push\b/,
+    /\bdel\b[^\r\n]*\s\/s\b/,
+    /\b(?:rmdir|rd)\b[^\r\n]*\s\/s\b/,
+    /(?:^|[;&|]\s*)format(?:\.com)?\s+(?:[a-z]:|\/(?:fs|q)\b)/,
+    /\bterraform\s+destroy\b/,
+    /\bkubectl\s+delete\b/,
+    /\bdeploy\b.*\bproduction\b/
+  ].some((pattern) => pattern.test(text));
+}
 async function buildPrompt(directory, job) {
   if (isGoalJob(job))
     return await buildGoalPrompt(directory, job);
   const sections = [];
   if (job.promptFile) {
-    const text = await readSmallTextFile(path3.resolve(directory, job.promptFile));
+    const text = await readSmallTextFile(path4.resolve(directory, job.promptFile));
     if (text.trim())
       sections.push(`Instructions from ${job.promptFile}:
 ${text.trim()}`);
@@ -1611,7 +1731,7 @@ ${text.trim()}`);
   if (job.action)
     sections.push(decoratePrompt(job));
   for (const file of job.includeFiles || []) {
-    const text = await readSmallTextFile(path3.resolve(directory, file), 80000);
+    const text = await readSmallTextFile(path4.resolve(directory, file), 80000);
     if (text.trim())
       sections.push(`Context from ${file}:
 ${text.trim().slice(0, 20000)}`);
@@ -1657,7 +1777,7 @@ async function snapshotPaths(directory, files) {
   const snapshot = {};
   for (const file of files || []) {
     try {
-      const stat = await fs3.stat(path3.resolve(directory, file));
+      const stat = await fs4.stat(path4.resolve(directory, file));
       snapshot[file] = `${stat.mtimeMs}:${stat.size}`;
     } catch {
       snapshot[file] = "missing";
@@ -1677,10 +1797,10 @@ async function watchChanged(directory, job) {
 }
 async function fileContains(filePath, needle) {
   try {
-    const stat = await fs3.stat(filePath);
+    const stat = await fs4.stat(filePath);
     if (!stat.isFile() || stat.size > MAX_SCAN_BYTES)
       return false;
-    return (await fs3.readFile(filePath, "utf8")).includes(needle);
+    return (await fs4.readFile(filePath, "utf8")).includes(needle);
   } catch {
     return false;
   }
@@ -1688,9 +1808,9 @@ async function fileContains(filePath, needle) {
 async function untilReached(directory, job) {
   if (!job.until)
     return false;
-  const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path3.join(".opencode", "opencode-loop", "until.txt")];
+  const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path4.join(".opencode", "opencode-loop", "until.txt")];
   for (const file of files)
-    if (await fileContains(path3.resolve(directory, file), job.until))
+    if (await fileContains(path4.resolve(directory, file), job.until))
       return true;
   let scanned = 0;
   async function walk(current) {
@@ -1698,7 +1818,7 @@ async function untilReached(directory, job) {
       return false;
     let entries;
     try {
-      entries = await fs3.readdir(current, { withFileTypes: true });
+      entries = await fs4.readdir(current, { withFileTypes: true });
     } catch {
       return false;
     }
@@ -1707,7 +1827,7 @@ async function untilReached(directory, job) {
         return false;
       if ([".git", "node_modules", "dist", "build", ".next", "coverage"].includes(entry.name))
         continue;
-      const full = path3.join(current, entry.name);
+      const full = path4.join(current, entry.name);
       if (entry.isDirectory()) {
         if (await walk(full))
           return true;
@@ -1731,13 +1851,13 @@ async function createCheckpoint(directory, sessionID, job, client) {
   if (!status.stdout.trim())
     return;
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const checkpointDir = path3.join(stateDir(directory), "checkpoints", safeID(sessionID));
+  const checkpointDir = path4.join(stateDir(directory), "checkpoints", safeID(sessionID));
   await ensureDir(checkpointDir);
   const diff = await runProcess("git", ["diff", "--binary"], directory, 120000);
   const staged = await runProcess("git", ["diff", "--cached", "--binary"], directory, 120000);
   const prefix = `${timestamp}-${safeID(job.name || job.id)}`;
-  await fs3.writeFile(path3.join(checkpointDir, `${prefix}.status.txt`), status.stdout + status.stderr);
-  await fs3.writeFile(path3.join(checkpointDir, `${prefix}.patch`), `${diff.stdout}
+  await fs4.writeFile(path4.join(checkpointDir, `${prefix}.status.txt`), status.stdout + status.stderr);
+  await fs4.writeFile(path4.join(checkpointDir, `${prefix}.patch`), `${diff.stdout}
 ${staged.stdout}`);
   if (job.gitCheckpoint) {
     await runProcess("git", ["add", "-A"], directory, 120000);
@@ -2010,96 +2130,6 @@ async function recoverActiveDispatchFailure(directory, client, sessionID, jobId,
   await scheduleDueWork(directory, client, sessionID, BUSY_RETRY_MS);
   return true;
 }
-function goalReportPath(directory, sessionID, job) {
-  return path3.join(stateDir(directory), GOAL_REPORT_DIR, `${safeID(sessionID)}-${safeID(job.name || job.id)}.md`);
-}
-function goalReportText(job) {
-  const lines = [];
-  lines.push(`# OpenCode Loop Goal Report`);
-  lines.push("");
-  lines.push(`Status: ${goalStatusText(job) || "unknown"}`);
-  lines.push(`Goal: ${job.action || job.goalFile || ""}`);
-  lines.push(`Created: ${job.createdAt || ""}`);
-  if (job.goalCompletedAt)
-    lines.push(`Completed: ${new Date(job.goalCompletedAt).toISOString()}`);
-  if (job.goalBlockedAt)
-    lines.push(`Blocked: ${new Date(job.goalBlockedAt).toISOString()}`);
-  if (job.lastUserInterruptAt)
-    lines.push(`Paused by user message: ${new Date(job.lastUserInterruptAt).toISOString()}`);
-  if (job.goalNoProgressPausedAt)
-    lines.push(`Paused by no-progress guard: ${new Date(job.goalNoProgressPausedAt).toISOString()}`);
-  if (job.runCount)
-    lines.push(`Turns: ${job.runCount}`);
-  if ((job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0)
-    lines.push(`No-progress: ${job.noProgressCount || 0}/${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS}`);
-  lines.push("");
-  if (job.goalSummary)
-    lines.push("## Summary", "", String(job.goalSummary), "");
-  if (job.goalEvidence)
-    lines.push("## Evidence", "", String(job.goalEvidence), "");
-  if (job.goalBlockedReason)
-    lines.push("## Blocked reason", "", String(job.goalBlockedReason), "");
-  if (job.goalCompletionRejectedReason)
-    lines.push("## Last completion rejection", "", String(job.goalCompletionRejectedReason), "");
-  if (job.goalInterruptedReason)
-    lines.push("## Interrupt", "", String(job.goalInterruptedReason), "");
-  if (job.goalNoProgressReason)
-    lines.push("## No-progress guard", "", String(job.goalNoProgressReason), "");
-  if (job.goalAcceptance?.length)
-    lines.push("## Acceptance criteria", "", ...job.goalAcceptance.map((item) => `- ${item}`), "");
-  if (job.lastGoalChecks?.length) {
-    lines.push("## Latest checks", "");
-    for (const item of job.lastGoalChecks)
-      lines.push(`- ${item.command}: exit ${item.code}`);
-    lines.push("");
-  }
-  if (job.goalProgress?.length) {
-    lines.push("## Progress", "");
-    for (const item of job.goalProgress)
-      lines.push(`- ${item.time}: ${item.summary}${item.next ? ` Next: ${item.next}` : ""}`);
-    lines.push("");
-  }
-  return lines.join(`
-`);
-}
-async function writeGoalReport(directory, sessionID, job) {
-  if (!isGoalJob(job))
-    return;
-  const target = job.goalEvidenceFile ? path3.resolve(directory, job.goalEvidenceFile) : goalReportPath(directory, sessionID, job);
-  await ensureDir(path3.dirname(target));
-  await fs3.writeFile(target, goalReportText(job), "utf8");
-}
-function pickGoalJob(state, target = "") {
-  const goals = (state.jobs || []).filter(isGoalJob);
-  if (!goals.length)
-    return;
-  const text = String(target || "").trim();
-  if (!text || ["active", "current", "goal"].includes(text.toLowerCase()))
-    return goals.find((job) => job.goalStatus === "active" && job.enabled !== false) || goals[0];
-  return goals.find((job, index) => matchJob(job, text, index));
-}
-function parseGoalToolText(args, fields) {
-  const result = {};
-  for (const field of fields)
-    result[field] = String(args?.[field] || "").trim();
-  return result;
-}
-function hasConcreteGoalEvidence(value) {
-  const text = String(value || "").trim();
-  if (text.length < 24)
-    return false;
-  const normalized = text.toLowerCase().replace(/\s+/g, " ");
-  const weak = new Set(["done", "complete", "completed", "ok", "looks good", "n/a", "none", "no evidence", "no evidence provided", "goal completed", "marked complete"]);
-  if (weak.has(normalized) || normalized.startsWith("marked complete by /loop-goal-done"))
-    return false;
-  return /(\b(npm|pnpm|yarn|bun|node|pytest|cargo|dotnet|go test|tsc|typecheck|test|tests|lint|build|check|checks|exit\s*\d|passed|verified|changed|updated|created|fixed|file|files|diff|commit)\b|[`\\/][\w./:-]+)/i.test(text) || text.length >= 80;
-}
-function goalChecksPassed(job) {
-  return Array.isArray(job?.lastGoalChecks) && job.lastGoalChecks.length > 0 && job.lastGoalChecks.every((item) => Number(item?.code) === 0);
-}
-function goalRequiresPassingChecks(job) {
-  return job?.goalRequireChecksPass !== false && Array.isArray(job?.goalChecks) && job.goalChecks.length > 0;
-}
 async function rejectGoalCompletion(directory, sessionID, state, job, reason) {
   job.goalCompletionRejectedAt = now();
   job.goalCompletionRejectedReason = reason;
@@ -2109,32 +2139,6 @@ async function rejectGoalCompletion(directory, sessionID, state, job, reason) {
   await writeGoalReport(directory, sessionID, job);
   await appendLoopLog(directory, "goal-complete-rejected", { sessionID, job: job.name || job.id, reason });
   return { ok: false, job, rejected: true, message: `Goal completion rejected: ${reason}` };
-}
-function goalProgressSnapshot(job) {
-  return {
-    status: job?.goalStatus || "",
-    progressCount: Array.isArray(job?.goalProgress) ? job.goalProgress.length : 0,
-    evidence: String(job?.goalEvidence || ""),
-    checksPassedAt: Number(job?.goalChecksPassedAt || 0),
-    lastGoalCheckAt: Number(job?.lastGoalCheckAt || 0),
-    lastVerifyAt: Number(job?.lastVerifyAt || 0),
-    lastVerifyCode: Number.isFinite(Number(job?.lastVerifyCode)) ? Number(job.lastVerifyCode) : undefined
-  };
-}
-function goalMadeMeaningfulProgress(beforeJob, afterJob) {
-  const before = goalProgressSnapshot(beforeJob || {});
-  const after = goalProgressSnapshot(afterJob || {});
-  if (["completed", "blocked"].includes(after.status) && after.status !== before.status)
-    return true;
-  if (after.progressCount > before.progressCount)
-    return true;
-  if (after.evidence !== before.evidence && hasConcreteGoalEvidence(after.evidence))
-    return true;
-  if (after.checksPassedAt > before.checksPassedAt || goalChecksPassed(afterJob) && after.lastGoalCheckAt > before.lastGoalCheckAt)
-    return true;
-  if (after.lastVerifyAt > before.lastVerifyAt && after.lastVerifyCode === 0)
-    return true;
-  return false;
 }
 async function applyGoalNoProgressGuard(directory, client, sessionID, job, beforeJob) {
   if (!isGoalJob(job) || ["completed", "blocked"].includes(job.goalStatus) || job.paused || job.enabled === false)
@@ -2462,7 +2466,7 @@ async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
       await reschedule();
       return;
     }
-    if (job.stopFile && await pathExists(path3.resolve(directory, job.stopFile))) {
+    if (job.stopFile && await pathExists(path4.resolve(directory, job.stopFile))) {
       state.jobs = (state.jobs || []).filter((candidate) => candidate.id !== job.id);
       await writeState(directory, sessionID, state);
       await notifyJob(directory, job, "stop_file");
@@ -2771,7 +2775,7 @@ async function statusLoop(directory, client, sessionID) {
 async function logsLoop(directory, client, sessionID) {
   let text = "No loop log found.";
   try {
-    text = (await fs3.readFile(path3.join(stateDir(directory), "loop.log"), "utf8")).trim().split(/\r?\n/).slice(-80).join(`
+    text = (await fs4.readFile(path4.join(stateDir(directory), "loop.log"), "utf8")).trim().split(/\r?\n/).slice(-80).join(`
 `) || text;
   } catch {}
   await say(client, sessionID, `OpenCode loop logs:
@@ -2827,12 +2831,12 @@ async function doctorLoop(directory, client, sessionID) {
 }
 async function initLoop(directory, client, sessionID, args) {
   const target = String(args || "").trim() || "progress.md";
-  const full = path3.resolve(directory, target);
+  const full = path4.resolve(directory, target);
   if (await pathExists(full)) {
     await toast(client, `${target} already exists.`, "warning");
     return;
   }
-  await fs3.writeFile(full, DEFAULT_PROGRESS_MD, "utf8");
+  await fs4.writeFile(full, DEFAULT_PROGRESS_MD, "utf8");
   await toast(client, `Created ${target}.`, "success");
   await appendLoopLog(directory, "init", { sessionID, file: target });
 }
