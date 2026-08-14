@@ -20,11 +20,8 @@ jobs:
           node-version: "24"
           cache: npm
       - run: npm ci
-      - run: npm install --no-save --package-lock=false @opencode-ai/cli@next @opencode-ai/plugin@next
-      - name: Inspect loaded V2 plugins
-        working-directory: scripts/fixtures/v2-project
-        env:
-          OPENCODE_LOG_LEVEL: DEBUG
-        run: ../../../node_modules/.bin/opencode2 api --standalone get /api/plugin
-      - name: Show V2 server log
-        run: tail -n 200 ~/.local/share/opencode/log/opencode.log
+      - run: npm install --no-save --package-lock=false @opencode-ai/cli@0.0.0-next-17430 @opencode-ai/plugin@0.0.0-next-17430
+      - name: Show exact CLI commands
+        run: ./node_modules/.bin/opencode2 --help
+      - name: Show exact plugin command help
+        run: ./node_modules/.bin/opencode2 plugin --help
