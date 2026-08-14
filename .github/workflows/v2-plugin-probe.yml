@@ -21,6 +21,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm install --no-save --package-lock=false @opencode-ai/cli@next @opencode-ai/plugin@next
-      - name: Inspect loaded V2 plugins with debug logs
+      - name: Inspect loaded V2 plugins with debug output
         working-directory: scripts/fixtures/v2-project
-        run: ../../../node_modules/.bin/opencode2 --print-logs --log-level DEBUG api --standalone get /api/plugin
+        env:
+          OPENCODE_PRINT_LOGS: "1"
+          OPENCODE_LOG_LEVEL: DEBUG
+        run: ../../../node_modules/.bin/opencode2 api --standalone get /api/plugin
