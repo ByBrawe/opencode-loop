@@ -1,6 +1,6 @@
 name: Validate V2 command runtime
 
-# Temporary branch-only validation; removed before PR.
+# Temporary branch-only validation; rerun after host fixture correction, removed before PR.
 on:
   push:
     branches: [feat-v2-action-runtime-20260814]
