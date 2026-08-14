@@ -1,7 +1,6 @@
 // @bun
 // src/source/legacy-v1.js
-import { promises as fs5 } from "fs";
-import path5 from "path";
+import path6 from "path";
 import { tool } from "@opencode-ai/plugin/tool";
 
 // src/source/core/args.js
@@ -2271,13 +2270,196 @@ ${item.output}`).join(`
   return { runGoalChecks, applyGoalNoProgressGuard };
 }
 
+// src/source/runtime/job-workspace.js
+import { promises as fs5 } from "fs";
+import path5 from "path";
+var MAX_SCAN_FILES = 200;
+var MAX_SCAN_BYTES = 2000000;
+function requireFunction6(value, name) {
+  if (typeof value !== "function")
+    throw new TypeError(`createJobWorkspaceRuntime requires ${name}`);
+  return value;
+}
+function dangerousShell(command) {
+  const text = String(command || "").toLowerCase();
+  return [
+    /\brm\b(?=[^\r\n]*\s-{1,2}(?:[a-z]*r[a-z]*|recursive)\b)(?=[^\r\n]*\s-{1,2}(?:[a-z]*f[a-z]*|force)\b)/,
+    /\bremove-item\b[^\r\n]*(?:-recurse|-force)/,
+    /\bgit\s+reset\b/,
+    /\bgit\s+clean\b/,
+    /\bgit\s+push\b/,
+    /\bdel\b[^\r\n]*\s\/s\b/,
+    /\b(?:rmdir|rd)\b[^\r\n]*\s\/s\b/,
+    /(?:^|[;&|]\s*)format(?:\.com)?\s+(?:[a-z]:|\/(?:fs|q)\b)/,
+    /\bterraform\s+destroy\b/,
+    /\bkubectl\s+delete\b/,
+    /\bdeploy\b.*\bproduction\b/
+  ].some((pattern) => pattern.test(text));
+}
+function createJobWorkspaceRuntime(options = {}) {
+  const toast2 = requireFunction6(options.toast, "toast");
+  const runProcess2 = typeof options.runProcess === "function" ? options.runProcess : runProcess;
+  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
+  const readSmallTextFile2 = typeof options.readSmallTextFile === "function" ? options.readSmallTextFile : readSmallTextFile;
+  const buildGoalPrompt2 = typeof options.buildGoalPrompt === "function" ? options.buildGoalPrompt : buildGoalPrompt;
+  async function buildPrompt(directory, job) {
+    if (isGoalJob(job))
+      return await buildGoalPrompt2(directory, job);
+    const sections = [];
+    if (job.promptFile) {
+      const text = await readSmallTextFile2(path5.resolve(directory, job.promptFile));
+      if (text.trim())
+        sections.push(`Instructions from ${job.promptFile}:
+${text.trim()}`);
+      else
+        sections.push(`Prompt file ${job.promptFile} was requested but could not be read. Continue from the regular action instead.`);
+    }
+    if (job.action)
+      sections.push(decoratePrompt(job));
+    for (const file of job.includeFiles || []) {
+      const text = await readSmallTextFile2(path5.resolve(directory, file), 80000);
+      if (text.trim())
+        sections.push(`Context from ${file}:
+${text.trim().slice(0, 20000)}`);
+    }
+    return sections.join(`
+
+---
+
+`) || decoratePrompt(job);
+  }
+  async function ensureBranch(directory, job, client, sessionID) {
+    if (!job.branch || job.branchDone)
+      return job;
+    const branch = safeID(job.branch);
+    const inRepo = await runProcess2("git", ["rev-parse", "--is-inside-work-tree"], directory, 1e4);
+    if (inRepo.code !== 0) {
+      job.branchDone = true;
+      return job;
+    }
+    let result = await runProcess2("git", ["switch", branch], directory, 30000);
+    if (result.code !== 0)
+      result = await runProcess2("git", ["switch", "-c", branch], directory, 30000);
+    job.branchDone = true;
+    await toast2(client, result.code === 0 ? `Loop branch active: ${branch}` : `Could not switch/create branch: ${branch}`, result.code === 0 ? "success" : "warning");
+    await appendLoopLog2(directory, "branch", { sessionID, branch, code: result.code });
+    return job;
+  }
+  async function snapshotPaths(directory, files) {
+    const snapshot = {};
+    for (const file of files || []) {
+      try {
+        const stat = await fs5.stat(path5.resolve(directory, file));
+        snapshot[file] = `${stat.mtimeMs}:${stat.size}`;
+      } catch {
+        snapshot[file] = "missing";
+      }
+    }
+    return snapshot;
+  }
+  async function watchChanged(directory, job) {
+    if (!job.watchPaths?.length)
+      return false;
+    const next = await snapshotPaths(directory, job.watchPaths);
+    const previous = job.watchSnapshot || {};
+    const changed = job.watchPaths.some((file) => previous[file] !== next[file]);
+    if (changed)
+      job.watchSnapshot = next;
+    return changed;
+  }
+  async function fileContains(filePath, needle) {
+    try {
+      const stat = await fs5.stat(filePath);
+      if (!stat.isFile() || stat.size > MAX_SCAN_BYTES)
+        return false;
+      return (await fs5.readFile(filePath, "utf8")).includes(needle);
+    } catch {
+      return false;
+    }
+  }
+  async function untilReached(directory, job) {
+    if (!job.until)
+      return false;
+    const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path5.join(".opencode", "opencode-loop", "until.txt")];
+    for (const file of files)
+      if (await fileContains(path5.resolve(directory, file), job.until))
+        return true;
+    let scanned = 0;
+    async function walk(current) {
+      if (scanned >= MAX_SCAN_FILES)
+        return false;
+      let entries;
+      try {
+        entries = await fs5.readdir(current, { withFileTypes: true });
+      } catch {
+        return false;
+      }
+      for (const entry of entries) {
+        if (scanned >= MAX_SCAN_FILES)
+          return false;
+        if ([".git", "node_modules", "dist", "build", ".next", "coverage"].includes(entry.name))
+          continue;
+        const full = path5.join(current, entry.name);
+        if (entry.isDirectory()) {
+          if (await walk(full))
+            return true;
+        } else if (entry.isFile() && /\.(md|txt|json|yaml|yml)$/i.test(entry.name)) {
+          scanned++;
+          if (await fileContains(full, job.until))
+            return true;
+        }
+      }
+      return false;
+    }
+    return await walk(directory);
+  }
+  async function createCheckpoint(directory, sessionID, job, client) {
+    if (!job.checkpointOnly && !job.gitCheckpoint)
+      return;
+    const inRepo = await runProcess2("git", ["rev-parse", "--is-inside-work-tree"], directory, 1e4);
+    if (inRepo.code !== 0)
+      return;
+    const status = await runProcess2("git", ["status", "--short"], directory, 30000);
+    if (!status.stdout.trim())
+      return;
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const checkpointDir = path5.join(stateDir(directory), "checkpoints", safeID(sessionID));
+    await ensureDir(checkpointDir);
+    const diff = await runProcess2("git", ["diff", "--binary"], directory, 120000);
+    const staged = await runProcess2("git", ["diff", "--cached", "--binary"], directory, 120000);
+    const prefix = `${timestamp}-${safeID(job.name || job.id)}`;
+    await fs5.writeFile(path5.join(checkpointDir, `${prefix}.status.txt`), status.stdout + status.stderr);
+    await fs5.writeFile(path5.join(checkpointDir, `${prefix}.patch`), `${diff.stdout}
+${staged.stdout}`);
+    if (job.gitCheckpoint) {
+      await runProcess2("git", ["add", "-A"], directory, 120000);
+      await runProcess2("git", ["commit", "-m", `chore: opencode loop checkpoint ${timestamp}`], directory, 120000);
+    }
+    await toast2(client, `Loop checkpoint saved: ${prefix}`, "success");
+  }
+  return {
+    buildPrompt,
+    ensureBranch,
+    snapshotPaths,
+    watchChanged,
+    untilReached,
+    createCheckpoint
+  };
+}
+
 // src/source/legacy-v1.js
 var DEFAULT_ACTIVE_GUARD_MS = 45000;
 var STALE_ACTIVE_RECOVERY_MS = 45000;
 var BUSY_RETRY_MS = 5000;
 var SESSION_STATUS_CACHE_MS = 1500;
-var MAX_SCAN_FILES = 200;
-var MAX_SCAN_BYTES = 2000000;
+var {
+  buildPrompt,
+  ensureBranch,
+  snapshotPaths,
+  watchChanged,
+  untilReached,
+  createCheckpoint
+} = createJobWorkspaceRuntime({ toast });
 var { runGoalChecks, applyGoalNoProgressGuard } = createGoalExecutionPolicy({ runShellCommand, dangerousShell, toast, appendLoopLog, now });
 var activeRuns = new Map;
 var runLocks = new Map;
@@ -2369,65 +2551,6 @@ function disposeRuntime(directory, client) {
     clearCommandLifecycle(sessionID);
   }
 }
-function dangerousShell(command) {
-  const text = String(command || "").toLowerCase();
-  return [
-    /\brm\b(?=[^\r\n]*\s-{1,2}(?:[a-z]*r[a-z]*|recursive)\b)(?=[^\r\n]*\s-{1,2}(?:[a-z]*f[a-z]*|force)\b)/,
-    /\bremove-item\b[^\r\n]*(?:-recurse|-force)/,
-    /\bgit\s+reset\b/,
-    /\bgit\s+clean\b/,
-    /\bgit\s+push\b/,
-    /\bdel\b[^\r\n]*\s\/s\b/,
-    /\b(?:rmdir|rd)\b[^\r\n]*\s\/s\b/,
-    /(?:^|[;&|]\s*)format(?:\.com)?\s+(?:[a-z]:|\/(?:fs|q)\b)/,
-    /\bterraform\s+destroy\b/,
-    /\bkubectl\s+delete\b/,
-    /\bdeploy\b.*\bproduction\b/
-  ].some((pattern) => pattern.test(text));
-}
-async function buildPrompt(directory, job) {
-  if (isGoalJob(job))
-    return await buildGoalPrompt(directory, job);
-  const sections = [];
-  if (job.promptFile) {
-    const text = await readSmallTextFile(path5.resolve(directory, job.promptFile));
-    if (text.trim())
-      sections.push(`Instructions from ${job.promptFile}:
-${text.trim()}`);
-    else
-      sections.push(`Prompt file ${job.promptFile} was requested but could not be read. Continue from the regular action instead.`);
-  }
-  if (job.action)
-    sections.push(decoratePrompt(job));
-  for (const file of job.includeFiles || []) {
-    const text = await readSmallTextFile(path5.resolve(directory, file), 80000);
-    if (text.trim())
-      sections.push(`Context from ${file}:
-${text.trim().slice(0, 20000)}`);
-  }
-  return sections.join(`
-
----
-
-`) || decoratePrompt(job);
-}
-async function ensureBranch(directory, job, client, sessionID) {
-  if (!job.branch || job.branchDone)
-    return job;
-  const branch = safeID(job.branch);
-  const inRepo = await runProcess("git", ["rev-parse", "--is-inside-work-tree"], directory, 1e4);
-  if (inRepo.code !== 0) {
-    job.branchDone = true;
-    return job;
-  }
-  let result = await runProcess("git", ["switch", branch], directory, 30000);
-  if (result.code !== 0)
-    result = await runProcess("git", ["switch", "-c", branch], directory, 30000);
-  job.branchDone = true;
-  await toast(client, result.code === 0 ? `Loop branch active: ${branch}` : `Could not switch/create branch: ${branch}`, result.code === 0 ? "success" : "warning");
-  await appendLoopLog(directory, "branch", { sessionID, branch, code: result.code });
-  return job;
-}
 async function maybeCompact(directory, client, sessionID, job) {
   const dueRuns = job.compactEveryRuns > 0 && (job.runCount || 0) > 0 && (job.runCount || 0) % job.compactEveryRuns === 0 && job.lastCompactRunCount !== job.runCount;
   const dueTime = job.compactEveryMs > 0 && (!job.lastCompactAt || now() - job.lastCompactAt >= job.compactEveryMs);
@@ -2441,98 +2564,6 @@ async function maybeCompact(directory, client, sessionID, job) {
   }
   loopCompactionRequests.delete(sessionID);
   return { job, started: false };
-}
-async function snapshotPaths(directory, files) {
-  const snapshot = {};
-  for (const file of files || []) {
-    try {
-      const stat = await fs5.stat(path5.resolve(directory, file));
-      snapshot[file] = `${stat.mtimeMs}:${stat.size}`;
-    } catch {
-      snapshot[file] = "missing";
-    }
-  }
-  return snapshot;
-}
-async function watchChanged(directory, job) {
-  if (!job.watchPaths?.length)
-    return false;
-  const next = await snapshotPaths(directory, job.watchPaths);
-  const previous = job.watchSnapshot || {};
-  const changed = job.watchPaths.some((file) => previous[file] !== next[file]);
-  if (changed)
-    job.watchSnapshot = next;
-  return changed;
-}
-async function fileContains(filePath, needle) {
-  try {
-    const stat = await fs5.stat(filePath);
-    if (!stat.isFile() || stat.size > MAX_SCAN_BYTES)
-      return false;
-    return (await fs5.readFile(filePath, "utf8")).includes(needle);
-  } catch {
-    return false;
-  }
-}
-async function untilReached(directory, job) {
-  if (!job.until)
-    return false;
-  const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path5.join(".opencode", "opencode-loop", "until.txt")];
-  for (const file of files)
-    if (await fileContains(path5.resolve(directory, file), job.until))
-      return true;
-  let scanned = 0;
-  async function walk(current) {
-    if (scanned >= MAX_SCAN_FILES)
-      return false;
-    let entries;
-    try {
-      entries = await fs5.readdir(current, { withFileTypes: true });
-    } catch {
-      return false;
-    }
-    for (const entry of entries) {
-      if (scanned >= MAX_SCAN_FILES)
-        return false;
-      if ([".git", "node_modules", "dist", "build", ".next", "coverage"].includes(entry.name))
-        continue;
-      const full = path5.join(current, entry.name);
-      if (entry.isDirectory()) {
-        if (await walk(full))
-          return true;
-      } else if (entry.isFile() && /\.(md|txt|json|yaml|yml)$/i.test(entry.name)) {
-        scanned++;
-        if (await fileContains(full, job.until))
-          return true;
-      }
-    }
-    return false;
-  }
-  return await walk(directory);
-}
-async function createCheckpoint(directory, sessionID, job, client) {
-  if (!job.checkpointOnly && !job.gitCheckpoint)
-    return;
-  const inRepo = await runProcess("git", ["rev-parse", "--is-inside-work-tree"], directory, 1e4);
-  if (inRepo.code !== 0)
-    return;
-  const status = await runProcess("git", ["status", "--short"], directory, 30000);
-  if (!status.stdout.trim())
-    return;
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const checkpointDir = path5.join(stateDir(directory), "checkpoints", safeID(sessionID));
-  await ensureDir(checkpointDir);
-  const diff = await runProcess("git", ["diff", "--binary"], directory, 120000);
-  const staged = await runProcess("git", ["diff", "--cached", "--binary"], directory, 120000);
-  const prefix = `${timestamp}-${safeID(job.name || job.id)}`;
-  await fs5.writeFile(path5.join(checkpointDir, `${prefix}.status.txt`), status.stdout + status.stderr);
-  await fs5.writeFile(path5.join(checkpointDir, `${prefix}.patch`), `${diff.stdout}
-${staged.stdout}`);
-  if (job.gitCheckpoint) {
-    await runProcess("git", ["add", "-A"], directory, 120000);
-    await runProcess("git", ["commit", "-m", `chore: opencode loop checkpoint ${timestamp}`], directory, 120000);
-  }
-  await toast(client, `Loop checkpoint saved: ${prefix}`, "success");
 }
 function updateSessionStatusFromEvent(event) {
   const sessionID = event?.properties?.sessionID;
@@ -2993,7 +3024,7 @@ async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
       await reschedule();
       return;
     }
-    if (job.stopFile && await pathExists(path5.resolve(directory, job.stopFile))) {
+    if (job.stopFile && await pathExists(path6.resolve(directory, job.stopFile))) {
       state.jobs = (state.jobs || []).filter((candidate) => candidate.id !== job.id);
       await writeState(directory, sessionID, state);
       await notifyJob(directory, job, "stop_file");
