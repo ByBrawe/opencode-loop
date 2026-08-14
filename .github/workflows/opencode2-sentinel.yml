@@ -44,7 +44,7 @@ jobs:
       - name: Run stable Loop real-host canary on OpenCode 2
         shell: bash
         env:
-          OPENCODE_SERVER_PASSWORD: ""
+          OPENCODE_HOST_API_MODE: "v2"
         run: |
           v2="$(command -v opencode2)"
           test -n "$v2"
@@ -63,8 +63,6 @@ jobs:
       - name: Probe native V2 plugin registry (informational)
         continue-on-error: true
         shell: bash
-        env:
-          OPENCODE_SERVER_PASSWORD: ""
         run: |
           project="$RUNNER_TEMP/opencode2-loop-sentinel"
           mkdir -p "$project/.opencode/plugins"
