@@ -1,0 +1,34 @@
+name: Probe OpenCode V2 Plugin Loader
+
+on:
+  push:
+    branches: [experimental-v2-probe]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Show current next versions
+        run: |
+          npm view @opencode-ai/cli@next version
+          npm view @opencode-ai/plugin@next version
+      - name: Install V2 next packages
+        run: npm install --no-save --package-lock=false @opencode-ai/cli@next @opencode-ai/plugin@next
+      - name: Check sentinel module syntax
+        run: node --check .opencode/plugins/bybrawe-loop-v2-probe.mjs
+      - name: Show V2 CLI version
+        run: ./node_modules/.bin/opencode2 --version
+      - name: Verify discovered plugin is active
+        run: |
+          timeout 45s ./node_modules/.bin/opencode2 api get /api/plugin > v2-plugins.txt
+          cat v2-plugins.txt
+          grep -F 'bybrawe.loop.v2-probe' v2-plugins.txt
