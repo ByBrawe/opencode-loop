@@ -71,7 +71,8 @@ jobs:
         shell: bash
         run: |
           project="$RUNNER_TEMP/opencode-loop-v2-activation"
-          plugins="$("$GITHUB_WORKSPACE/node_modules/.bin/opencode2" api get /api/plugin -H "x-opencode-directory: $project")"
+          cd "$project"
+          plugins="$("$GITHUB_WORKSPACE/node_modules/.bin/opencode2" plugin list)"
           printf '%s\n' "$plugins"
           printf '%s\n' "$plugins" | grep -F "bybrawe.opencode-loop.v2.activation-probe"
 
