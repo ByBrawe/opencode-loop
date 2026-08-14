@@ -93,9 +93,12 @@ async function main() {
 
   await writeFile(sentinelFile, [
     `import { writeFile } from "node:fs/promises"`,
-    `export default async () => {`,
-    `  await writeFile(${JSON.stringify(sentinelMarker)}, JSON.stringify({ loaded: true }), "utf8")`,
-    `  return {}`,
+    `export default {`,
+    `  id: "bybrawe.opencode-loop.v2-compat-sentinel",`,
+    `  server: async () => {`,
+    `    await writeFile(${JSON.stringify(sentinelMarker)}, JSON.stringify({ loaded: true }), "utf8")`,
+    `    return {}`,
+    `  },`,
     `}`,
     ``,
   ].join("\n"))
@@ -103,11 +106,14 @@ async function main() {
   await writeFile(loopBridge, [
     `import { writeFile } from "node:fs/promises"`,
     `import stablePlugin from ${JSON.stringify(pathToFileURL(stablePlugin).href)}`,
-    `export default async (input) => {`,
-    `  const hooks = await stablePlugin(input)`,
-    `  const hookKeys = Object.keys(hooks || {}).sort()`,
-    `  await writeFile(${JSON.stringify(loopMarker)}, JSON.stringify({ loaded: true, hookKeys }), "utf8")`,
-    `  return hooks`,
+    `export default {`,
+    `  id: "bybrawe.opencode-loop.v2-compat-stable",`,
+    `  server: async (input) => {`,
+    `    const hooks = await stablePlugin(input)`,
+    `    const hookKeys = Object.keys(hooks || {}).sort()`,
+    `    await writeFile(${JSON.stringify(loopMarker)}, JSON.stringify({ loaded: true, hookKeys }), "utf8")`,
+    `    return hooks`,
+    `  },`,
     `}`,
     ``,
   ].join("\n"))
@@ -156,9 +162,9 @@ async function main() {
       throw new Error(`OpenCode 2 resolved the wrong Location: expected ${project}, got ${String(response?.location?.directory)}`)
     }
 
-    const sentinel = await waitForMarker(sentinelMarker, "legacy sentinel")
+    const sentinel = await waitForMarker(sentinelMarker, "module sentinel")
     const loop = await waitForMarker(loopMarker, "stable Loop plugin")
-    if (sentinel?.loaded !== true) throw new Error("legacy sentinel did not finish initialization")
+    if (sentinel?.loaded !== true) throw new Error("module sentinel did not finish initialization")
     if (loop?.loaded !== true) throw new Error("stable Loop plugin did not finish initialization")
     if (!Array.isArray(loop.hookKeys) || !loop.hookKeys.includes("event") || !loop.hookKeys.includes("command.execute.before")) {
       throw new Error(`stable Loop plugin returned an unexpected hook surface: ${JSON.stringify(loop?.hookKeys)}`)
@@ -166,7 +172,7 @@ async function main() {
 
     console.log(JSON.stringify({
       ok: true,
-      compatibility: "stable-v1-plugin-on-opencode2",
+      compatibility: "stable-v1-plugin-module-on-opencode2",
       platform: process.platform,
       node: process.version,
       opencode2Version: version,
