@@ -13,7 +13,7 @@ import { guardLoopOwnedUserMessage, loopOwnedUserMessageGuardActive, say, clearL
 import { markHandled, consumeHandled, hasHandledCommandEvent, markHandledCommandEvent, forgetHandledCommandEvent, clearCommandLifecycle, commandName, isPreset, isLoopCommandName, commandArgsText } from "./opencode/commands.js"
 import { activeToolCalls, sessionParents, sessionStatuses, sessionStatusSeenAt, hasActiveToolCalls, markToolCallActive, markToolCallFinished, updateSessionRelationshipFromEvent, isDescendantSession, hasBusyDescendant, refreshSessionRelationships, updateToolActivityFromEvent, clearSessionActivity } from "./runtime/session-activity.js"
 import { createSchedulerRuntime } from "./runtime/scheduler.js"
-import { buildGoalPrompt, writeGoalReport, pickGoalJob, parseGoalToolText, hasConcreteGoalEvidence, goalChecksPassed, goalRequiresPassingChecks, goalMadeMeaningfulProgress } from "./runtime/goal-runtime.js"
+import { buildGoalPrompt, writeGoalReport, goalMadeMeaningfulProgress, setGoalComplete, setGoalBlocked, setGoalProgress } from "./runtime/goal-runtime.js"
 
 const SERVICE = "opencode-loop"
 const DEFAULT_ACTIVE_GUARD_MS = 45_000
@@ -488,17 +488,6 @@ async function recoverActiveDispatchFailure(directory, client, sessionID, jobId,
   return true
 }
 
-async function rejectGoalCompletion(directory, sessionID, state, job, reason) {
-  job.goalCompletionRejectedAt = now()
-  job.goalCompletionRejectedReason = reason
-  job.goalCompletionRejectedCount = (job.goalCompletionRejectedCount || 0) + 1
-  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate)
-  await writeState(directory, sessionID, state)
-  await writeGoalReport(directory, sessionID, job)
-  await appendLoopLog(directory, "goal-complete-rejected", { sessionID, job: job.name || job.id, reason })
-  return { ok: false, job, rejected: true, message: `Goal completion rejected: ${reason}` }
-}
-
 async function applyGoalNoProgressGuard(directory, client, sessionID, job, beforeJob) {
   if (!isGoalJob(job) || ["completed", "blocked"].includes(job.goalStatus) || job.paused || job.enabled === false) return job
   const limit = Number(job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS)
@@ -519,70 +508,6 @@ async function applyGoalNoProgressGuard(directory, client, sessionID, job, befor
     await appendLoopLog(directory, "goal-no-progress-paused", { sessionID, job: job.name || job.id, count: job.noProgressCount, limit })
   }
   return job
-}
-
-async function setGoalComplete(directory, sessionID, args = {}) {
-  const state = await readState(directory, sessionID)
-  const job = pickGoalJob(state, args.target)
-  if (!job) return { ok: false, message: "No active experimental goal was found." }
-  const parsed = parseGoalToolText(args, ["summary", "evidence"])
-  const manualOverride = args.manual === true || args.manualOverride === true
-  const completionEvidence = parsed.evidence || job.goalEvidence || ""
-  const skipEvidenceGate = manualOverride || args.allowWeakEvidence === true || job.goalRequireEvidence === false
-  const skipCheckGate = manualOverride || args.allowFailingChecks === true || job.goalRequireChecksPass === false
-  if (!skipEvidenceGate && !hasConcreteGoalEvidence(completionEvidence)) {
-    return await rejectGoalCompletion(directory, sessionID, state, job, "concrete evidence is required before the goal tool can complete the goal")
-  }
-  if (!skipCheckGate && goalRequiresPassingChecks(job) && !goalChecksPassed(job)) {
-    return await rejectGoalCompletion(directory, sessionID, state, job, "configured goal checks have not passed yet")
-  }
-  job.goalStatus = "completed"
-  job.enabled = false
-  job.paused = true
-  job.goalCompletedAt = now()
-  job.goalSummary = parsed.summary || job.goalSummary || "Goal completed."
-  job.goalEvidence = completionEvidence || "No evidence provided."
-  job.noProgressCount = 0
-  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate)
-  await writeState(directory, sessionID, state)
-  await writeGoalReport(directory, sessionID, job)
-  await appendLoopLog(directory, "goal-complete", { sessionID, job: job.name || job.id, summary: job.goalSummary })
-  return { ok: true, job, message: `Goal completed: ${job.goalSummary}` }
-}
-
-async function setGoalBlocked(directory, sessionID, args = {}) {
-  const state = await readState(directory, sessionID)
-  const job = pickGoalJob(state, args.target)
-  if (!job) return { ok: false, message: "No active experimental goal was found." }
-  const parsed = parseGoalToolText(args, ["reason", "needed", "evidence"])
-  job.goalStatus = "blocked"
-  job.enabled = false
-  job.paused = true
-  job.goalBlockedAt = now()
-  job.goalBlockedReason = [parsed.reason, parsed.needed ? `Needed: ${parsed.needed}` : ""].filter(Boolean).join("\n") || "Goal blocked."
-  if (parsed.evidence) job.goalEvidence = parsed.evidence
-  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate)
-  await writeState(directory, sessionID, state)
-  await writeGoalReport(directory, sessionID, job)
-  await appendLoopLog(directory, "goal-blocked", { sessionID, job: job.name || job.id, reason: job.goalBlockedReason })
-  return { ok: true, job, message: `Goal blocked: ${job.goalBlockedReason}` }
-}
-
-async function setGoalProgress(directory, sessionID, args = {}) {
-  const state = await readState(directory, sessionID)
-  const job = pickGoalJob(state, args.target)
-  if (!job) return { ok: false, message: "No active experimental goal was found." }
-  const parsed = parseGoalToolText(args, ["summary", "next", "evidence"])
-  const item = { time: new Date().toISOString(), summary: parsed.summary || "Progress recorded.", next: parsed.next || "", evidence: parsed.evidence || "" }
-  job.goalProgress = [...(job.goalProgress || []), item].slice(-30)
-  if (parsed.evidence) job.goalEvidence = parsed.evidence
-  job.noProgressCount = 0
-  job.lastProgressAt = now()
-  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate)
-  await writeState(directory, sessionID, state)
-  await writeGoalReport(directory, sessionID, job)
-  await appendLoopLog(directory, "goal-progress", { sessionID, job: job.name || job.id, summary: item.summary })
-  return { ok: true, job, message: `Goal progress recorded: ${item.summary}` }
 }
 
 async function runGoalChecks(directory, sessionID, job, client) {
