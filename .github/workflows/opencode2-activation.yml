@@ -55,7 +55,7 @@ jobs:
           mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
           project="$RUNNER_TEMP/opencode-loop-v2-activation"
           mkdir -p "$project"
-          node -e 'const fs=require("node:fs"),path=require("node:path");const project=process.argv[1],plugin=path.resolve(process.argv[2]);fs.writeFileSync(path.join(project,"opencode.json"),JSON.stringify({plugins:[plugin]},null,2)+"\n")' "$project" "$GITHUB_WORKSPACE/src/source/opencode2/experimental.js"
+          node -e 'const fs=require("node:fs"),path=require("node:path");const project=process.argv[1],plugin=path.resolve(process.argv[2]);fs.writeFileSync(path.join(project,"opencode.json"),JSON.stringify({plugin:[plugin]},null,2)+"\n")' "$project" "$GITHUB_WORKSPACE/src/source/opencode2/experimental.js"
           cat "$project/opencode.json"
 
       - name: Verify plugin is active in real OpenCode 2 host
