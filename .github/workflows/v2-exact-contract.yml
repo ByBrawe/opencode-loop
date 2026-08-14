@@ -16,16 +16,15 @@ jobs:
         with:
           node-version: "24"
       - name: Install exact packages
-        run: npm install --no-save --package-lock=false @opencode-ai/cli@0.0.0-next-17430 @opencode-ai/plugin@0.0.0-next-17430
-      - name: Show plugin package manifest
-        run: cat node_modules/@opencode-ai/plugin/package.json
-      - name: Show promise API entry declarations
-        run: sed -n '1,280p' node_modules/@opencode-ai/plugin/dist/promise/index.d.ts
-      - name: Show promise plugin declarations
-        run: sed -n '1,360p' node_modules/@opencode-ai/plugin/dist/promise/plugin.d.ts
-      - name: Show promise plugin implementation
-        run: sed -n '1,320p' node_modules/@opencode-ai/plugin/dist/promise/plugin.js
-      - name: Show registration declarations
-        run: sed -n '1,320p' node_modules/@opencode-ai/plugin/dist/promise/registration.d.ts
+        run: npm install --no-save --package-lock=false @opencode-ai/cli@0.0.0-next-17430 @opencode-ai/plugin@0.0.0-next-17430 @opencode-ai/schema@0.0.0-next-17430
+      - name: Show promise plugin contract
+        run: |
+          sed -n '1,280p' node_modules/@opencode-ai/plugin/dist/promise/index.d.ts
+          sed -n '1,360p' node_modules/@opencode-ai/plugin/dist/promise/plugin.d.ts
+          sed -n '1,360p' node_modules/@opencode-ai/plugin/dist/promise/command.d.ts
+      - name: Locate exact config plugin schema
+        run: grep -R -n "plugins" node_modules/@opencode-ai/schema/dist | head -n 80
+      - name: List exact schema config files
+        run: find node_modules/@opencode-ai/schema/dist -maxdepth 3 -type f -path '*config*' -print
       - name: Show CLI package manifest
         run: cat node_modules/@opencode-ai/cli/package.json
