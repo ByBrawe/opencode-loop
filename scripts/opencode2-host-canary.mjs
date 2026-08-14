@@ -17,7 +17,6 @@ function run(command, args, { cwd, env, allowFailure = false, timeout = 60_000 }
     maxBuffer: 8 * 1024 * 1024,
     timeout,
     windowsHide: true,
-    shell: process.platform === "win32",
   })
   if (result.error) throw result.error
   if (!allowFailure && result.status !== 0) {
@@ -50,6 +49,10 @@ function collectPluginIDs(value) {
   const direct = [value.id, value.pluginID, value.name].filter((item) => typeof item === "string")
   const nested = [value.data, value.plugins, value.items].flatMap((item) => collectPluginIDs(item))
   return [...direct, ...nested]
+}
+
+function uniquePluginIDs(value) {
+  return [...new Set(collectPluginIDs(value))]
 }
 
 async function failureLog(env) {
@@ -126,21 +129,40 @@ async function main() {
     const health = output(run("opencode2", ["api", "get", "/api/health"], { cwd: project, env }))
     if (!health) throw new Error("OpenCode 2 health API returned no output")
 
-    const pluginPath = `/api/plugin?location%5Bdirectory%5D=${encodeURIComponent(project)}`
-    const pluginResult = run("opencode2", ["api", "get", pluginPath], { cwd: project, env })
-    const response = parseJSONOutput(pluginResult, "GET /api/plugin at project Location")
+    const plainPluginResult = run("opencode2", ["api", "get", "/api/plugin"], { cwd: project, env })
+    const plainResponse = parseJSONOutput(plainPluginResult, "GET /api/plugin from project cwd")
+    const plainIDs = uniquePluginIDs(plainResponse)
 
-    if (response?._tag) throw new Error(`project-scoped /api/plugin rejected the Location: ${JSON.stringify(response)}`)
-    if (response?.location?.directory !== project) {
-      throw new Error(`OpenCode 2 resolved the wrong Location: expected ${project}, got ${String(response?.location?.directory)}`)
+    const pluginPath = `/api/plugin?location%5Bdirectory%5D=${encodeURIComponent(project)}`
+    const scopedPluginResult = run("opencode2", ["api", "get", pluginPath], { cwd: project, env })
+    const scopedResponse = parseJSONOutput(scopedPluginResult, "GET /api/plugin at project Location")
+
+    if (scopedResponse?._tag) {
+      throw new Error(`project-scoped /api/plugin rejected the Location: ${JSON.stringify(scopedResponse)}`)
+    }
+    if (scopedResponse?.location?.directory !== project) {
+      throw new Error(`OpenCode 2 resolved the wrong Location: expected ${project}, got ${String(scopedResponse?.location?.directory)}`)
     }
 
-    const ids = [...new Set(collectPluginIDs(response))]
+    const scopedIDs = uniquePluginIDs(scopedResponse)
+    const ids = [...new Set([...plainIDs, ...scopedIDs])]
     if (!ids.includes(sentinelID)) {
-      throw new Error(`OpenCode 2 did not activate the minimal sentinel. Active IDs: ${JSON.stringify(ids)}\nRaw response: ${String(pluginResult.stdout ?? "")}`)
+      throw new Error([
+        `OpenCode 2 did not activate the minimal sentinel. Active IDs: ${JSON.stringify(ids)}`,
+        `Plain /api/plugin IDs: ${JSON.stringify(plainIDs)}`,
+        `Scoped /api/plugin IDs: ${JSON.stringify(scopedIDs)}`,
+        `Plain response: ${String(plainPluginResult.stdout ?? "")}`,
+        `Scoped response: ${String(scopedPluginResult.stdout ?? "")}`,
+      ].join("\n"))
     }
     if (!ids.includes(pluginID)) {
-      throw new Error(`OpenCode 2 activated the sentinel but not ${pluginID}. Active IDs: ${JSON.stringify(ids)}\nRaw response: ${String(pluginResult.stdout ?? "")}`)
+      throw new Error([
+        `OpenCode 2 activated the sentinel but not ${pluginID}. Active IDs: ${JSON.stringify(ids)}`,
+        `Plain /api/plugin IDs: ${JSON.stringify(plainIDs)}`,
+        `Scoped /api/plugin IDs: ${JSON.stringify(scopedIDs)}`,
+        `Plain response: ${String(plainPluginResult.stdout ?? "")}`,
+        `Scoped response: ${String(scopedPluginResult.stdout ?? "")}`,
+      ].join("\n"))
     }
 
     console.log(JSON.stringify({
@@ -149,9 +171,11 @@ async function main() {
       node: process.version,
       opencode2Version: version,
       health,
-      projectDirectory: response.location.directory,
+      projectDirectory: scopedResponse.location.directory,
       sentinelID,
       pluginID,
+      plainPluginIDs: plainIDs,
+      scopedPluginIDs: scopedIDs,
       activePluginIDs: ids,
     }, null, 2))
   } catch (error) {
