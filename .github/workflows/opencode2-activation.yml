@@ -46,14 +46,19 @@ jobs:
       - name: Install matching OpenCode 2 plugin API
         run: npm install --no-save --package-lock=false @opencode-ai/plugin@next
 
-      - name: Show tested V2 versions and package layout
+      - name: Show tested V2 versions and host API declarations
         shell: bash
         run: |
           node -p "require('./node_modules/@opencode-ai/plugin/package.json').version"
           command -v opencode2
           opencode2 --version
           node -p "JSON.stringify(require('./node_modules/@opencode-ai/plugin/package.json').exports, null, 2)"
-          find "$GITHUB_WORKSPACE/node_modules/@opencode-ai/plugin/dist" -maxdepth 4 -type f -print | sort || true
+          for file in context session event command tool; do
+            echo "--- dist/promise/$file.d.ts ---"
+            sed -n '1,260p' "$GITHUB_WORKSPACE/node_modules/@opencode-ai/plugin/dist/promise/$file.d.ts" || true
+            echo "--- dist/promise/$file.js ---"
+            sed -n '1,260p' "$GITHUB_WORKSPACE/node_modules/@opencode-ai/plugin/dist/promise/$file.js" || true
+          done
 
       - name: Prepare dependency-free V2 activation probe
         shell: bash
@@ -99,8 +104,6 @@ jobs:
           EOF
           git -C "$project" add .opencode/plugins/opencode-loop-v2-probe.js
           git -C "$project" commit --quiet -m "init"
-          git -C "$project" rev-parse --show-toplevel
-          cat "$plugin_dir/opencode-loop-v2-probe.js"
 
       - name: Verify dependency-free setup runs in real OpenCode 2 host
         shell: bash
@@ -124,9 +127,7 @@ jobs:
           done
 
           echo "OpenCode 2 did not execute the local plugin setup hook." >&2
-          echo "--- /api/command ---" >&2
           cat "$RUNNER_TEMP/opencode2-command.json" >&2 || true
-          echo "--- /api/plugin ---" >&2
           cat "$RUNNER_TEMP/opencode2-plugin.json" >&2 || true
           exit 1
 
