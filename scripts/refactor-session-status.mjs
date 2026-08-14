@@ -66,7 +66,7 @@ while (legacy.includes(clearPair)) {
   legacy = legacy.replace(clearPair, 'clearSessionStatus(sessionID)')
   clearCount++
 }
-if (clearCount !== 2) throw new Error(`expected 2 remaining session-status clear pairs, found ${clearCount}`)
+if (clearCount !== 1) throw new Error(`expected 1 remaining session-status clear pair, found ${clearCount}`)
 
 const busyPair = 'sessionStatuses.set(sessionID, "busy")\n      sessionStatusSeenAt.set(sessionID, now())'
 requireOnce(legacy, busyPair, "remaining busy status update")
@@ -104,7 +104,7 @@ for (const staleReference of ["sessionStatuses", "sessionStatusSeenAt", "session
 }
 if (!imports.includes("createSessionStatusRuntime")) throw new Error("session status runtime import missing")
 if (!legacy.includes('markSessionStatus(sessionID, "busy")')) throw new Error("busy status helper wiring missing")
-if ((legacy.match(/clearSessionStatus\(sessionID\)/g) || []).length !== 2) throw new Error("expected two clearSessionStatus calls in executor")
+if ((legacy.match(/clearSessionStatus\(sessionID\)/g) || []).length !== 1) throw new Error("expected one clearSessionStatus call in executor")
 
 await fs.writeFile(legacyPath, legacy)
 console.log("session status refactor transform complete")
