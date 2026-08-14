@@ -1,0 +1,6 @@
+{
+  "name": "loop-v2-probe",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./server.js"
+}
