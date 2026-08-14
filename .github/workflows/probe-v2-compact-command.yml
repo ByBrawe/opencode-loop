@@ -1,6 +1,6 @@
 name: Probe V2 compact command
 
-# Temporary branch-only probe; rerun with real session.command canaries.
+# Temporary branch-only probe; rerun with command-field canaries.
 on:
   push:
     branches: [feat-v2-compact-runtime-20260814]
@@ -45,7 +45,6 @@ jobs:
           import { writeFile } from "node:fs/promises"
 
           const marker = new URL("../../v2-compact-wrapper-marker.json", import.meta.url)
-          const source = (fn) => typeof fn === "function" ? String(fn).slice(0, 2400) : ""
           const safe = (value) => {
             try { return JSON.parse(JSON.stringify(value)) } catch { return String(value) }
           }
@@ -68,21 +67,22 @@ jobs:
               const sessionID = created.ok
                 ? String(created.value?.id || created.value?.data?.id || created.value?.sessionID || "")
                 : ""
-              const compact = sessionID
-                ? await callWithTimeout("session.command compact", () => ctx.session.command({ sessionID, id: "compact" }))
+              const compactByCommand = sessionID
+                ? await callWithTimeout("session.command command=compact", () => ctx.session.command({ sessionID, command: "compact" }))
                 : { ok: false, error: "session create returned no id" }
-              const review = sessionID
-                ? await callWithTimeout("session.command review", () => ctx.session.command({ sessionID, id: "review" }))
+              const reviewByCommand = sessionID
+                ? await callWithTimeout("session.command command=review", () => ctx.session.command({ sessionID, command: "review", arguments: "--quick" }))
+                : { ok: false, error: "session create returned no id" }
+              const compactByName = sessionID
+                ? await callWithTimeout("session.command name=compact", () => ctx.session.command({ sessionID, name: "compact" }))
                 : { ok: false, error: "session create returned no id" }
 
               await writeFile(marker, JSON.stringify({
-                methods: Object.fromEntries(Object.keys(ctx?.session || {}).sort().map((key) => [key, typeof ctx.session[key]])),
-                createSource: source(ctx?.session?.create),
-                commandSource: source(ctx?.session?.command),
                 created,
                 sessionID,
-                compact,
-                review,
+                compactByCommand,
+                reviewByCommand,
+                compactByName,
               }, null, 2), "utf8")
             },
           }
