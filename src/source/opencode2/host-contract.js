@@ -2,6 +2,20 @@ import { createOpenCode2EventBridge } from "./event-bridge.js"
 
 export const OPENCODE_LOOP_V2_HOST_CONTRACT = "experimental"
 
+function normalizePrompt(input) {
+  const sessionID = String(input?.sessionID || "").trim()
+  const text = String(input?.text || "")
+  if (!sessionID) throw new TypeError("prompt requires a session ID")
+  if (!text.trim()) throw new TypeError("prompt requires text")
+  return Object.freeze({
+    sessionID,
+    text,
+    agent: input?.agent,
+    model: input?.model,
+    noReply: input?.noReply === true,
+  })
+}
+
 export function createOpenCode2HostContract(options = {}) {
   const bridge = createOpenCode2EventBridge({
     directory: options.directory,
@@ -10,14 +24,24 @@ export function createOpenCode2HostContract(options = {}) {
   })
   let started = false
   let disposed = false
+  let hostDisposed = false
 
   async function start() {
     if (disposed) throw new Error("OpenCode 2 host contract is disposed")
     if (started) return false
     if (typeof options.subscribe !== "function") throw new TypeError("subscribe must be a function")
+    if (typeof options.sendPrompt !== "function") throw new TypeError("sendPrompt must be a function")
     await bridge.attach(options.subscribe)
     started = true
     return true
+  }
+
+  async function prompt(input) {
+    if (disposed || hostDisposed) throw new Error("OpenCode 2 host contract is unavailable")
+    if (!started) throw new Error("OpenCode 2 host contract is not started")
+    const request = normalizePrompt(input)
+    const runtime = bridge.runtimeManager.observeExternal(request.sessionID)
+    return await options.sendPrompt(Object.freeze({ ...request, runtime }))
   }
 
   async function dispose(reason = "host-contract-disposed") {
@@ -29,9 +53,12 @@ export function createOpenCode2HostContract(options = {}) {
 
   return Object.freeze({
     start,
+    prompt,
     dispose,
     runtimeManager: bridge.runtimeManager,
+    markHostDisposed: () => { hostDisposed = true },
     isStarted: () => started,
     isDisposed: () => disposed,
+    isHostDisposed: () => hostDisposed,
   })
 }
