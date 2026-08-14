@@ -12,7 +12,7 @@ on:
       - "scripts/v2-plugin-sentinel-test.mjs"
       - ".github/workflows/v2-lifecycle-contract.yml"
   push:
-    branches: [main]
+    branches: [main, v2-adapter-step1]
     paths:
       - "src/source/opencode2/**"
       - "src/source/runtime/**"
