@@ -69,19 +69,15 @@ jobs:
           session_id="$(CREATED="$created" node -e 'const x=JSON.parse(process.env.CREATED); const id=x?.data?.id ?? x?.id; if(!id) process.exit(1); process.stdout.write(String(id))')"
 
           command_body="$(node -e 'console.log(JSON.stringify({command:"loop",arguments:`10m --no-now ${process.argv[1]}`}))' "$objective")"
-          (cd "$project" && opencode2 api post "/session/$session_id/command?directory=$encoded" --data "$command_body" > "$RUNNER_TEMP/opencode2-loop-command.log" 2>&1) &
-          command_pid=$!
+          set +e
+          (cd "$project" && timeout 5s opencode2 api post "/session/$session_id/command?directory=$encoded" --data "$command_body" > "$RUNNER_TEMP/opencode2-loop-command.log" 2>&1)
+          command_code=$?
+          set -e
+          echo "legacy command exit=$command_code"
+          cat "$RUNNER_TEMP/opencode2-loop-command.log" || true
 
           state="$project/.opencode/opencode-loop/$session_id.json"
-          found=0
-          for _ in $(seq 1 100); do
-            if [ -f "$state" ] && grep -Fq "$objective" "$state"; then found=1; break; fi
-            sleep 0.1
-          done
-          kill "$command_pid" >/dev/null 2>&1 || true
-          wait "$command_pid" >/dev/null 2>&1 || true
-          if [ "$found" -ne 1 ]; then
-            cat "$RUNNER_TEMP/opencode2-loop-command.log" || true
+          if [ ! -f "$state" ] || ! grep -Fq "$objective" "$state"; then
             echo "Loop state was not created by the OpenCode 2 host" >&2
             exit 1
           fi
