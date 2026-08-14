@@ -21,14 +21,19 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm install --no-save --package-lock=false @opencode-ai/cli@0.0.0-next-17430 @opencode-ai/plugin@0.0.0-next-17430
-      - name: Immediate plugin list
+      - name: Stage real Loop V2 adapter as local plugin
+        run: cp src/source/opencode2/experimental.js scripts/fixtures/v2-project/.opencode/plugin/opencode-loop-v2-experimental.js
+      - name: Start V2 location services
         working-directory: scripts/fixtures/v2-project
         run: ../../../node_modules/.bin/opencode2 plugin list
       - name: Wait for initial plugin generation
         run: sleep 3
-      - name: Settled plugin list
+      - name: Capture settled plugin list
         working-directory: scripts/fixtures/v2-project
-        run: ../../../node_modules/.bin/opencode2 plugin list
+        run: ../../../node_modules/.bin/opencode2 plugin list | tee settled-plugins.txt
+      - name: Assert real Loop V2 adapter is active
+        working-directory: scripts/fixtures/v2-project
+        run: grep -F "bybrawe.opencode-loop.v2.experimental" settled-plugins.txt
       - name: Show V2 server log
         if: always()
-        run: tail -n 320 ~/.local/share/opencode/log/opencode.log || true
+        run: tail -n 360 ~/.local/share/opencode/log/opencode.log || true
