@@ -71,7 +71,20 @@ async function settle() {
 
   const result = await adapter.prompt({ sessionID: "ses_v2", text: "continue" })
   assert.deepEqual(result, { accepted: true })
-  assert.deepEqual(prompts, [{ sessionID: "ses_v2", text: "continue" }])
+  assert.deepEqual(prompts, [{
+    sessionID: "ses_v2",
+    prompt: { text: "continue" },
+    delivery: "queue",
+    resume: true,
+  }])
+
+  await adapter.prompt({ sessionID: "ses_v2", text: "steer now", delivery: "steer", resume: false })
+  assert.deepEqual(prompts.at(-1), {
+    sessionID: "ses_v2",
+    prompt: { text: "steer now" },
+    delivery: "steer",
+    resume: false,
+  })
 
   assert.equal(await adapter.dispose("test-complete"), true)
   assert.equal(await adapter.dispose("test-complete"), false)
