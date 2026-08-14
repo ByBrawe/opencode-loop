@@ -3,6 +3,7 @@ import { actionKind, decoratePrompt, matchJob } from "../core/jobs.js"
 import { readState, removeState, writeState } from "../core/state.js"
 
 export const OPENCODE_LOOP_V2_PROMPT_RUNTIME = "prompt-zero-interval"
+export const OPENCODE_LOOP_V2_INTERVAL_RUNTIME = "idle-safe-timer"
 export const OPENCODE_LOOP_V2_PROMPT_PREFIX = "AUTONOMOUS OPENCODE LOOP ITERATION. Continue the configured task now. Do not explain the /loop command. Do not search for documentation about this plugin. Do not create scheduler files. Do not ask questions. Make reasonable assumptions and work directly."
 
 function directoryFrom(event) {
@@ -11,7 +12,6 @@ function directoryFrom(event) {
 
 function unsupportedPromptJob(job) {
   const blockers = []
-  if (Number(job?.intervalMs || 0) !== 0) blockers.push("interval")
   if (actionKind(job?.action, job) !== "prompt") blockers.push("kind")
   if (!String(job?.action || "").trim()) blockers.push("action")
   if (job?.watchPaths?.length) blockers.push("watch")
@@ -44,107 +44,256 @@ function commandTarget(event, fallback = "all") {
   return String(event?.arguments || "").trim() || fallback
 }
 
+function scopeFrom(event) {
+  const directory = directoryFrom(event)
+  const sessionID = String(event?.sessionID || "").trim()
+  if (!directory || !sessionID) return undefined
+  return { directory, sessionID, key: `${directory}\u0000${sessionID}` }
+}
+
+function eligiblePromptJob(job) {
+  if (!job?.enabled || job?.paused) return false
+  if (unsupportedPromptJob(job).length) return false
+  return !(job.maxRuns > 0 && (job.runCount || 0) >= job.maxRuns)
+}
+
+function dueAt(job, current) {
+  const intervalMs = Math.max(0, Number(job?.intervalMs || 0))
+  const lastRunAt = Number(job?.lastRunAt || 0)
+  if (intervalMs === 0 || lastRunAt <= 0) return current
+  return lastRunAt + intervalMs
+}
+
 export function createOpenCode2PromptRuntime(options = {}) {
   if (typeof options.prompt !== "function") throw new TypeError("V2 prompt runtime requires prompt()")
 
-  async function addPromptLoop(event) {
-    const directory = directoryFrom(event)
-    const sessionID = String(event?.sessionID || "").trim()
-    if (!directory || !sessionID) return { handled: false, reason: "missing-scope" }
+  const now = typeof options.now === "function" ? options.now : Date.now
+  const setTimer = typeof options.setTimer === "function" ? options.setTimer : setTimeout
+  const clearTimer = typeof options.clearTimer === "function" ? options.clearTimer : clearTimeout
+  const onError = typeof options.onError === "function" ? options.onError : () => {}
+  const timers = new Map()
+  const idle = new Map()
+  const queues = new Map()
+  let disposed = false
 
-    const parsed = parseLoopArgs(event.arguments || "")
-    if (!parsed.ok) return { handled: true, accepted: false, reason: "parse", error: parsed.error }
-
-    const blockers = unsupportedPromptJob(parsed.job)
-    if (blockers.length) return { handled: true, accepted: false, reason: "unsupported", blockers }
-
-    parsed.job.name = jobName(parsed.job)
-    const state = await readState(directory, sessionID)
-    const jobs = Array.isArray(state.jobs) ? state.jobs : []
-    if (!parsed.job.multi) {
-      state.jobs = jobs.filter((job) => jobName(job) !== parsed.job.name)
-    } else {
-      state.jobs = jobs
-    }
-    state.jobs.push(parsed.job)
-    await writeState(directory, sessionID, state)
-    return { handled: true, accepted: true, job: parsed.job }
+  function report(error) {
+    try { onError(error) } catch {}
   }
 
-  async function updatePromptLoops(event, updater) {
-    const directory = directoryFrom(event)
-    const sessionID = String(event?.sessionID || "").trim()
-    if (!directory || !sessionID) return { handled: false, reason: "missing-scope" }
+  function clearScopeTimer(key) {
+    const current = timers.get(key)
+    if (!current) return false
+    timers.delete(key)
+    try { clearTimer(current.handle) } catch {}
+    return true
+  }
 
-    const target = commandTarget(event)
-    const state = await readState(directory, sessionID)
-    let count = 0
-    state.jobs = (state.jobs || []).map((job, index) => {
-      if (!matchJob(job, target, index)) return job
-      count += 1
-      return updater(job)
+  function clearScope(scope) {
+    clearScopeTimer(scope.key)
+    idle.delete(scope.key)
+  }
+
+  function enqueueScope(scope, task) {
+    if (disposed) return Promise.resolve({ handled: false, reason: "disposed" })
+    const previous = queues.get(scope.key) || Promise.resolve()
+    const result = previous.catch(() => undefined).then(async () => {
+      if (disposed) return { handled: false, reason: "disposed" }
+      return await task()
     })
-    await writeState(directory, sessionID, state)
-    return { handled: true, accepted: true, count, target }
+    const tail = result.catch(() => undefined)
+    queues.set(scope.key, tail)
+    tail.then(() => {
+      if (queues.get(scope.key) === tail) queues.delete(scope.key)
+    })
+    return result
   }
 
-  async function stopPromptLoops(event, forcedTarget) {
-    const directory = directoryFrom(event)
-    const sessionID = String(event?.sessionID || "").trim()
-    if (!directory || !sessionID) return { handled: false, reason: "missing-scope" }
+  async function scheduleScope(scope) {
+    clearScopeTimer(scope.key)
+    if (disposed) return undefined
 
-    const target = forcedTarget || commandTarget(event)
-    if (target.toLowerCase() === "all") {
-      const state = await readState(directory, sessionID)
-      const count = (state.jobs || []).length
-      await removeState(directory, sessionID)
-      return { handled: true, accepted: true, count, target }
+    const state = await readState(scope.directory, scope.sessionID)
+    const current = now()
+    let earliest
+    for (const job of state.jobs || []) {
+      if (!eligiblePromptJob(job)) continue
+      const intervalMs = Math.max(0, Number(job?.intervalMs || 0))
+      if (intervalMs === 0) continue
+      const candidate = dueAt(job, current)
+      if (candidate <= current) continue
+      if (!earliest || candidate < earliest) earliest = candidate
+    }
+    if (!earliest) return undefined
+
+    const delay = Math.max(0, earliest - current)
+    const token = Symbol(scope.key)
+    const handle = setTimer(() => {
+      const pending = enqueueScope(scope, async () => {
+        const currentTimer = timers.get(scope.key)
+        if (!currentTimer || currentTimer.token !== token) return { handled: false, reason: "stale-timer" }
+        timers.delete(scope.key)
+        if (idle.get(scope.key) !== true) return { handled: true, dispatched: false, reason: "not-idle" }
+        return await runDuePrompt(scope)
+      })
+      pending.catch(report)
+      return pending
+    }, delay)
+    handle?.unref?.()
+    timers.set(scope.key, { handle, token, dueAt: earliest })
+    return earliest
+  }
+
+  async function runDuePrompt(scope) {
+    const state = await readState(scope.directory, scope.sessionID)
+    const current = now()
+    const job = (state.jobs || []).find((candidate) => eligiblePromptJob(candidate) && dueAt(candidate, current) <= current)
+    if (!job) {
+      await scheduleScope(scope)
+      return { handled: true, dispatched: false }
     }
 
-    const state = await readState(directory, sessionID)
-    const before = (state.jobs || []).length
-    state.jobs = (state.jobs || []).filter((job, index) => !matchJob(job, target, index))
-    await writeState(directory, sessionID, state)
-    return { handled: true, accepted: true, count: before - state.jobs.length, target }
-  }
-
-  async function runIdlePrompt(event) {
-    const directory = directoryFrom(event)
-    const sessionID = String(event?.sessionID || "").trim()
-    if (!directory || !sessionID) return { handled: false, reason: "missing-scope" }
-
-    const state = await readState(directory, sessionID)
-    const job = (state.jobs || []).find((candidate) => {
-      if (!candidate?.enabled || candidate?.paused) return false
-      if (unsupportedPromptJob(candidate).length) return false
-      return !(candidate.maxRuns > 0 && (candidate.runCount || 0) >= candidate.maxRuns)
-    })
-    if (!job) return { handled: true, dispatched: false }
-
-    job.lastRunAt = Date.now()
+    job.lastRunAt = current
     job.runCount = (job.runCount || 0) + 1
     if (job.maxRuns > 0 && job.runCount >= job.maxRuns) job.enabled = false
     state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate)
-    await writeState(directory, sessionID, state)
+    await writeState(scope.directory, scope.sessionID, state)
+
+    idle.set(scope.key, false)
+    await scheduleScope(scope)
 
     const text = promptText(job)
-    await options.prompt({ sessionID, text })
+    await options.prompt({ sessionID: scope.sessionID, text })
     return { handled: true, dispatched: true, job, text }
   }
 
+  async function addPromptLoop(event) {
+    const scope = scopeFrom(event)
+    if (!scope) return { handled: false, reason: "missing-scope" }
+    return await enqueueScope(scope, async () => {
+      const parsed = parseLoopArgs(event.arguments || "")
+      if (!parsed.ok) return { handled: true, accepted: false, reason: "parse", error: parsed.error }
+
+      const blockers = unsupportedPromptJob(parsed.job)
+      if (blockers.length) return { handled: true, accepted: false, reason: "unsupported", blockers }
+
+      parsed.job.name = jobName(parsed.job)
+      const state = await readState(scope.directory, scope.sessionID)
+      const jobs = Array.isArray(state.jobs) ? state.jobs : []
+      if (!parsed.job.multi) {
+        state.jobs = jobs.filter((job) => jobName(job) !== parsed.job.name)
+      } else {
+        state.jobs = jobs
+      }
+      state.jobs.push(parsed.job)
+      await writeState(scope.directory, scope.sessionID, state)
+      await scheduleScope(scope)
+      return { handled: true, accepted: true, job: parsed.job }
+    })
+  }
+
+  async function updatePromptLoops(event, updater) {
+    const scope = scopeFrom(event)
+    if (!scope) return { handled: false, reason: "missing-scope" }
+    return await enqueueScope(scope, async () => {
+      const target = commandTarget(event)
+      const state = await readState(scope.directory, scope.sessionID)
+      let count = 0
+      state.jobs = (state.jobs || []).map((job, index) => {
+        if (!matchJob(job, target, index)) return job
+        count += 1
+        return updater(job)
+      })
+      await writeState(scope.directory, scope.sessionID, state)
+      await scheduleScope(scope)
+      return { handled: true, accepted: true, count, target }
+    })
+  }
+
+  async function stopPromptLoops(event, forcedTarget) {
+    const scope = scopeFrom(event)
+    if (!scope) return { handled: false, reason: "missing-scope" }
+    return await enqueueScope(scope, async () => {
+      const target = forcedTarget || commandTarget(event)
+      if (target.toLowerCase() === "all") {
+        const state = await readState(scope.directory, scope.sessionID)
+        const count = (state.jobs || []).length
+        await removeState(scope.directory, scope.sessionID)
+        await scheduleScope(scope)
+        return { handled: true, accepted: true, count, target }
+      }
+
+      const state = await readState(scope.directory, scope.sessionID)
+      const before = (state.jobs || []).length
+      state.jobs = (state.jobs || []).filter((job, index) => !matchJob(job, target, index))
+      await writeState(scope.directory, scope.sessionID, state)
+      await scheduleScope(scope)
+      return { handled: true, accepted: true, count: before - state.jobs.length, target }
+    })
+  }
+
+  async function runIdlePrompt(event) {
+    const scope = scopeFrom(event)
+    if (!scope) return { handled: false, reason: "missing-scope" }
+    idle.set(scope.key, true)
+    return await enqueueScope(scope, () => runDuePrompt(scope))
+  }
+
   async function onEvent(event) {
+    const scope = scopeFrom(event)
     if (event?.kind === "command" && event?.action === "executed") {
+      if (scope) idle.set(scope.key, false)
       if (event?.name === "loop") return addPromptLoop(event)
       if (event?.name === "loop-pause") return updatePromptLoops(event, (job) => ({ ...job, paused: true }))
       if (event?.name === "loop-resume") return updatePromptLoops(event, (job) => ({ ...job, paused: false, lastRunAt: 0 }))
       if (["loop-stop", "loop-remove"].includes(event?.name)) return stopPromptLoops(event)
       if (event?.name === "loop-clear") return stopPromptLoops(event, "all")
     }
+
     if (event?.kind === "session" && event?.action === "idle") {
       return runIdlePrompt(event)
+    }
+    if (event?.kind === "session" && event?.action === "status" && scope) {
+      const isIdle = event.status === "idle"
+      idle.set(scope.key, isIdle)
+      if (isIdle) return await enqueueScope(scope, () => runDuePrompt(scope))
+      return { handled: true, dispatched: false }
+    }
+    if (event?.kind === "session" && event?.action === "deleted" && scope) {
+      clearScope(scope)
+      return { handled: true, disposedScope: true }
+    }
+    if (event?.kind === "message" && event?.action === "updated" && scope) {
+      if (event.role === "user" || (event.role === "assistant" && !event.completedAt)) idle.set(scope.key, false)
+      return { handled: false }
+    }
+    if (event?.kind === "server" && event?.action === "disposed") {
+      await dispose()
+      return { handled: true, disposed: true }
     }
     return { handled: false }
   }
 
-  return Object.freeze({ onEvent, addPromptLoop, updatePromptLoops, stopPromptLoops, runIdlePrompt })
+  async function dispose() {
+    if (disposed) return false
+    disposed = true
+    for (const { handle } of timers.values()) {
+      try { clearTimer(handle) } catch {}
+    }
+    timers.clear()
+    idle.clear()
+    const pending = [...queues.values()]
+    if (pending.length) await Promise.allSettled(pending)
+    queues.clear()
+    return true
+  }
+
+  return Object.freeze({
+    onEvent,
+    addPromptLoop,
+    updatePromptLoops,
+    stopPromptLoops,
+    runIdlePrompt,
+    dispose,
+    scheduledCount: () => timers.size,
+  })
 }
