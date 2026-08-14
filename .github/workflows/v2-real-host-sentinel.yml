@@ -27,10 +27,9 @@ jobs:
         run: |
           ./node_modules/.bin/opencode2 --version
           node -p "require('./node_modules/@opencode-ai/plugin/package.json').version"
-      - name: Inspect API location options
-        run: |
-          ./node_modules/.bin/opencode2 api --help
-          ./node_modules/.bin/opencode2 api get --help
-      - name: Show current project-scoped response
+      - name: List active plugins in standalone project host
         working-directory: scripts/fixtures/v2-project
-        run: ../../../node_modules/.bin/opencode2 api get /api/plugin
+        run: ../../../node_modules/.bin/opencode2 api --standalone get /api/plugin | tee active-plugins.txt
+      - name: Assert Loop V2 sentinel is active
+        working-directory: scripts/fixtures/v2-project
+        run: grep -F "bybrawe.opencode-loop.v2.experimental" active-plugins.txt
