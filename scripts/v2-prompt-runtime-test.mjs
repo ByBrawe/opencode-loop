@@ -68,8 +68,9 @@ try {
   assert.equal(removed.count, 1)
   assert.equal((await readState()).jobs.length, 1)
 
-  const cleared = await runtime.onEvent({ kind: "command", action: "executed", name: "loop-clear", sessionID, directory, arguments: "" })
+  const cleared = await runtime.onEvent({ kind: "command", action: "executed", name: "loop-clear", sessionID, directory, arguments: "missing-target-is-ignored" })
   assert.equal(cleared.count, 1)
+  assert.equal(cleared.target, "all")
   assert.equal((await readState()).jobs.length, 0)
 
   console.log("OpenCode 2 prompt runtime contract passed")
