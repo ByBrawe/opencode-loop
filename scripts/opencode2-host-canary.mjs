@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const pluginID = "bybrawe.opencode-loop.v2.experimental"
 const sentinelID = "bybrawe.opencode-loop.v2-canary-sentinel"
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function run(command, args, { cwd, env, allowFailure = false, timeout = 60_000 } = {}) {
   const result = spawnSync(command, args, {
@@ -64,6 +65,28 @@ async function failureLog(env) {
     } catch {}
   }
   return ""
+}
+
+async function waitForPlugins({ project, env, attempts = 20, intervalMs = 250 }) {
+  const pluginPath = `/api/plugin?location%5Bdirectory%5D=${encodeURIComponent(project)}`
+  let last
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const result = run("opencode2", ["api", "get", pluginPath], { cwd: project, env })
+    const response = parseJSONOutput(result, "GET /api/plugin at project Location")
+
+    if (response?._tag) throw new Error(`project-scoped /api/plugin rejected the Location: ${JSON.stringify(response)}`)
+    if (response?.location?.directory !== project) {
+      throw new Error(`OpenCode 2 resolved the wrong Location: expected ${project}, got ${String(response?.location?.directory)}`)
+    }
+
+    const ids = [...new Set(collectPluginIDs(response))]
+    last = { attempt, ids, response, result }
+    if (ids.includes(sentinelID) && ids.includes(pluginID)) return last
+    if (attempt < attempts) await delay(intervalMs)
+  }
+
+  return last
 }
 
 async function main() {
@@ -126,21 +149,29 @@ async function main() {
     const health = output(run("opencode2", ["api", "get", "/api/health"], { cwd: project, env }))
     if (!health) throw new Error("OpenCode 2 health API returned no output")
 
-    const pluginPath = `/api/plugin?location%5Bdirectory%5D=${encodeURIComponent(project)}`
-    const pluginResult = run("opencode2", ["api", "get", pluginPath], { cwd: project, env })
-    const response = parseJSONOutput(pluginResult, "GET /api/plugin at project Location")
+    const snapshot = await waitForPlugins({ project, env })
+    const ids = snapshot?.ids ?? []
 
-    if (response?._tag) throw new Error(`project-scoped /api/plugin rejected the Location: ${JSON.stringify(response)}`)
-    if (response?.location?.directory !== project) {
-      throw new Error(`OpenCode 2 resolved the wrong Location: expected ${project}, got ${String(response?.location?.directory)}`)
-    }
-
-    const ids = [...new Set(collectPluginIDs(response))]
     if (!ids.includes(sentinelID)) {
-      throw new Error(`OpenCode 2 did not activate the minimal sentinel. Active IDs: ${JSON.stringify(ids)}\nRaw response: ${String(pluginResult.stdout ?? "")}`)
+      const configPath = `/api/config?location%5Bdirectory%5D=${encodeURIComponent(project)}`
+      const configResult = run("opencode2", ["api", "get", configPath], {
+        cwd: project,
+        env,
+        allowFailure: true,
+      })
+      throw new Error([
+        `OpenCode 2 did not activate the minimal sentinel after ${snapshot?.attempt ?? 0} project-scoped probes.`,
+        `Active IDs: ${JSON.stringify(ids)}`,
+        `Raw plugin response: ${String(snapshot?.result?.stdout ?? "")}`,
+        `Project config response: ${output(configResult)}`,
+      ].join("\n"))
     }
     if (!ids.includes(pluginID)) {
-      throw new Error(`OpenCode 2 activated the sentinel but not ${pluginID}. Active IDs: ${JSON.stringify(ids)}\nRaw response: ${String(pluginResult.stdout ?? "")}`)
+      throw new Error([
+        `OpenCode 2 activated the sentinel but not ${pluginID}.`,
+        `Active IDs: ${JSON.stringify(ids)}`,
+        `Raw response: ${String(snapshot?.result?.stdout ?? "")}`,
+      ].join("\n"))
     }
 
     console.log(JSON.stringify({
@@ -149,7 +180,8 @@ async function main() {
       node: process.version,
       opencode2Version: version,
       health,
-      projectDirectory: response.location.directory,
+      projectDirectory: snapshot.response.location.directory,
+      activationProbeAttempts: snapshot.attempt,
       sentinelID,
       pluginID,
       activePluginIDs: ids,
