@@ -11,7 +11,12 @@ const runtime = createOpenCode2PromptRuntime({ prompt: async (request) => { prom
 
 async function readState() {
   const file = path.join(directory, ".opencode", "opencode-loop", `${sessionID}.json`)
-  return JSON.parse(await readFile(file, "utf8"))
+  try {
+    return JSON.parse(await readFile(file, "utf8"))
+  } catch (error) {
+    if (error?.code === "ENOENT") return { jobs: [] }
+    throw error
+  }
 }
 
 try {
