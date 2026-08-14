@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - "src/source/opencode2/**"
+      - "src/source/runtime/**"
       - ".github/workflows/opencode2-activation.yml"
   push:
     branches:
       - main
     paths:
       - "src/source/opencode2/**"
+      - "src/source/runtime/**"
       - ".github/workflows/opencode2-activation.yml"
   workflow_dispatch:
 
@@ -53,9 +55,8 @@ jobs:
           command -v opencode2
           opencode2 --version
           node -p "JSON.stringify(require('./node_modules/@opencode-ai/plugin/package.json').exports, null, 2)"
-          find "$GITHUB_WORKSPACE/node_modules/@opencode-ai/plugin/dist" -maxdepth 4 -type f -print | sort || true
 
-      - name: Prepare dependency-free V2 activation probe
+      - name: Prepare V2 activation probes
         shell: bash
         run: |
           mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
@@ -65,6 +66,7 @@ jobs:
           git init --quiet "$project"
           git -C "$project" config user.email "opencode-loop-ci@example.invalid"
           git -C "$project" config user.name "OpenCode Loop CI"
+
           cat > "$plugin_dir/opencode-loop-v2-probe.js" <<'EOF'
           import { writeFile } from "node:fs/promises"
 
@@ -97,37 +99,63 @@ jobs:
             },
           }
           EOF
-          git -C "$project" add .opencode/plugins/opencode-loop-v2-probe.js
-          git -C "$project" commit --quiet -m "init"
-          git -C "$project" rev-parse --show-toplevel
-          cat "$plugin_dir/opencode-loop-v2-probe.js"
 
-      - name: Verify dependency-free setup runs in real OpenCode 2 host
+          adapter_url=$(node -e 'console.log(require("node:url").pathToFileURL(process.argv[1]).href)' "$GITHUB_WORKSPACE/src/source/opencode2/experimental.js")
+          cat > "$plugin_dir/opencode-loop-v2-runtime-probe.js" <<EOF
+          import { writeFile } from "node:fs/promises"
+          import plugin from "$adapter_url"
+
+          const id = "bybrawe.opencode-loop.v2.runtime-probe"
+          const marker = new URL("../../v2-runtime-marker.json", import.meta.url)
+
+          export default {
+            id,
+            async setup(ctx) {
+              const cleanup = await plugin.setup(ctx)
+              await writeFile(marker, JSON.stringify({
+                id,
+                pluginID: plugin.id,
+                activated: true,
+                cleanup: typeof cleanup === "function",
+              }, null, 2), "utf8")
+              return cleanup
+            },
+          }
+          EOF
+
+          git -C "$project" add .opencode/plugins
+          git -C "$project" commit --quiet -m "init"
+
+      - name: Verify real adapter setup in OpenCode 2 host
         shell: bash
         run: |
           project="$RUNNER_TEMP/opencode-loop-v2-activation"
-          marker="$project/v2-activation-marker.json"
-          rm -f "$marker"
+          host_marker="$project/v2-activation-marker.json"
+          runtime_marker="$project/v2-runtime-marker.json"
+          rm -f "$host_marker" "$runtime_marker"
 
           opencode2 api get /api/command -H "x-opencode-directory: $project" > "$RUNNER_TEMP/opencode2-command.json" 2>&1 || true
-          if [ ! -f "$marker" ]; then
-            opencode2 api get /api/plugin -H "x-opencode-directory: $project" > "$RUNNER_TEMP/opencode2-plugin.json" 2>&1 || true
-          fi
 
           for attempt in $(seq 1 50); do
-            if [ -f "$marker" ]; then
-              cat "$marker"
-              node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(value.id!=="bybrawe.opencode-loop.v2.activation-probe" || value.activated!==true) process.exit(1)' "$marker"
+            if [ -f "$host_marker" ] && [ -f "$runtime_marker" ]; then
+              cat "$host_marker"
+              cat "$runtime_marker"
+              node -e '
+                const fs = require("node:fs")
+                const host = JSON.parse(fs.readFileSync(process.argv[1], "utf8"))
+                const runtime = JSON.parse(fs.readFileSync(process.argv[2], "utf8"))
+                if (host.id !== "bybrawe.opencode-loop.v2.activation-probe" || host.activated !== true) process.exit(1)
+                if (host.capabilities?.eventSubscribe !== true || host.capabilities?.sessionPrompt !== true) process.exit(1)
+                if (runtime.pluginID !== "bybrawe.opencode-loop.v2.experimental" || runtime.activated !== true || runtime.cleanup !== true) process.exit(1)
+              ' "$host_marker" "$runtime_marker"
               exit 0
             fi
             sleep 0.2
           done
 
-          echo "OpenCode 2 did not execute the local plugin setup hook." >&2
+          echo "OpenCode 2 did not complete the real Loop V2 adapter setup." >&2
           echo "--- /api/command ---" >&2
           cat "$RUNNER_TEMP/opencode2-command.json" >&2 || true
-          echo "--- /api/plugin ---" >&2
-          cat "$RUNNER_TEMP/opencode2-plugin.json" >&2 || true
           exit 1
 
       - name: Dump OpenCode 2 logs on failure
