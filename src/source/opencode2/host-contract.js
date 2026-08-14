@@ -7,9 +7,12 @@ function normalizePrompt(input) {
   const text = String(input?.text || "")
   if (!sessionID) throw new TypeError("prompt requires a session ID")
   if (!text.trim()) throw new TypeError("prompt requires text")
+  const delivery = input?.delivery === "steer" ? "steer" : "queue"
   return Object.freeze({
     sessionID,
     text,
+    delivery,
+    resume: input?.resume !== false,
     agent: input?.agent,
     model: input?.model,
     noReply: input?.noReply === true,
