@@ -2,6 +2,12 @@ name: V2 Host Activation
 
 on:
   workflow_dispatch:
+  push:
+    branches: [v2-adapter-prototype]
+    paths:
+      - ".github/workflows/v2-host-activation.yml"
+      - "src/source/opencode2/**"
+      - "scripts/opencode2-host-canary.mjs"
 
 permissions:
   contents: read
