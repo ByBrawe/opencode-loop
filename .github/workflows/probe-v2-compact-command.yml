@@ -1,6 +1,6 @@
 name: Probe V2 compact command
 
-# Temporary branch-only probe; rerun with session wrapper inspection.
+# Temporary branch-only probe; rerun with real session.command canaries.
 on:
   push:
     branches: [feat-v2-compact-runtime-20260814]
@@ -46,16 +46,43 @@ jobs:
 
           const marker = new URL("../../v2-compact-wrapper-marker.json", import.meta.url)
           const source = (fn) => typeof fn === "function" ? String(fn).slice(0, 2400) : ""
+          const safe = (value) => {
+            try { return JSON.parse(JSON.stringify(value)) } catch { return String(value) }
+          }
+          async function callWithTimeout(label, fn) {
+            try {
+              const value = await Promise.race([
+                Promise.resolve().then(fn),
+                new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), 5_000)),
+              ])
+              return { ok: true, value: safe(value) }
+            } catch (error) {
+              return { ok: false, error: error instanceof Error ? error.message : String(error) }
+            }
+          }
 
           export default {
             id: "bybrawe.opencode-loop.v2.compact-wrapper-probe",
             async setup(ctx) {
+              const created = await callWithTimeout("session.create", () => ctx.session.create())
+              const sessionID = created.ok
+                ? String(created.value?.id || created.value?.data?.id || created.value?.sessionID || "")
+                : ""
+              const compact = sessionID
+                ? await callWithTimeout("session.command compact", () => ctx.session.command({ sessionID, id: "compact" }))
+                : { ok: false, error: "session create returned no id" }
+              const review = sessionID
+                ? await callWithTimeout("session.command review", () => ctx.session.command({ sessionID, id: "review" }))
+                : { ok: false, error: "session create returned no id" }
+
               await writeFile(marker, JSON.stringify({
                 methods: Object.fromEntries(Object.keys(ctx?.session || {}).sort().map((key) => [key, typeof ctx.session[key]])),
-                create: source(ctx?.session?.create),
-                command: source(ctx?.session?.command),
-                prompt: source(ctx?.session?.prompt),
-                synthetic: source(ctx?.session?.synthetic),
+                createSource: source(ctx?.session?.create),
+                commandSource: source(ctx?.session?.command),
+                created,
+                sessionID,
+                compact,
+                review,
               }, null, 2), "utf8")
             },
           }
@@ -64,7 +91,7 @@ jobs:
           git -C "$project" commit --quiet -m "init"
           echo "OPENCODE_LOOP_V2_PROJECT=$project" >> "$GITHUB_ENV"
           echo "OPENCODE_LOOP_V2_MARKER=$marker" >> "$GITHUB_ENV"
-      - name: Inspect command registry and session wrappers
+      - name: Inspect command registry and command canaries
         shell: bash
         run: |
           out="$RUNNER_TEMP/opencode2-command-registry.json"
@@ -80,13 +107,13 @@ jobs:
           console.log('COMMAND_IDS=' + JSON.stringify(ids))
           console.log('COMPACT_MATCHES=' + JSON.stringify(rows.filter((item) => /compact/i.test(JSON.stringify(item)))))
           NODE
-          for attempt in $(seq 1 50); do
+          for attempt in $(seq 1 80); do
             if [ -f "$OPENCODE_LOOP_V2_MARKER" ]; then
-              echo "--- SESSION WRAPPERS ---"
+              echo "--- SESSION COMMAND CANARIES ---"
               cat "$OPENCODE_LOOP_V2_MARKER"
               exit 0
             fi
             sleep 0.2
           done
-          echo "wrapper probe marker missing" >&2
+          echo "command canary marker missing" >&2
           exit 1
