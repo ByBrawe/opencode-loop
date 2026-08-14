@@ -1,6 +1,5 @@
 // @bun
 // src/source/legacy-v1.js
-import path6 from "path";
 import { tool } from "@opencode-ai/plugin/tool";
 
 // src/source/core/args.js
@@ -1989,291 +1988,6 @@ function clearSessionActivity(sessionID) {
   deleteSessionExecutionContext(sessionID);
 }
 
-// src/source/runtime/session-status.js
-var DEFAULT_STALE_ACTIVE_RECOVERY_MS = 45000;
-var DEFAULT_SESSION_STATUS_CACHE_MS = 1500;
-function positiveNumber(value, fallback) {
-  const number = Number(value);
-  return Number.isFinite(number) && number > 0 ? number : fallback;
-}
-function nonNegativeNumber(value, fallback) {
-  const number = Number(value);
-  return Number.isFinite(number) && number >= 0 ? number : fallback;
-}
-function createSessionStatusRuntime(options = {}) {
-  const activeRuns = options.activeRuns;
-  if (!(activeRuns instanceof Map))
-    throw new TypeError("createSessionStatusRuntime requires activeRuns Map");
-  const now2 = typeof options.now === "function" ? options.now : now;
-  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
-  const activeRunCompletionFromMessages2 = typeof options.activeRunCompletionFromMessages === "function" ? options.activeRunCompletionFromMessages : activeRunCompletionFromMessages;
-  const staleActiveRecoveryMs = positiveNumber(options.staleActiveRecoveryMs, DEFAULT_STALE_ACTIVE_RECOVERY_MS);
-  const sessionStatusCacheMs = nonNegativeNumber(options.sessionStatusCacheMs, DEFAULT_SESSION_STATUS_CACHE_MS);
-  function markSessionStatus(sessionID, type, observedAt = now2()) {
-    if (typeof sessionID !== "string" || typeof type !== "string")
-      return false;
-    sessionStatuses.set(sessionID, type);
-    sessionStatusSeenAt.set(sessionID, observedAt);
-    return true;
-  }
-  function clearSessionStatus(sessionID) {
-    sessionStatuses.delete(sessionID);
-    sessionStatusSeenAt.delete(sessionID);
-  }
-  function updateSessionStatusFromEvent(event) {
-    const sessionID = event?.properties?.sessionID;
-    if (typeof sessionID !== "string")
-      return;
-    if (event?.type === "session.idle") {
-      markSessionStatus(sessionID, "idle");
-      return { sessionID, idle: true };
-    }
-    if (event?.type === "session.status") {
-      const status = event?.properties?.status;
-      const type = status && typeof status === "object" ? status.type : undefined;
-      if (typeof type === "string")
-        markSessionStatus(sessionID, type);
-      return { sessionID, idle: type === "idle" };
-    }
-    return;
-  }
-  function staleActiveRun(sessionID) {
-    const active = activeRuns.get(sessionID);
-    if (!active)
-      return false;
-    const age = now2() - (active.startedAt || 0);
-    const configured = Number(active.job?.staleActiveRecoveryMs || active.job?.activeRecoveryMs || 0);
-    const threshold = Number.isFinite(configured) && configured > 0 ? configured : staleActiveRecoveryMs;
-    return age >= threshold;
-  }
-  async function readLiveSessionStatus(client, sessionID, directory) {
-    const statusMethod = client?.session?.status;
-    if (typeof statusMethod !== "function")
-      return;
-    const argsList = [];
-    if (directory)
-      argsList.push({ query: { directory } }, { directory }, { workspace: directory });
-    argsList.push({});
-    for (const args of argsList) {
-      try {
-        const result = await statusMethod.call(client.session, args);
-        const error = sdkError(result);
-        if (error)
-          continue;
-        const data = sdkData(result);
-        if (!data || typeof data !== "object" || Array.isArray(data))
-          continue;
-        const observedAt = now2();
-        for (const [observedSessionID, observedStatus] of Object.entries(data)) {
-          const observedType = observedStatus && typeof observedStatus === "object" ? observedStatus.type : undefined;
-          if (typeof observedType !== "string")
-            continue;
-          markSessionStatus(observedSessionID, observedType, observedAt);
-        }
-        for (const childID of sessionParents.keys()) {
-          if (!isDescendantSession(childID, sessionID) || data[childID])
-            continue;
-          markSessionStatus(childID, "idle", observedAt);
-        }
-        if (hasBusyDescendant(sessionID))
-          return { type: "busy", source: "descendant" };
-        const status = data?.[sessionID];
-        const type = status && typeof status === "object" ? status.type : undefined;
-        if (typeof type === "string")
-          return { type, source: "sdk" };
-        return { type: "idle", source: "sdk" };
-      } catch {}
-    }
-    return;
-  }
-  async function canFinalizeActiveRun(directory, client, sessionID, active, options2 = {}) {
-    if (hasActiveToolCalls(sessionID) || hasBusyDescendant(sessionID))
-      return false;
-    if (!options2.requireIdle && !options2.forceStale)
-      return true;
-    const completion = options2.forceStale ? await activeRunCompletionFromMessages2(directory, client, sessionID, active) : undefined;
-    if (completion === "completed")
-      return true;
-    if (!options2.requireIdle)
-      return completion === "unknown" && staleActiveRun(sessionID);
-    const live = await readLiveSessionStatus(client, sessionID, directory);
-    if (live?.type === "idle")
-      return true;
-    if (live?.type) {
-      if ((live.type === "busy" || live.type === "retry") && options2.forceStale && completion === "unknown" && staleActiveRun(sessionID))
-        return true;
-      return false;
-    }
-    if (options2.forceStale && completion === "unknown" && staleActiveRun(sessionID))
-      return true;
-    const cached = sessionStatuses.get(sessionID);
-    const seenAt = sessionStatusSeenAt.get(sessionID) || 0;
-    return cached === "idle" && seenAt > (active.startedAt || 0);
-  }
-  async function sessionStatusType(client, sessionID, directory, options2 = {}) {
-    if (hasActiveToolCalls(sessionID) || hasBusyDescendant(sessionID)) {
-      markSessionStatus(sessionID, "busy");
-      return "busy";
-    }
-    const cached = sessionStatuses.get(sessionID);
-    const seenAt = sessionStatusSeenAt.get(sessionID) || 0;
-    if (cached === "idle")
-      return cached;
-    if (cached && now2() - seenAt < sessionStatusCacheMs)
-      return cached;
-    const live = await readLiveSessionStatus(client, sessionID, directory);
-    if (live?.type) {
-      if ((live.type === "busy" || live.type === "retry") && options2.recoverStaleActive !== false) {
-        const active = activeRuns.get(sessionID);
-        if (active) {
-          const completion = await activeRunCompletionFromMessages2(directory, client, sessionID, active);
-          if (completion === "completed" || completion === "unknown" && staleActiveRun(sessionID)) {
-            markSessionStatus(sessionID, "idle");
-            await appendLoopLog2(directory, completion === "completed" ? "status-message-complete-recovery" : "status-stale-recovery", {
-              sessionID,
-              job: active.job?.name || active.jobId,
-              startedAt: active.startedAt
-            });
-            return "idle";
-          }
-        }
-      }
-      markSessionStatus(sessionID, live.type);
-      return live.type;
-    }
-    const fallback = activeRuns.has(sessionID) && !staleActiveRun(sessionID) ? "busy" : "idle";
-    markSessionStatus(sessionID, fallback);
-    return fallback;
-  }
-  async function sessionIsIdle(client, sessionID, directory, options2 = {}) {
-    return await sessionStatusType(client, sessionID, directory, options2) === "idle";
-  }
-  return {
-    markSessionStatus,
-    clearSessionStatus,
-    updateSessionStatusFromEvent,
-    staleActiveRun,
-    canFinalizeActiveRun,
-    readLiveSessionStatus,
-    sessionStatusType,
-    sessionIsIdle
-  };
-}
-
-// src/source/runtime/compaction.js
-function createCompactionRuntime(options = {}) {
-  const activeRuns = options.activeRuns;
-  if (!(activeRuns instanceof Map))
-    throw new TypeError("createCompactionRuntime requires activeRuns Map");
-  if (typeof options.finalizeActiveRun !== "function")
-    throw new TypeError("createCompactionRuntime requires finalizeActiveRun");
-  const now2 = typeof options.now === "function" ? options.now : now;
-  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
-  const compactSession2 = typeof options.compactSession === "function" ? options.compactSession : compactSession;
-  const log2 = typeof options.log === "function" ? options.log : log;
-  const errorMessage = typeof options.errorMessage === "function" ? options.errorMessage : sdkErrorMessage;
-  const finalizeActiveRun = options.finalizeActiveRun;
-  const requests = new Map;
-  function begin(sessionID, jobId, resumeAfter = false) {
-    if (typeof sessionID !== "string" || typeof jobId !== "string")
-      return;
-    const request = {
-      jobId,
-      resumeAfter: Boolean(resumeAfter),
-      requestedAt: now2(),
-      startedAt: 0,
-      completedAt: 0
-    };
-    requests.set(sessionID, request);
-    return request;
-  }
-  function getPending(sessionID) {
-    return requests.get(sessionID);
-  }
-  function clear(sessionID) {
-    return requests.delete(sessionID);
-  }
-  function clearForActiveRun(sessionID, active) {
-    const pending = requests.get(sessionID);
-    if (!pending || !active || pending.jobId === active.jobId)
-      requests.delete(sessionID);
-  }
-  function isCompleted(sessionID, jobId) {
-    const pending = requests.get(sessionID);
-    return Boolean(pending && pending.jobId === jobId && pending.completedAt);
-  }
-  async function start(directory, client, sessionID, jobId, model, resumeAfter = false) {
-    begin(sessionID, jobId, resumeAfter);
-    const ok = await compactSession2(directory, client, sessionID, model);
-    if (!ok)
-      clear(sessionID);
-    return ok;
-  }
-  async function maybeCompact(directory, client, sessionID, job) {
-    const dueRuns = job.compactEveryRuns > 0 && (job.runCount || 0) > 0 && (job.runCount || 0) % job.compactEveryRuns === 0 && job.lastCompactRunCount !== job.runCount;
-    const dueTime = job.compactEveryMs > 0 && (!job.lastCompactAt || now2() - job.lastCompactAt >= job.compactEveryMs);
-    if (!dueRuns && !dueTime)
-      return { job, started: false };
-    if (await start(directory, client, sessionID, job.id, job.model, true)) {
-      job.lastCompactAt = now2();
-      job.lastCompactRunCount = job.runCount || 0;
-      return { job, started: true };
-    }
-    return { job, started: false };
-  }
-  async function noteStarted(directory, sessionID) {
-    const pending = requests.get(sessionID);
-    if (!pending)
-      return false;
-    if (!pending.startedAt) {
-      pending.startedAt = now2();
-      requests.set(sessionID, pending);
-      await appendLoopLog2(directory, "compact-started", {
-        sessionID,
-        job: pending.jobId,
-        resumeAfter: pending.resumeAfter
-      });
-    }
-    return true;
-  }
-  async function finalize(directory, client, sessionID) {
-    const pending = requests.get(sessionID);
-    const active = activeRuns.get(sessionID);
-    if (!pending || !active || pending.jobId !== active.jobId)
-      return false;
-    return await finalizeActiveRun(directory, client, sessionID);
-  }
-  async function noteCompleted(directory, client, sessionID) {
-    const pending = requests.get(sessionID);
-    if (!pending)
-      return false;
-    pending.completedAt = now2();
-    requests.set(sessionID, pending);
-    await appendLoopLog2(directory, "compact-event", {
-      sessionID,
-      job: pending.jobId,
-      resumeAfter: pending.resumeAfter
-    });
-    const timer = setTimeout(() => {
-      finalize(directory, client, sessionID).catch((error) => log2(client, "error", "compaction finalization failed", { error: errorMessage(error) }));
-    }, 0);
-    timer.unref?.();
-    return true;
-  }
-  return {
-    begin,
-    getPending,
-    clear,
-    clearForActiveRun,
-    isCompleted,
-    start,
-    maybeCompact,
-    noteStarted,
-    finalize,
-    noteCompleted
-  };
-}
-
 // src/source/runtime/scheduler.js
 var DEFAULT_IDLE_DEBOUNCE_MS = 1200;
 var DEFAULT_BUSY_RETRY_MS = 5000;
@@ -2732,47 +2446,814 @@ ${staged.stdout}`);
   };
 }
 
-// src/source/legacy-v1.js
+// src/source/runtime/executor.js
+import path6 from "path";
+
+// src/source/runtime/session-status.js
+var DEFAULT_STALE_ACTIVE_RECOVERY_MS = 45000;
+var DEFAULT_SESSION_STATUS_CACHE_MS = 1500;
+function positiveNumber(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : fallback;
+}
+function nonNegativeNumber(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : fallback;
+}
+function createSessionStatusRuntime(options = {}) {
+  const activeRuns = options.activeRuns;
+  if (!(activeRuns instanceof Map))
+    throw new TypeError("createSessionStatusRuntime requires activeRuns Map");
+  const now2 = typeof options.now === "function" ? options.now : now;
+  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
+  const activeRunCompletionFromMessages2 = typeof options.activeRunCompletionFromMessages === "function" ? options.activeRunCompletionFromMessages : activeRunCompletionFromMessages;
+  const staleActiveRecoveryMs = positiveNumber(options.staleActiveRecoveryMs, DEFAULT_STALE_ACTIVE_RECOVERY_MS);
+  const sessionStatusCacheMs = nonNegativeNumber(options.sessionStatusCacheMs, DEFAULT_SESSION_STATUS_CACHE_MS);
+  function markSessionStatus(sessionID, type, observedAt = now2()) {
+    if (typeof sessionID !== "string" || typeof type !== "string")
+      return false;
+    sessionStatuses.set(sessionID, type);
+    sessionStatusSeenAt.set(sessionID, observedAt);
+    return true;
+  }
+  function clearSessionStatus(sessionID) {
+    sessionStatuses.delete(sessionID);
+    sessionStatusSeenAt.delete(sessionID);
+  }
+  function updateSessionStatusFromEvent(event) {
+    const sessionID = event?.properties?.sessionID;
+    if (typeof sessionID !== "string")
+      return;
+    if (event?.type === "session.idle") {
+      markSessionStatus(sessionID, "idle");
+      return { sessionID, idle: true };
+    }
+    if (event?.type === "session.status") {
+      const status = event?.properties?.status;
+      const type = status && typeof status === "object" ? status.type : undefined;
+      if (typeof type === "string")
+        markSessionStatus(sessionID, type);
+      return { sessionID, idle: type === "idle" };
+    }
+    return;
+  }
+  function staleActiveRun(sessionID) {
+    const active = activeRuns.get(sessionID);
+    if (!active)
+      return false;
+    const age = now2() - (active.startedAt || 0);
+    const configured = Number(active.job?.staleActiveRecoveryMs || active.job?.activeRecoveryMs || 0);
+    const threshold = Number.isFinite(configured) && configured > 0 ? configured : staleActiveRecoveryMs;
+    return age >= threshold;
+  }
+  async function readLiveSessionStatus(client, sessionID, directory) {
+    const statusMethod = client?.session?.status;
+    if (typeof statusMethod !== "function")
+      return;
+    const argsList = [];
+    if (directory)
+      argsList.push({ query: { directory } }, { directory }, { workspace: directory });
+    argsList.push({});
+    for (const args of argsList) {
+      try {
+        const result = await statusMethod.call(client.session, args);
+        const error = sdkError(result);
+        if (error)
+          continue;
+        const data = sdkData(result);
+        if (!data || typeof data !== "object" || Array.isArray(data))
+          continue;
+        const observedAt = now2();
+        for (const [observedSessionID, observedStatus] of Object.entries(data)) {
+          const observedType = observedStatus && typeof observedStatus === "object" ? observedStatus.type : undefined;
+          if (typeof observedType !== "string")
+            continue;
+          markSessionStatus(observedSessionID, observedType, observedAt);
+        }
+        for (const childID of sessionParents.keys()) {
+          if (!isDescendantSession(childID, sessionID) || data[childID])
+            continue;
+          markSessionStatus(childID, "idle", observedAt);
+        }
+        if (hasBusyDescendant(sessionID))
+          return { type: "busy", source: "descendant" };
+        const status = data?.[sessionID];
+        const type = status && typeof status === "object" ? status.type : undefined;
+        if (typeof type === "string")
+          return { type, source: "sdk" };
+        return { type: "idle", source: "sdk" };
+      } catch {}
+    }
+    return;
+  }
+  async function canFinalizeActiveRun(directory, client, sessionID, active, options2 = {}) {
+    if (hasActiveToolCalls(sessionID) || hasBusyDescendant(sessionID))
+      return false;
+    if (!options2.requireIdle && !options2.forceStale)
+      return true;
+    const completion = options2.forceStale ? await activeRunCompletionFromMessages2(directory, client, sessionID, active) : undefined;
+    if (completion === "completed")
+      return true;
+    if (!options2.requireIdle)
+      return completion === "unknown" && staleActiveRun(sessionID);
+    const live = await readLiveSessionStatus(client, sessionID, directory);
+    if (live?.type === "idle")
+      return true;
+    if (live?.type) {
+      if ((live.type === "busy" || live.type === "retry") && options2.forceStale && completion === "unknown" && staleActiveRun(sessionID))
+        return true;
+      return false;
+    }
+    if (options2.forceStale && completion === "unknown" && staleActiveRun(sessionID))
+      return true;
+    const cached = sessionStatuses.get(sessionID);
+    const seenAt = sessionStatusSeenAt.get(sessionID) || 0;
+    return cached === "idle" && seenAt > (active.startedAt || 0);
+  }
+  async function sessionStatusType(client, sessionID, directory, options2 = {}) {
+    if (hasActiveToolCalls(sessionID) || hasBusyDescendant(sessionID)) {
+      markSessionStatus(sessionID, "busy");
+      return "busy";
+    }
+    const cached = sessionStatuses.get(sessionID);
+    const seenAt = sessionStatusSeenAt.get(sessionID) || 0;
+    if (cached === "idle")
+      return cached;
+    if (cached && now2() - seenAt < sessionStatusCacheMs)
+      return cached;
+    const live = await readLiveSessionStatus(client, sessionID, directory);
+    if (live?.type) {
+      if ((live.type === "busy" || live.type === "retry") && options2.recoverStaleActive !== false) {
+        const active = activeRuns.get(sessionID);
+        if (active) {
+          const completion = await activeRunCompletionFromMessages2(directory, client, sessionID, active);
+          if (completion === "completed" || completion === "unknown" && staleActiveRun(sessionID)) {
+            markSessionStatus(sessionID, "idle");
+            await appendLoopLog2(directory, completion === "completed" ? "status-message-complete-recovery" : "status-stale-recovery", {
+              sessionID,
+              job: active.job?.name || active.jobId,
+              startedAt: active.startedAt
+            });
+            return "idle";
+          }
+        }
+      }
+      markSessionStatus(sessionID, live.type);
+      return live.type;
+    }
+    const fallback = activeRuns.has(sessionID) && !staleActiveRun(sessionID) ? "busy" : "idle";
+    markSessionStatus(sessionID, fallback);
+    return fallback;
+  }
+  async function sessionIsIdle(client, sessionID, directory, options2 = {}) {
+    return await sessionStatusType(client, sessionID, directory, options2) === "idle";
+  }
+  return {
+    markSessionStatus,
+    clearSessionStatus,
+    updateSessionStatusFromEvent,
+    staleActiveRun,
+    canFinalizeActiveRun,
+    readLiveSessionStatus,
+    sessionStatusType,
+    sessionIsIdle
+  };
+}
+
+// src/source/runtime/compaction.js
+function createCompactionRuntime(options = {}) {
+  const activeRuns = options.activeRuns;
+  if (!(activeRuns instanceof Map))
+    throw new TypeError("createCompactionRuntime requires activeRuns Map");
+  if (typeof options.finalizeActiveRun !== "function")
+    throw new TypeError("createCompactionRuntime requires finalizeActiveRun");
+  const now2 = typeof options.now === "function" ? options.now : now;
+  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
+  const compactSession2 = typeof options.compactSession === "function" ? options.compactSession : compactSession;
+  const log2 = typeof options.log === "function" ? options.log : log;
+  const errorMessage = typeof options.errorMessage === "function" ? options.errorMessage : sdkErrorMessage;
+  const finalizeActiveRun = options.finalizeActiveRun;
+  const requests = new Map;
+  function begin(sessionID, jobId, resumeAfter = false) {
+    if (typeof sessionID !== "string" || typeof jobId !== "string")
+      return;
+    const request = {
+      jobId,
+      resumeAfter: Boolean(resumeAfter),
+      requestedAt: now2(),
+      startedAt: 0,
+      completedAt: 0
+    };
+    requests.set(sessionID, request);
+    return request;
+  }
+  function getPending(sessionID) {
+    return requests.get(sessionID);
+  }
+  function clear(sessionID) {
+    return requests.delete(sessionID);
+  }
+  function clearForActiveRun(sessionID, active) {
+    const pending = requests.get(sessionID);
+    if (!pending || !active || pending.jobId === active.jobId)
+      requests.delete(sessionID);
+  }
+  function isCompleted(sessionID, jobId) {
+    const pending = requests.get(sessionID);
+    return Boolean(pending && pending.jobId === jobId && pending.completedAt);
+  }
+  async function start(directory, client, sessionID, jobId, model, resumeAfter = false) {
+    begin(sessionID, jobId, resumeAfter);
+    const ok = await compactSession2(directory, client, sessionID, model);
+    if (!ok)
+      clear(sessionID);
+    return ok;
+  }
+  async function maybeCompact(directory, client, sessionID, job) {
+    const dueRuns = job.compactEveryRuns > 0 && (job.runCount || 0) > 0 && (job.runCount || 0) % job.compactEveryRuns === 0 && job.lastCompactRunCount !== job.runCount;
+    const dueTime = job.compactEveryMs > 0 && (!job.lastCompactAt || now2() - job.lastCompactAt >= job.compactEveryMs);
+    if (!dueRuns && !dueTime)
+      return { job, started: false };
+    if (await start(directory, client, sessionID, job.id, job.model, true)) {
+      job.lastCompactAt = now2();
+      job.lastCompactRunCount = job.runCount || 0;
+      return { job, started: true };
+    }
+    return { job, started: false };
+  }
+  async function noteStarted(directory, sessionID) {
+    const pending = requests.get(sessionID);
+    if (!pending)
+      return false;
+    if (!pending.startedAt) {
+      pending.startedAt = now2();
+      requests.set(sessionID, pending);
+      await appendLoopLog2(directory, "compact-started", {
+        sessionID,
+        job: pending.jobId,
+        resumeAfter: pending.resumeAfter
+      });
+    }
+    return true;
+  }
+  async function finalize(directory, client, sessionID) {
+    const pending = requests.get(sessionID);
+    const active = activeRuns.get(sessionID);
+    if (!pending || !active || pending.jobId !== active.jobId)
+      return false;
+    return await finalizeActiveRun(directory, client, sessionID);
+  }
+  async function noteCompleted(directory, client, sessionID) {
+    const pending = requests.get(sessionID);
+    if (!pending)
+      return false;
+    pending.completedAt = now2();
+    requests.set(sessionID, pending);
+    await appendLoopLog2(directory, "compact-event", {
+      sessionID,
+      job: pending.jobId,
+      resumeAfter: pending.resumeAfter
+    });
+    const timer = setTimeout(() => {
+      finalize(directory, client, sessionID).catch((error) => log2(client, "error", "compaction finalization failed", { error: errorMessage(error) }));
+    }, 0);
+    timer.unref?.();
+    return true;
+  }
+  return {
+    begin,
+    getPending,
+    clear,
+    clearForActiveRun,
+    isCompleted,
+    start,
+    maybeCompact,
+    noteStarted,
+    finalize,
+    noteCompleted
+  };
+}
+
+// src/source/runtime/executor.js
 var DEFAULT_ACTIVE_GUARD_MS = 45000;
-var BUSY_RETRY_MS = 5000;
-var {
-  buildPrompt,
-  ensureBranch,
-  snapshotPaths,
-  watchChanged,
-  untilReached,
-  createCheckpoint
-} = createJobWorkspaceRuntime({ toast });
-var { runGoalChecks, applyGoalNoProgressGuard } = createGoalExecutionPolicy({ runShellCommand, dangerousShell, toast, appendLoopLog, now });
-var activeRuns = new Map;
-var runLocks = new Map;
-var {
-  updateSessionStatusFromEvent,
-  staleActiveRun,
-  canFinalizeActiveRun,
-  sessionIsIdle,
-  markSessionStatus,
-  clearSessionStatus
-} = createSessionStatusRuntime({
-  activeRuns,
-  appendLoopLog,
-  now
-});
-var compactionRuntime = createCompactionRuntime({
-  activeRuns,
-  finalizeActiveRun,
-  appendLoopLog,
+var DEFAULT_BUSY_RETRY_MS2 = 5000;
+function requireFunction7(value, label) {
+  if (typeof value !== "function")
+    throw new TypeError(`createLoopExecutor requires ${label}`);
+  return value;
+}
+function createLoopExecutor(options = {}) {
+  const workspace = options.workspace || {};
+  const goalPolicy = options.goalPolicy || {};
+  const scheduler = options.scheduler || {};
+  const buildPrompt = requireFunction7(workspace.buildPrompt, "workspace.buildPrompt");
+  const ensureBranch = requireFunction7(workspace.ensureBranch, "workspace.ensureBranch");
+  const watchChanged = requireFunction7(workspace.watchChanged, "workspace.watchChanged");
+  const untilReached = requireFunction7(workspace.untilReached, "workspace.untilReached");
+  const createCheckpoint = requireFunction7(workspace.createCheckpoint, "workspace.createCheckpoint");
+  const runGoalChecks = requireFunction7(goalPolicy.runGoalChecks, "goalPolicy.runGoalChecks");
+  const applyGoalNoProgressGuard = requireFunction7(goalPolicy.applyGoalNoProgressGuard, "goalPolicy.applyGoalNoProgressGuard");
+  const rememberSession = requireFunction7(scheduler.rememberSession, "scheduler.rememberSession");
+  const scheduleDueWork = requireFunction7(scheduler.scheduleDueWork, "scheduler.scheduleDueWork");
+  const now2 = typeof options.now === "function" ? options.now : now;
+  const readState2 = typeof options.readState === "function" ? options.readState : readState;
+  const writeState2 = typeof options.writeState === "function" ? options.writeState : writeState;
+  const pathExists2 = typeof options.pathExists === "function" ? options.pathExists : pathExists;
+  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
+  const runShellCommand2 = typeof options.runShellCommand === "function" ? options.runShellCommand : runShellCommand;
+  const notifyJob2 = typeof options.notifyJob === "function" ? options.notifyJob : notifyJob;
+  const errorMessage = typeof options.errorMessage === "function" ? options.errorMessage : sdkErrorMessage;
+  const sdkCall2 = typeof options.sdkCall === "function" ? options.sdkCall : sdkCall;
+  const normalizedModelRef2 = typeof options.normalizedModelRef === "function" ? options.normalizedModelRef : normalizedModelRef;
+  const fireSdk2 = typeof options.fireSdk === "function" ? options.fireSdk : fireSdk;
+  const compactTuiCommandName2 = typeof options.compactTuiCommandName === "function" ? options.compactTuiCommandName : compactTuiCommandName;
+  const log2 = typeof options.log === "function" ? options.log : log;
+  const toast2 = typeof options.toast === "function" ? options.toast : toast;
+  const guardLoopOwnedUserMessage2 = typeof options.guardLoopOwnedUserMessage === "function" ? options.guardLoopOwnedUserMessage : guardLoopOwnedUserMessage;
+  const writeGoalReport2 = typeof options.writeGoalReport === "function" ? options.writeGoalReport : writeGoalReport;
+  const dangerousShell2 = typeof options.dangerousShell === "function" ? options.dangerousShell : dangerousShell;
+  const activeGuardMs = Number.isFinite(Number(options.activeGuardMs)) && Number(options.activeGuardMs) > 0 ? Number(options.activeGuardMs) : DEFAULT_ACTIVE_GUARD_MS;
+  const busyRetryMs = Number.isFinite(Number(options.busyRetryMs)) && Number(options.busyRetryMs) > 0 ? Number(options.busyRetryMs) : DEFAULT_BUSY_RETRY_MS2;
+  const activeRuns = new Map;
+  const runLocks = new Map;
+  const statusRuntime = createSessionStatusRuntime({
+    activeRuns,
+    appendLoopLog: appendLoopLog2,
+    now: now2,
+    activeRunCompletionFromMessages: options.activeRunCompletionFromMessages,
+    staleActiveRecoveryMs: options.staleActiveRecoveryMs,
+    sessionStatusCacheMs: options.sessionStatusCacheMs
+  });
+  const {
+    updateSessionStatusFromEvent,
+    staleActiveRun,
+    canFinalizeActiveRun,
+    sessionIsIdle,
+    markSessionStatus,
+    clearSessionStatus
+  } = statusRuntime;
+  const compactionRuntime = createCompactionRuntime({
+    activeRuns,
+    finalizeActiveRun,
+    appendLoopLog: appendLoopLog2,
+    compactSession: options.compactSession,
+    log: log2,
+    errorMessage,
+    now: now2
+  });
+  function dueJobs(state, force = false) {
+    const current = now2();
+    return (state.jobs || []).filter((job) => {
+      if (isGoalJob(job) && ["completed", "blocked", "cleared"].includes(job.goalStatus))
+        return false;
+      if (!job.enabled || job.paused)
+        return false;
+      if (job.maxRuns > 0 && (job.runCount || 0) >= job.maxRuns)
+        return false;
+      if (job.maxRuntimeMs > 0 && current - Date.parse(job.createdAt || new Date().toISOString()) >= job.maxRuntimeMs)
+        return true;
+      if (force)
+        return true;
+      if (job.watchPaths?.length)
+        return job.watchTriggered === true;
+      return job.intervalMs === 0 || !job.lastRunAt || current - job.lastRunAt >= job.intervalMs;
+    });
+  }
+  function clearActiveRun(sessionID) {
+    const active = activeRuns.get(sessionID);
+    if (active?.timer)
+      clearTimeout(active.timer);
+    compactionRuntime.clearForActiveRun(sessionID, active);
+    activeRuns.delete(sessionID);
+  }
+  function disposeSession(sessionID) {
+    clearActiveRun(sessionID);
+    runLocks.delete(sessionID);
+    compactionRuntime.clear(sessionID);
+    clearSessionStatus(sessionID);
+  }
+  async function recoverActiveDispatchFailure(directory, client, sessionID, jobId, runToken, error) {
+    const active = activeRuns.get(sessionID);
+    if (!active || active.jobId !== jobId || active.runToken !== runToken)
+      return false;
+    clearActiveRun(sessionID);
+    clearSessionStatus(sessionID);
+    const message = errorMessage(error);
+    const state = await readState2(directory, sessionID);
+    const job = (state.jobs || []).find((candidate) => candidate.id === jobId);
+    if (job) {
+      job.failureCount = (job.failureCount || 0) + 1;
+      job.lastFailureReason = "dispatch_failed";
+      job.lastDispatchFailure = message.slice(0, 4000);
+      job.lastDispatchFailureAt = now2();
+      if (job.maxFailures > 0 && job.failureCount >= job.maxFailures) {
+        job.paused = true;
+        await notifyJob2(directory, job, "dispatch_failed");
+      }
+      state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
+      await writeState2(directory, sessionID, state);
+    }
+    await appendLoopLog2(directory, "dispatch-error", { sessionID, job: job?.name || jobId, error: message });
+    await toast2(client, `Loop dispatch failed${job?.paused ? " and paused" : ""}: ${message}`, job?.paused ? "error" : "warning");
+    await scheduleDueWork(directory, client, sessionID, busyRetryMs);
+    return true;
+  }
+  async function finalizeActiveRun(directory, client, sessionID, finalizeOptions = {}) {
+    const active = activeRuns.get(sessionID);
+    if (!active)
+      return;
+    if (!await canFinalizeActiveRun(directory, client, sessionID, active, finalizeOptions))
+      return false;
+    const recoveredStale = staleActiveRun(sessionID);
+    if (active.compactionOnly) {
+      const pending = compactionRuntime.getPending(sessionID);
+      clearActiveRun(sessionID);
+      clearSessionStatus(sessionID);
+      await appendLoopLog2(directory, pending?.completedAt ? "compact-finished" : "compact-idle-fallback", {
+        sessionID,
+        job: active.job?.name || active.jobId,
+        startedAt: active.startedAt,
+        nativeEvent: Boolean(pending?.completedAt)
+      });
+      await scheduleDueWork(directory, client, sessionID);
+      return true;
+    }
+    clearActiveRun(sessionID);
+    const state = await readState2(directory, sessionID);
+    let job = (state.jobs || []).find((candidate) => candidate.id === active.jobId);
+    if (!job)
+      return;
+    job.lastFinishedAt = now2();
+    if (recoveredStale) {
+      await appendLoopLog2(directory, "active-stale-recovery", {
+        sessionID,
+        job: job.name || job.id,
+        startedAt: active.startedAt
+      });
+    }
+    if (job.verifyCommand) {
+      const verify = await runShellCommand2(job.verifyCommand, directory, job.timeoutMs || 300000);
+      job.lastVerifyAt = now2();
+      job.lastVerifyCode = verify.code;
+      if (verify.code === 0) {
+        job.failureCount = 0;
+        job.lastVerifyFailure = "";
+        await toast2(client, "Loop verify passed: " + job.verifyCommand, "success");
+      } else {
+        job.failureCount = (job.failureCount || 0) + 1;
+        job.lastVerifyFailure = (job.verifyCommand + `
+exit=` + verify.code + `
+` + verify.stdout + `
+` + verify.stderr).slice(0, 4000);
+        await toast2(client, "Loop verify failed: " + job.verifyCommand, "warning");
+        if (job.pauseOnVerifyFail || job.maxFailures > 0 && job.failureCount >= job.maxFailures) {
+          job.paused = true;
+          await notifyJob2(directory, job, "verify_failed");
+        }
+      }
+      await appendLoopLog2(directory, "verify", {
+        sessionID,
+        job: job.name || job.id,
+        command: job.verifyCommand,
+        code: verify.code,
+        failures: job.failureCount || 0
+      });
+    }
+    if (job.postrunCommand) {
+      if (job.safe && dangerousShell2(job.postrunCommand)) {
+        await appendLoopLog2(directory, "postrun-blocked", {
+          sessionID,
+          job: job.name || job.id,
+          command: job.postrunCommand
+        });
+      } else {
+        const postrun = await runShellCommand2(job.postrunCommand, directory, job.timeoutMs || 300000);
+        job.lastPostrunCode = postrun.code;
+        job.lastPostrunAt = now2();
+        if (postrun.code !== 0) {
+          job.failureCount = (job.failureCount || 0) + 1;
+          job.lastPostrunFailure = (job.postrunCommand + `
+exit=` + postrun.code + `
+` + postrun.stdout + `
+` + postrun.stderr).slice(0, 4000);
+          if (job.maxFailures > 0 && job.failureCount >= job.maxFailures) {
+            job.paused = true;
+            await notifyJob2(directory, job, "postrun_failed");
+          }
+        }
+        await appendLoopLog2(directory, "postrun", {
+          sessionID,
+          job: job.name || job.id,
+          command: job.postrunCommand,
+          code: postrun.code
+        });
+      }
+    }
+    if (isGoalJob(job)) {
+      job = await runGoalChecks(directory, sessionID, job, client);
+      job = await applyGoalNoProgressGuard(directory, client, sessionID, job, active.job);
+    }
+    state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate).filter((candidate) => candidate.enabled !== false || isGoalJob(candidate));
+    await writeState2(directory, sessionID, state);
+    if (isGoalJob(job))
+      await writeGoalReport2(directory, sessionID, job);
+    await createCheckpoint(directory, sessionID, job, client);
+    await scheduleDueWork(directory, client, sessionID);
+    return true;
+  }
+  async function fireAction(directory, client, sessionID, job) {
+    const action = String(job.action || "").trim();
+    const kind = actionKind(action, job);
+    const agent = job.agent || "build";
+    const model = normalizedModelRef2(job.model);
+    if (kind === "compact") {
+      const ok = await compactionRuntime.start(directory, client, sessionID, job.id, model, false);
+      return { startsAssistantTurn: ok, pause: !ok, reason: "compact_failed", compaction: ok };
+    }
+    if (kind === "command") {
+      const normalized = action.startsWith("/") ? action.slice(1) : action;
+      const [command, argumentsText] = splitFirst(normalized);
+      if (!command) {
+        await toast2(client, "Loop command action is empty. Example: /loop-command 200m /compact", "warning");
+        return { startsAssistantTurn: false, pause: true, reason: "empty_command" };
+      }
+      const tuiCommand = compactTuiCommandName2(command);
+      if (tuiCommand) {
+        guardLoopOwnedUserMessage2(sessionID);
+        const ok = await compactionRuntime.start(directory, client, sessionID, job.id, model, false);
+        return { startsAssistantTurn: ok, pause: !ok, reason: "compact_failed", compaction: ok };
+      }
+      guardLoopOwnedUserMessage2(sessionID);
+      const commandBody = { command, arguments: argumentsText, agent };
+      if (model)
+        commandBody.model = `${model.providerID}/${model.modelID}`;
+      await sdkCall2(client.session.command.bind(client.session), { path: { id: sessionID }, body: commandBody }, { path: { sessionID }, body: commandBody }, { sessionID, ...commandBody });
+      return { startsAssistantTurn: true };
+    }
+    if (kind === "shell") {
+      const command = action.replace(/^[!$]\s*/, "").trim();
+      if (job.safe && dangerousShell2(command)) {
+        await toast2(client, `Blocked dangerous shell command in safe mode: ${command}`, "error");
+        await appendLoopLog2(directory, "blocked", { sessionID, job: job.name || job.id, command });
+        return { startsAssistantTurn: false, pause: true, reason: "safe_shell_blocked" };
+      }
+      guardLoopOwnedUserMessage2(sessionID);
+      const shellBody = { command, agent };
+      if (model)
+        shellBody.model = model;
+      const dispatch2 = fireSdk2(client, "session.shell", client.session.shell.bind(client.session), { path: { id: sessionID }, body: shellBody }, { path: { sessionID }, body: shellBody }, { sessionID, ...shellBody });
+      return { startsAssistantTurn: true, dispatch: dispatch2 };
+    }
+    const prompt = await buildPrompt(directory, job);
+    const prefix = kind === "goal" ? "EXPERIMENTAL GOAL MODE CONTINUATION. Continue pursuing the active goal. Do not explain the /loop-goal command. Use the goal tools only when progress/completion/block state is real." : "AUTONOMOUS OPENCODE LOOP ITERATION. Continue the configured task now. Do not explain the /loop command. Do not search for documentation about this plugin. Do not create scheduler files. Do not ask questions. Make reasonable assumptions and work directly.";
+    const promptText = `${prefix}
+
+${prompt}`;
+    guardLoopOwnedUserMessage2(sessionID);
+    const promptBody = { agent, parts: [{ type: "text", text: promptText }] };
+    if (model)
+      promptBody.model = model;
+    const dispatch = fireSdk2(client, "session.prompt", client.session.prompt.bind(client.session), { path: { id: sessionID }, body: promptBody }, { path: { sessionID }, body: promptBody }, { sessionID, ...promptBody });
+    return { startsAssistantTurn: true, dispatch };
+  }
+  async function maybeRunDueJobs(directory, client, sessionID, runOptions = {}) {
+    rememberSession(directory, client, sessionID);
+    const reschedule = async (minDelayMs = 0) => {
+      await scheduleDueWork(directory, client, sessionID, minDelayMs);
+    };
+    if (runLocks.has(sessionID)) {
+      await reschedule(busyRetryMs);
+      return;
+    }
+    runLocks.set(sessionID, now2());
+    let job;
+    try {
+      await finalizeActiveRun(directory, client, sessionID, { requireIdle: true, forceStale: true });
+      if (!await sessionIsIdle(client, sessionID, directory)) {
+        if (runOptions.force)
+          await toast2(client, "Loop queued: session is busy; it will run on the next idle check.", "info");
+        await reschedule(busyRetryMs);
+        return;
+      }
+      const active = activeRuns.get(sessionID);
+      const activeAge = active ? now2() - (active.startedAt || 0) : 0;
+      const activeGuard = active?.job?.timeoutMs || active?.job?.activeRecoveryMs || activeGuardMs;
+      if (active && active.job?.noOverlap !== false && activeAge < activeGuard) {
+        await reschedule(busyRetryMs);
+        return;
+      }
+      if (active && activeAge >= activeGuard)
+        clearActiveRun(sessionID);
+      const state = await readState2(directory, sessionID);
+      for (const candidate of state.jobs || []) {
+        if (candidate.watchPaths?.length && !candidate.paused && candidate.enabled && await watchChanged(directory, candidate)) {
+          candidate.watchTriggered = true;
+        }
+      }
+      const due = dueJobs(state, runOptions.force);
+      if (!due.length) {
+        await writeState2(directory, sessionID, state);
+        await reschedule();
+        return;
+      }
+      job = due[0];
+      if (job.maxRuntimeMs > 0 && now2() - Date.parse(job.createdAt || new Date().toISOString()) >= job.maxRuntimeMs) {
+        state.jobs = (state.jobs || []).filter((candidate) => candidate.id !== job.id);
+        await writeState2(directory, sessionID, state);
+        await notifyJob2(directory, job, "max_runtime_reached");
+        await toast2(client, `Loop stopped by --max-runtime: ${job.name || job.id}`, "success");
+        await appendLoopLog2(directory, "max-runtime", { sessionID, job: job.name || job.id });
+        await reschedule();
+        return;
+      }
+      if (job.stopFile && await pathExists2(path6.resolve(directory, job.stopFile))) {
+        state.jobs = (state.jobs || []).filter((candidate) => candidate.id !== job.id);
+        await writeState2(directory, sessionID, state);
+        await notifyJob2(directory, job, "stop_file");
+        await toast2(client, "Loop stopped by --stop-file: " + job.stopFile, "success");
+        await reschedule();
+        return;
+      }
+      if (await untilReached(directory, job)) {
+        state.jobs = (state.jobs || []).filter((candidate) => candidate.id !== job.id);
+        await writeState2(directory, sessionID, state);
+        await notifyJob2(directory, job, "until_reached");
+        await toast2(client, `Loop stopped by --until: ${job.until}`, "success");
+        await reschedule();
+        return;
+      }
+      if (job.preflightCommand) {
+        if (job.safe && dangerousShell2(job.preflightCommand)) {
+          job.paused = true;
+          await writeState2(directory, sessionID, state);
+          await notifyJob2(directory, job, "preflight_blocked");
+          await toast2(client, "Preflight blocked in safe mode and loop paused: " + job.preflightCommand, "error");
+          await reschedule();
+          return;
+        }
+        const preflight = await runShellCommand2(job.preflightCommand, directory, job.timeoutMs || 300000);
+        await appendLoopLog2(directory, "preflight", {
+          sessionID,
+          job: job.name || job.id,
+          command: job.preflightCommand,
+          code: preflight.code
+        });
+        if (preflight.code !== 0) {
+          job.paused = true;
+          job.failureCount = (job.failureCount || 0) + 1;
+          job.lastPreflightFailure = (job.preflightCommand + `
+exit=` + preflight.code + `
+` + preflight.stdout + `
+` + preflight.stderr).slice(0, 4000);
+          state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
+          await writeState2(directory, sessionID, state);
+          await notifyJob2(directory, job, "preflight_failed");
+          await toast2(client, "Preflight failed and loop paused: " + job.preflightCommand, "warning");
+          await reschedule();
+          return;
+        }
+      }
+      job = await ensureBranch(directory, job, client, sessionID);
+      const compactResult = await compactionRuntime.maybeCompact(directory, client, sessionID, job);
+      job = compactResult.job;
+      if (compactResult.started) {
+        state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
+        await writeState2(directory, sessionID, state);
+        let timer;
+        if (job.timeoutMs > 0) {
+          timer = setTimeout(() => {
+            fireSdk2(client, "session.abort", client.session.abort.bind(client.session), { path: { id: sessionID }, body: {} }, { path: { sessionID }, body: {} }, { sessionID });
+            toast2(client, `Loop compact timeout fired: ${job.name || job.id}`, "warning").catch(() => {});
+          }, job.timeoutMs);
+        }
+        const runToken = `${job.id}:compact:${now2().toString(36)}:${Math.random().toString(16).slice(2)}`;
+        activeRuns.set(sessionID, { jobId: job.id, job, startedAt: now2(), timer, runToken, compactionOnly: true });
+        if (compactionRuntime.isCompleted(sessionID, job.id)) {
+          await compactionRuntime.finalize(directory, client, sessionID);
+          return;
+        }
+        markSessionStatus(sessionID, "busy");
+        await reschedule(busyRetryMs);
+        return;
+      }
+      job.watchTriggered = false;
+      job.lastRunAt = now2();
+      job.runCount = (job.runCount || 0) + 1;
+      if (job.maxRuns > 0 && job.runCount >= job.maxRuns) {
+        job.enabled = false;
+        await notifyJob2(directory, job, "max_runs_reached");
+      }
+      state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
+      await writeState2(directory, sessionID, state);
+      await appendLoopLog2(directory, "run", { sessionID, job: job.name || job.id, runCount: job.runCount });
+      await toast2(client, `Loop running: ${job.name || job.id}`, "info");
+      try {
+        const result = await fireAction(directory, client, sessionID, job);
+        if (!result.startsAssistantTurn) {
+          const fresh = await readState2(directory, sessionID);
+          if (result.pause) {
+            fresh.jobs = (fresh.jobs || []).map((candidate) => candidate.id === job.id ? {
+              ...candidate,
+              paused: true,
+              failureCount: (candidate.failureCount || 0) + 1,
+              lastFailureReason: result.reason || "action_did_not_start"
+            } : candidate);
+          }
+          fresh.jobs = (fresh.jobs || []).filter((candidate) => candidate.enabled !== false || isGoalJob(candidate));
+          await writeState2(directory, sessionID, fresh);
+          await reschedule();
+          return;
+        }
+        let timer;
+        if (job.timeoutMs > 0) {
+          timer = setTimeout(() => {
+            fireSdk2(client, "session.abort", client.session.abort.bind(client.session), { path: { id: sessionID }, body: {} }, { path: { sessionID }, body: {} }, { sessionID });
+            toast2(client, `Loop timeout fired: ${job.name || job.id}`, "warning").catch(() => {});
+          }, job.timeoutMs);
+        }
+        const runToken = `${job.id}:${now2().toString(36)}:${Math.random().toString(16).slice(2)}`;
+        activeRuns.set(sessionID, {
+          jobId: job.id,
+          job,
+          startedAt: now2(),
+          timer,
+          runToken,
+          compactionAction: result.compaction === true
+        });
+        if (result.compaction && compactionRuntime.isCompleted(sessionID, job.id)) {
+          await compactionRuntime.finalize(directory, client, sessionID);
+          return;
+        }
+        if (result.dispatch) {
+          result.dispatch.catch((error) => {
+            recoverActiveDispatchFailure(directory, client, sessionID, job.id, runToken, error).catch((recoveryError) => log2(client, "error", "dispatch recovery failed", { error: errorMessage(recoveryError) }));
+          });
+        }
+        markSessionStatus(sessionID, "busy");
+        await reschedule(busyRetryMs);
+      } catch (error) {
+        clearActiveRun(sessionID);
+        await toast2(client, `Loop job failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+        await appendLoopLog2(directory, "error", {
+          sessionID,
+          job: job?.name || job?.id,
+          error: error instanceof Error ? error.message : String(error)
+        });
+        await reschedule(busyRetryMs);
+      }
+    } finally {
+      runLocks.delete(sessionID);
+    }
+  }
+  return {
+    dueJobs,
+    clearActiveRun,
+    disposeSession,
+    recoverActiveDispatchFailure,
+    finalizeActiveRun,
+    fireAction,
+    maybeRunDueJobs,
+    sessionIsIdle,
+    updateSessionStatusFromEvent,
+    markSessionStatus,
+    clearSessionStatus,
+    noteLoopCompactionStarted: compactionRuntime.noteStarted,
+    noteLoopCompactionCompleted: compactionRuntime.noteCompleted,
+    getActiveRun: (sessionID) => activeRuns.get(sessionID),
+    isRunLocked: (sessionID) => runLocks.has(sessionID)
+  };
+}
+
+// src/source/legacy-v1.js
+var DEFAULT_ACTIVE_GUARD_MS2 = 45000;
+var workspaceRuntime = createJobWorkspaceRuntime({ toast });
+var { snapshotPaths } = workspaceRuntime;
+var goalPolicy = createGoalExecutionPolicy({ runShellCommand, dangerousShell, toast, appendLoopLog, now });
+var schedulerRuntime;
+var schedulerBridge = {
+  rememberSession: (...args) => schedulerRuntime.rememberSession(...args),
+  scheduleDueWork: (...args) => schedulerRuntime.scheduleDueWork(...args)
+};
+var executorRuntime = createLoopExecutor({
+  workspace: workspaceRuntime,
+  goalPolicy,
+  scheduler: schedulerBridge,
+  toast,
   log,
+  appendLoopLog,
   errorMessage: sdkErrorMessage,
   now
 });
 var {
-  maybeCompact,
-  noteStarted: noteLoopCompactionStarted,
-  noteCompleted: noteLoopCompactionCompleted
-} = compactionRuntime;
-var schedulerRuntime = createSchedulerRuntime({
-  busyRetryMs: BUSY_RETRY_MS,
+  clearActiveRun,
+  finalizeActiveRun,
+  maybeRunDueJobs,
+  sessionIsIdle,
+  updateSessionStatusFromEvent,
+  noteLoopCompactionStarted,
+  noteLoopCompactionCompleted
+} = executorRuntime;
+schedulerRuntime = createSchedulerRuntime({
   sessionIsIdle,
   finalizeActiveRun,
   maybeRunDueJobs,
@@ -2787,7 +3268,7 @@ var { addLoop } = createLoopRegistration({
   scheduleIdleWork,
   toast,
   say,
-  defaultActiveGuardMs: DEFAULT_ACTIVE_GUARD_MS
+  defaultActiveGuardMs: DEFAULT_ACTIVE_GUARD_MS2
 });
 var {
   addGoal,
@@ -2849,12 +3330,10 @@ var handleCommand = createCommandRouter({
 function disposeRuntime(directory, client) {
   const sessions = schedulerRuntime.sessionIDsForHost(directory, client);
   for (const sessionID of sessions) {
-    clearActiveRun(sessionID);
+    executorRuntime.disposeSession(sessionID);
     schedulerRuntime.clearSessionScheduling(sessionID);
-    runLocks.delete(sessionID);
     clearLoopOwnedUserMessageGuard(sessionID);
     clearSessionActivity(sessionID);
-    compactionRuntime.clear(sessionID);
     clearCommandLifecycle(sessionID);
   }
 }
@@ -2894,367 +3373,6 @@ async function pauseGoalsForUserInterrupt(directory, client, sessionID) {
   await appendLoopLog(directory, "goal-user-interrupt", { sessionID, count });
   await scheduleDueWork(directory, client, sessionID);
   return true;
-}
-function dueJobs(state, force = false) {
-  const current = now();
-  return (state.jobs || []).filter((job) => {
-    if (isGoalJob(job) && ["completed", "blocked", "cleared"].includes(job.goalStatus))
-      return false;
-    if (!job.enabled || job.paused)
-      return false;
-    if (job.maxRuns > 0 && (job.runCount || 0) >= job.maxRuns)
-      return false;
-    if (job.maxRuntimeMs > 0 && current - Date.parse(job.createdAt || new Date().toISOString()) >= job.maxRuntimeMs)
-      return true;
-    if (force)
-      return true;
-    if (job.watchPaths?.length)
-      return job.watchTriggered === true;
-    return job.intervalMs === 0 || !job.lastRunAt || current - job.lastRunAt >= job.intervalMs;
-  });
-}
-function clearActiveRun(sessionID) {
-  const active = activeRuns.get(sessionID);
-  if (active?.timer)
-    clearTimeout(active.timer);
-  compactionRuntime.clearForActiveRun(sessionID, active);
-  activeRuns.delete(sessionID);
-}
-async function recoverActiveDispatchFailure(directory, client, sessionID, jobId, runToken, error) {
-  const active = activeRuns.get(sessionID);
-  if (!active || active.jobId !== jobId || active.runToken !== runToken)
-    return false;
-  clearActiveRun(sessionID);
-  clearSessionStatus(sessionID);
-  const message = sdkErrorMessage(error);
-  const state = await readState(directory, sessionID);
-  const job = (state.jobs || []).find((candidate) => candidate.id === jobId);
-  if (job) {
-    job.failureCount = (job.failureCount || 0) + 1;
-    job.lastFailureReason = "dispatch_failed";
-    job.lastDispatchFailure = message.slice(0, 4000);
-    job.lastDispatchFailureAt = now();
-    if (job.maxFailures > 0 && job.failureCount >= job.maxFailures) {
-      job.paused = true;
-      await notifyJob(directory, job, "dispatch_failed");
-    }
-    state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-    await writeState(directory, sessionID, state);
-  }
-  await appendLoopLog(directory, "dispatch-error", { sessionID, job: job?.name || jobId, error: message });
-  await toast(client, `Loop dispatch failed${job?.paused ? " and paused" : ""}: ${message}`, job?.paused ? "error" : "warning");
-  await scheduleDueWork(directory, client, sessionID, BUSY_RETRY_MS);
-  return true;
-}
-async function finalizeActiveRun(directory, client, sessionID, options = {}) {
-  const active = activeRuns.get(sessionID);
-  if (!active)
-    return;
-  if (!await canFinalizeActiveRun(directory, client, sessionID, active, options))
-    return false;
-  const recoveredStale = staleActiveRun(sessionID);
-  if (active.compactionOnly) {
-    const pending = compactionRuntime.getPending(sessionID);
-    clearActiveRun(sessionID);
-    clearSessionStatus(sessionID);
-    await appendLoopLog(directory, pending?.completedAt ? "compact-finished" : "compact-idle-fallback", {
-      sessionID,
-      job: active.job?.name || active.jobId,
-      startedAt: active.startedAt,
-      nativeEvent: Boolean(pending?.completedAt)
-    });
-    await scheduleDueWork(directory, client, sessionID);
-    return true;
-  }
-  clearActiveRun(sessionID);
-  const state = await readState(directory, sessionID);
-  let job = (state.jobs || []).find((candidate) => candidate.id === active.jobId);
-  if (!job)
-    return;
-  job.lastFinishedAt = now();
-  if (recoveredStale)
-    await appendLoopLog(directory, "active-stale-recovery", { sessionID, job: job.name || job.id, startedAt: active.startedAt });
-  if (job.verifyCommand) {
-    const verify = await runShellCommand(job.verifyCommand, directory, job.timeoutMs || 300000);
-    job.lastVerifyAt = now();
-    job.lastVerifyCode = verify.code;
-    if (verify.code === 0) {
-      job.failureCount = 0;
-      job.lastVerifyFailure = "";
-      await toast(client, "Loop verify passed: " + job.verifyCommand, "success");
-    } else {
-      job.failureCount = (job.failureCount || 0) + 1;
-      job.lastVerifyFailure = (job.verifyCommand + `
-exit=` + verify.code + `
-` + verify.stdout + `
-` + verify.stderr).slice(0, 4000);
-      await toast(client, "Loop verify failed: " + job.verifyCommand, "warning");
-      if (job.pauseOnVerifyFail || job.maxFailures > 0 && job.failureCount >= job.maxFailures) {
-        job.paused = true;
-        await notifyJob(directory, job, "verify_failed");
-      }
-    }
-    await appendLoopLog(directory, "verify", { sessionID, job: job.name || job.id, command: job.verifyCommand, code: verify.code, failures: job.failureCount || 0 });
-  }
-  if (job.postrunCommand) {
-    if (job.safe && dangerousShell(job.postrunCommand))
-      await appendLoopLog(directory, "postrun-blocked", { sessionID, job: job.name || job.id, command: job.postrunCommand });
-    else {
-      const postrun = await runShellCommand(job.postrunCommand, directory, job.timeoutMs || 300000);
-      job.lastPostrunCode = postrun.code;
-      job.lastPostrunAt = now();
-      if (postrun.code !== 0) {
-        job.failureCount = (job.failureCount || 0) + 1;
-        job.lastPostrunFailure = (job.postrunCommand + `
-exit=` + postrun.code + `
-` + postrun.stdout + `
-` + postrun.stderr).slice(0, 4000);
-        if (job.maxFailures > 0 && job.failureCount >= job.maxFailures) {
-          job.paused = true;
-          await notifyJob(directory, job, "postrun_failed");
-        }
-      }
-      await appendLoopLog(directory, "postrun", { sessionID, job: job.name || job.id, command: job.postrunCommand, code: postrun.code });
-    }
-  }
-  if (isGoalJob(job)) {
-    job = await runGoalChecks(directory, sessionID, job, client);
-    job = await applyGoalNoProgressGuard(directory, client, sessionID, job, active.job);
-  }
-  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate).filter((candidate) => candidate.enabled !== false || isGoalJob(candidate));
-  await writeState(directory, sessionID, state);
-  if (isGoalJob(job))
-    await writeGoalReport(directory, sessionID, job);
-  await createCheckpoint(directory, sessionID, job, client);
-  await scheduleDueWork(directory, client, sessionID);
-  return true;
-}
-async function fireAction(directory, client, sessionID, job) {
-  const action = String(job.action || "").trim();
-  const kind = actionKind(action, job);
-  const agent = job.agent || "build";
-  const model = normalizedModelRef(job.model);
-  if (kind === "compact") {
-    const ok = await compactionRuntime.start(directory, client, sessionID, job.id, model, false);
-    return { startsAssistantTurn: ok, pause: !ok, reason: "compact_failed", compaction: ok };
-  }
-  if (kind === "command") {
-    const normalized = action.startsWith("/") ? action.slice(1) : action;
-    const [command, argumentsText] = splitFirst(normalized);
-    if (!command) {
-      await toast(client, "Loop command action is empty. Example: /loop-command 200m /compact", "warning");
-      return { startsAssistantTurn: false, pause: true, reason: "empty_command" };
-    }
-    const tuiCommand = compactTuiCommandName(command);
-    if (tuiCommand) {
-      guardLoopOwnedUserMessage(sessionID);
-      const ok = await compactionRuntime.start(directory, client, sessionID, job.id, model, false);
-      return { startsAssistantTurn: ok, pause: !ok, reason: "compact_failed", compaction: ok };
-    }
-    guardLoopOwnedUserMessage(sessionID);
-    const commandBody = { command, arguments: argumentsText, agent };
-    if (model)
-      commandBody.model = `${model.providerID}/${model.modelID}`;
-    await sdkCall(client.session.command.bind(client.session), { path: { id: sessionID }, body: commandBody }, { path: { sessionID }, body: commandBody }, { sessionID, ...commandBody });
-    return { startsAssistantTurn: true };
-  }
-  if (kind === "shell") {
-    const command = action.replace(/^[!$]\s*/, "").trim();
-    if (job.safe && dangerousShell(command)) {
-      await toast(client, `Blocked dangerous shell command in safe mode: ${command}`, "error");
-      await appendLoopLog(directory, "blocked", { sessionID, job: job.name || job.id, command });
-      return { startsAssistantTurn: false, pause: true, reason: "safe_shell_blocked" };
-    }
-    guardLoopOwnedUserMessage(sessionID);
-    const shellBody = { command, agent };
-    if (model)
-      shellBody.model = model;
-    const dispatch2 = fireSdk(client, "session.shell", client.session.shell.bind(client.session), { path: { id: sessionID }, body: shellBody }, { path: { sessionID }, body: shellBody }, { sessionID, ...shellBody });
-    return { startsAssistantTurn: true, dispatch: dispatch2 };
-  }
-  const prompt = await buildPrompt(directory, job);
-  const prefix = kind === "goal" ? "EXPERIMENTAL GOAL MODE CONTINUATION. Continue pursuing the active goal. Do not explain the /loop-goal command. Use the goal tools only when progress/completion/block state is real." : "AUTONOMOUS OPENCODE LOOP ITERATION. Continue the configured task now. Do not explain the /loop command. Do not search for documentation about this plugin. Do not create scheduler files. Do not ask questions. Make reasonable assumptions and work directly.";
-  const promptText = `${prefix}
-
-${prompt}`;
-  guardLoopOwnedUserMessage(sessionID);
-  const promptBody = { agent, parts: [{ type: "text", text: promptText }] };
-  if (model)
-    promptBody.model = model;
-  const dispatch = fireSdk(client, "session.prompt", client.session.prompt.bind(client.session), { path: { id: sessionID }, body: promptBody }, { path: { sessionID }, body: promptBody }, { sessionID, ...promptBody });
-  return { startsAssistantTurn: true, dispatch };
-}
-async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
-  rememberSession(directory, client, sessionID);
-  const reschedule = async (minDelayMs = 0) => {
-    await scheduleDueWork(directory, client, sessionID, minDelayMs);
-  };
-  if (runLocks.has(sessionID)) {
-    await reschedule(BUSY_RETRY_MS);
-    return;
-  }
-  runLocks.set(sessionID, now());
-  let job;
-  try {
-    await finalizeActiveRun(directory, client, sessionID, { requireIdle: true, forceStale: true });
-    if (!await sessionIsIdle(client, sessionID, directory)) {
-      if (options.force)
-        await toast(client, "Loop queued: session is busy; it will run on the next idle check.", "info");
-      await reschedule(BUSY_RETRY_MS);
-      return;
-    }
-    const active = activeRuns.get(sessionID);
-    const activeAge = active ? now() - (active.startedAt || 0) : 0;
-    const activeGuard = active?.job?.timeoutMs || active?.job?.activeRecoveryMs || DEFAULT_ACTIVE_GUARD_MS;
-    if (active && active.job?.noOverlap !== false && activeAge < activeGuard) {
-      await reschedule(BUSY_RETRY_MS);
-      return;
-    }
-    if (active && activeAge >= activeGuard)
-      clearActiveRun(sessionID);
-    const state = await readState(directory, sessionID);
-    for (const candidate of state.jobs || []) {
-      if (candidate.watchPaths?.length && !candidate.paused && candidate.enabled && await watchChanged(directory, candidate))
-        candidate.watchTriggered = true;
-    }
-    const due = dueJobs(state, options.force);
-    if (!due.length) {
-      await writeState(directory, sessionID, state);
-      await reschedule();
-      return;
-    }
-    job = due[0];
-    if (job.maxRuntimeMs > 0 && now() - Date.parse(job.createdAt || new Date().toISOString()) >= job.maxRuntimeMs) {
-      state.jobs = (state.jobs || []).filter((candidate) => candidate.id !== job.id);
-      await writeState(directory, sessionID, state);
-      await notifyJob(directory, job, "max_runtime_reached");
-      await toast(client, `Loop stopped by --max-runtime: ${job.name || job.id}`, "success");
-      await appendLoopLog(directory, "max-runtime", { sessionID, job: job.name || job.id });
-      await reschedule();
-      return;
-    }
-    if (job.stopFile && await pathExists(path6.resolve(directory, job.stopFile))) {
-      state.jobs = (state.jobs || []).filter((candidate) => candidate.id !== job.id);
-      await writeState(directory, sessionID, state);
-      await notifyJob(directory, job, "stop_file");
-      await toast(client, "Loop stopped by --stop-file: " + job.stopFile, "success");
-      await reschedule();
-      return;
-    }
-    if (await untilReached(directory, job)) {
-      state.jobs = (state.jobs || []).filter((candidate) => candidate.id !== job.id);
-      await writeState(directory, sessionID, state);
-      await notifyJob(directory, job, "until_reached");
-      await toast(client, `Loop stopped by --until: ${job.until}`, "success");
-      await reschedule();
-      return;
-    }
-    if (job.preflightCommand) {
-      if (job.safe && dangerousShell(job.preflightCommand)) {
-        job.paused = true;
-        await writeState(directory, sessionID, state);
-        await notifyJob(directory, job, "preflight_blocked");
-        await toast(client, "Preflight blocked in safe mode and loop paused: " + job.preflightCommand, "error");
-        await reschedule();
-        return;
-      }
-      const preflight = await runShellCommand(job.preflightCommand, directory, job.timeoutMs || 300000);
-      await appendLoopLog(directory, "preflight", { sessionID, job: job.name || job.id, command: job.preflightCommand, code: preflight.code });
-      if (preflight.code !== 0) {
-        job.paused = true;
-        job.failureCount = (job.failureCount || 0) + 1;
-        job.lastPreflightFailure = (job.preflightCommand + `
-exit=` + preflight.code + `
-` + preflight.stdout + `
-` + preflight.stderr).slice(0, 4000);
-        state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-        await writeState(directory, sessionID, state);
-        await notifyJob(directory, job, "preflight_failed");
-        await toast(client, "Preflight failed and loop paused: " + job.preflightCommand, "warning");
-        await reschedule();
-        return;
-      }
-    }
-    job = await ensureBranch(directory, job, client, sessionID);
-    const compactResult = await maybeCompact(directory, client, sessionID, job);
-    job = compactResult.job;
-    if (compactResult.started) {
-      state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-      await writeState(directory, sessionID, state);
-      let timer;
-      if (job.timeoutMs > 0)
-        timer = setTimeout(() => {
-          fireSdk(client, "session.abort", client.session.abort.bind(client.session), { path: { id: sessionID }, body: {} }, { path: { sessionID }, body: {} }, { sessionID });
-          toast(client, `Loop compact timeout fired: ${job.name || job.id}`, "warning").catch(() => {});
-        }, job.timeoutMs);
-      const runToken = `${job.id}:compact:${now().toString(36)}:${Math.random().toString(16).slice(2)}`;
-      activeRuns.set(sessionID, { jobId: job.id, job, startedAt: now(), timer, runToken, compactionOnly: true });
-      if (compactionRuntime.isCompleted(sessionID, job.id)) {
-        await compactionRuntime.finalize(directory, client, sessionID);
-        return;
-      }
-      markSessionStatus(sessionID, "busy");
-      await reschedule(BUSY_RETRY_MS);
-      return;
-    }
-    job.watchTriggered = false;
-    job.lastRunAt = now();
-    job.runCount = (job.runCount || 0) + 1;
-    if (job.maxRuns > 0 && job.runCount >= job.maxRuns) {
-      job.enabled = false;
-      await notifyJob(directory, job, "max_runs_reached");
-    }
-    state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-    await writeState(directory, sessionID, state);
-    await appendLoopLog(directory, "run", { sessionID, job: job.name || job.id, runCount: job.runCount });
-    await toast(client, `Loop running: ${job.name || job.id}`, "info");
-    try {
-      const result = await fireAction(directory, client, sessionID, job);
-      if (!result.startsAssistantTurn) {
-        const fresh = await readState(directory, sessionID);
-        if (result.pause) {
-          fresh.jobs = (fresh.jobs || []).map((candidate) => candidate.id === job.id ? {
-            ...candidate,
-            paused: true,
-            failureCount: (candidate.failureCount || 0) + 1,
-            lastFailureReason: result.reason || "action_did_not_start"
-          } : candidate);
-        }
-        fresh.jobs = (fresh.jobs || []).filter((candidate) => candidate.enabled !== false || isGoalJob(candidate));
-        await writeState(directory, sessionID, fresh);
-        await reschedule();
-        return;
-      }
-      let timer;
-      if (job.timeoutMs > 0)
-        timer = setTimeout(() => {
-          fireSdk(client, "session.abort", client.session.abort.bind(client.session), { path: { id: sessionID }, body: {} }, { path: { sessionID }, body: {} }, { sessionID });
-          toast(client, `Loop timeout fired: ${job.name || job.id}`, "warning").catch(() => {});
-        }, job.timeoutMs);
-      const runToken = `${job.id}:${now().toString(36)}:${Math.random().toString(16).slice(2)}`;
-      activeRuns.set(sessionID, { jobId: job.id, job, startedAt: now(), timer, runToken, compactionAction: result.compaction === true });
-      if (result.compaction) {
-        if (compactionRuntime.isCompleted(sessionID, job.id)) {
-          await compactionRuntime.finalize(directory, client, sessionID);
-          return;
-        }
-      }
-      if (result.dispatch) {
-        result.dispatch.catch((error) => {
-          recoverActiveDispatchFailure(directory, client, sessionID, job.id, runToken, error).catch((recoveryError) => log(client, "error", "dispatch recovery failed", { error: sdkErrorMessage(recoveryError) }));
-        });
-      }
-      markSessionStatus(sessionID, "busy");
-      await reschedule(BUSY_RETRY_MS);
-    } catch (error) {
-      clearActiveRun(sessionID);
-      await toast(client, `Loop job failed: ${error instanceof Error ? error.message : String(error)}`, "error");
-      await appendLoopLog(directory, "error", { sessionID, job: job?.name || job?.id, error: error instanceof Error ? error.message : String(error) });
-      await reschedule(BUSY_RETRY_MS);
-    }
-  } finally {
-    runLocks.delete(sessionID);
-  }
 }
 function goalTools(defaultDirectory) {
   return {
