@@ -4,13 +4,19 @@ on:
   pull_request:
     paths:
       - "src/source/opencode2/**"
+      - "src/source/runtime/events.js"
       - "scripts/fixtures/opencode2-real-adapter-probe.js"
+      - "scripts/fixtures/opencode2-real-session-probe.js"
+      - "scripts/opencode2-real-session-canary.mjs"
       - ".github/workflows/opencode2-real-adapter.yml"
   push:
     branches: [main]
     paths:
       - "src/source/opencode2/**"
+      - "src/source/runtime/events.js"
       - "scripts/fixtures/opencode2-real-adapter-probe.js"
+      - "scripts/fixtures/opencode2-real-session-probe.js"
+      - "scripts/opencode2-real-session-canary.mjs"
       - ".github/workflows/opencode2-real-adapter.yml"
 
 permissions:
@@ -19,7 +25,7 @@ permissions:
 jobs:
   adapter:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
@@ -66,10 +72,13 @@ jobs:
             if [ -f "$OPENCODE_LOOP_V2_MARKER" ]; then
               cat "$OPENCODE_LOOP_V2_MARKER"
               node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(value.id!=="bybrawe.opencode-loop.v2.experimental" || value.activated!==true || value.commandTransform!==true || value.eventSubscribe!==true || value.sessionPrompt!==true) process.exit(1)' "$OPENCODE_LOOP_V2_MARKER"
-              exit 0
+              break
             fi
             sleep 0.2
           done
-          cat "$RUNNER_TEMP/opencode2-real-command.json" >&2 || true
-          cat "$RUNNER_TEMP/opencode2-real-plugin.json" >&2 || true
-          exit 1
+          test -f "$OPENCODE_LOOP_V2_MARKER"
+      - name: Verify real V2 session prompt and event stream
+        run: |
+          node --check scripts/fixtures/opencode2-real-session-probe.js
+          node --check scripts/opencode2-real-session-canary.mjs
+          node scripts/opencode2-real-session-canary.mjs
