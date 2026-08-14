@@ -42,8 +42,8 @@ const workspaceImport = 'import { createJobWorkspaceRuntime, dangerousShell } fr
 requireOnce(legacy, workspaceImport, "workspace import")
 legacy = legacy.replace(workspaceImport, workspaceImport + 'import { createLoopExecutor } from "./runtime/executor.js"\n')
 
-legacy = legacy.replace('const DEFAULT_ACTIVE_GUARD_MS = 45_000\n', '')
 legacy = legacy.replace('const BUSY_RETRY_MS = 5_000\n', '')
+if (!legacy.includes('const DEFAULT_ACTIVE_GUARD_MS = 45_000')) throw new Error("registration active guard config must remain")
 
 const oldWorkspaceWiring = `const {
   buildPrompt,
@@ -176,6 +176,7 @@ if (!legacy.includes("function userInterruptSessionFromEvent(event)")) throw new
 if (!legacy.includes("async function pauseGoalsForUserInterrupt(directory, client, sessionID)")) throw new Error("goal interrupt policy must remain")
 if (!legacy.includes("function goalTools(defaultDirectory)")) throw new Error("goal tools must remain")
 if (!legacy.includes("export const OpenCodeLoopPlugin")) throw new Error("plugin composition root must remain")
+if (!legacy.includes("defaultActiveGuardMs: DEFAULT_ACTIVE_GUARD_MS")) throw new Error("registration active guard wiring must remain")
 
 const imports = legacy.split("\n").filter((line) => line.startsWith("import ")).join("\n")
 for (const stale of [
