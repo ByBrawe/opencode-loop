@@ -19,32 +19,30 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm install --no-save --package-lock=false @opencode-ai/plugin@next
       - run: npm install --global @opencode-ai/cli@next
-      - name: Inspect project discovery
+      - name: Inspect native V2 activation
         shell: bash
         run: |
           project="$RUNNER_TEMP/opencode2-discovery"
-          mkdir -p "$project/.opencode/plugins" "$project/.opencode/commands"
+          mkdir -p "$project/.opencode/plugins"
           git init -q "$project"
-          printf 'export default async function(){ return {"command.execute.before": async()=>{}} }\n' > "$project/.opencode/plugins/sentinel.js"
-          printf '%s\n' '---' 'description: discovery sentinel' '---' '' 'sentinel' > "$project/.opencode/commands/discovery-sentinel.md"
+          cp "$GITHUB_WORKSPACE/src/source/opencode2/experimental.js" "$project/.opencode/plugins/opencode-loop-v2.js"
+          ln -s "$GITHUB_WORKSPACE/node_modules" "$project/node_modules"
           printf '{}\n' > "$project/opencode.json"
           git -C "$project" config user.email "canary@example.invalid"
           git -C "$project" config user.name "OpenCode Canary"
-          git -C "$project" add .
+          git -C "$project" add .opencode opencode.json
           git -C "$project" commit -qm init
           opencode2 service stop >/dev/null 2>&1 || true
           encoded="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$project")"
           query="directory=$encoded&location%5Bdirectory%5D=$encoded"
           body="$(node -e 'process.stdout.write(JSON.stringify({location:{directory:process.argv[1]}}))' "$project")"
           cd "$project"
-          echo '--- session create ---'
           opencode2 api post "/api/session?$query" --data "$body"
-          echo '--- command catalog ---'
-          opencode2 api get "/api/command?$query" || true
-          echo '--- plugin registry ---'
-          opencode2 api get "/api/plugin?$query" || true
-          echo '--- relevant daemon log ---'
-          log="$HOME/.local/share/opencode/log/opencode.log"
-          if [ -f "$log" ]; then grep -Ei 'plugin|config|loading|discovery-sentinel|sentinel\.js' "$log" | tail -n 160 || true; fi
+          output="$(opencode2 api get "/api/plugin?$query")"
+          printf '%s\n' "$output"
+          printf '%s\n' "$output" | grep -F 'bybrawe.opencode-loop.v2'
           opencode2 service stop >/dev/null 2>&1 || true
