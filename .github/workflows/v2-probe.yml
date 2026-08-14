@@ -41,4 +41,10 @@ jobs:
           done
           cat v2-plugins.txt
           grep -F "\"directory\":\"${GITHUB_WORKSPACE}\"" v2-plugins.txt
+          echo "--- plugin/server diagnostics ---"
+          if [ -f "$HOME/.local/share/opencode/log/opencode.log" ]; then
+            grep -Ei 'plugin|config|error|bybrawe' "$HOME/.local/share/opencode/log/opencode.log" | tail -n 250 || true
+          else
+            find "$HOME/.local/share/opencode/log" -maxdepth 1 -type f -print -exec tail -n 120 {} \; 2>/dev/null || true
+          fi
           exit 1
