@@ -27,8 +27,9 @@ jobs:
         run: node --check .opencode/plugins/bybrawe-loop-v2-probe.mjs
       - name: Show V2 CLI version
         run: ./node_modules/.bin/opencode2 --version
-      - name: Verify discovered plugin is active
+      - name: Verify discovered plugin is active in project location
         run: |
-          timeout 45s ./node_modules/.bin/opencode2 api get /api/plugin > v2-plugins.txt
+          request="/api/plugin?directory=${GITHUB_WORKSPACE}"
+          timeout 45s ./node_modules/.bin/opencode2 api get "$request" > v2-plugins.txt
           cat v2-plugins.txt
           grep -F 'bybrawe.loop.v2-probe' v2-plugins.txt
