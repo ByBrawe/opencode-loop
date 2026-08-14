@@ -30,7 +30,9 @@ jobs:
         run: npm install --no-save --package-lock=false @opencode-ai/plugin@next
 
       - name: Verify experimental adapter syntax
-        run: node --check src/source/opencode2/experimental.js
+        run: |
+          node --check src/source/opencode2/experimental.js
+          node --check src/source/opencode2/compat-v1-sentinel.js
 
       - name: Install current OpenCode 2 beta
         run: npm install --global @opencode-ai/cli@next
@@ -45,10 +47,11 @@ jobs:
           mkdir -p "$project/.opencode/plugins"
           git init -q "$project"
           cp "$GITHUB_WORKSPACE/src/source/opencode2/experimental.js" "$project/.opencode/plugins/opencode-loop-v2.js"
+          cp "$GITHUB_WORKSPACE/src/source/opencode2/compat-v1-sentinel.js" "$project/.opencode/plugins/v1-compat-sentinel.js"
           ln -s "$GITHUB_WORKSPACE/node_modules" "$project/node_modules"
           echo "OPENCODE2_SENTINEL_PROJECT=$project" >> "$GITHUB_ENV"
 
-      - name: Verify plugin activation in real OpenCode 2 host
+      - name: Probe plugin activation in real OpenCode 2 host
         shell: bash
         run: |
           cd "$OPENCODE2_SENTINEL_PROJECT"
@@ -56,11 +59,16 @@ jobs:
           request="$(node -e 'const d=encodeURIComponent(process.argv[1]); console.log(`/api/plugin?directory=${d}&location%5Bdirectory%5D=${d}`)' "$OPENCODE2_SENTINEL_PROJECT")"
           output="$(opencode2 api get "$request")"
           printf '%s\n' "$output"
-          printf '%s\n' "$output" | grep -F 'bybrawe.opencode-loop.v2'
+          OUTPUT="$output" node -e 'const value=JSON.parse(process.env.OUTPUT); if (!Array.isArray(value.data) || value.data.length < 1) { console.error("No external plugin activated"); process.exit(1) }'
+          if printf '%s\n' "$output" | grep -Fq 'bybrawe.opencode-loop.v2'; then
+            echo "Native V2 plugin API is active."
+          else
+            echo "V1 compatibility plugin activated; native V2 plugin API is not active yet."
+          fi
 
       - name: Show server log on failure
         if: failure()
         shell: bash
         run: |
           log="$HOME/.local/share/opencode/log/opencode.log"
-          if [ -f "$log" ]; then tail -n 200 "$log"; fi
+          if [ -f "$log" ]; then tail -n 220 "$log"; fi
