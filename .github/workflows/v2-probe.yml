@@ -35,6 +35,8 @@ jobs:
             if grep -F 'bybrawe.loop.v2-probe' v2-plugins.txt; then
               cat v2-plugins.txt
               grep -F "\"directory\":\"${GITHUB_WORKSPACE}\"" v2-plugins.txt
+              echo "--- V2 context shape ---"
+              cat /tmp/bybrawe-loop-v2-context.json
               exit 0
             fi
             sleep 0.5
