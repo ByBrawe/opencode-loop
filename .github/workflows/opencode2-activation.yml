@@ -49,34 +49,38 @@ jobs:
           node -p "require('./node_modules/@opencode-ai/plugin/package.json').version"
           "$GITHUB_WORKSPACE/node_modules/.bin/opencode2" --version
 
-      - name: Prepare isolated V2 project
+      - name: Verify sentinel imports with tested V2 package
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          const plugin = await import("./src/source/opencode2/experimental.js")
+          if (plugin.default?.id !== "bybrawe.opencode-loop.v2.experimental") {
+            throw new Error(`unexpected V2 sentinel id: ${plugin.default?.id}`)
+          }
+          console.log("V2 sentinel direct import passed")
+          NODE
+
+      - name: Prepare isolated V2 project with local plugin discovery
         shell: bash
         run: |
           mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
           project="$RUNNER_TEMP/opencode-loop-v2-activation"
-          mkdir -p "$project"
+          mkdir -p "$project/.opencode/plugins"
           git init --quiet "$project"
           git -C "$project" config user.email "opencode-loop-ci@example.invalid"
           git -C "$project" config user.name "OpenCode Loop CI"
-          node -e 'const fs=require("node:fs"),path=require("node:path");const project=process.argv[1],plugin=path.resolve(process.argv[2]);fs.writeFileSync(path.join(project,"opencode.json"),JSON.stringify({plugins:[plugin]},null,2)+"\n")' "$project" "$GITHUB_WORKSPACE/src/source/opencode2/experimental.js"
-          git -C "$project" add opencode.json
+          cp "$GITHUB_WORKSPACE/src/source/opencode2/experimental.js" "$project/.opencode/plugins/opencode-loop-v2.js"
+          ln -s "$GITHUB_WORKSPACE/node_modules" "$project/node_modules"
+          git -C "$project" add .opencode/plugins/opencode-loop-v2.js
           git -C "$project" commit --quiet -m "init"
           git -C "$project" rev-parse --show-toplevel
-          git -C "$project" rev-parse HEAD
-          cat "$project/opencode.json"
-
-      - name: Show project config through real OpenCode 2 host
-        shell: bash
-        continue-on-error: true
-        run: |
-          project="$RUNNER_TEMP/opencode-loop-v2-activation"
-          "$GITHUB_WORKSPACE/node_modules/.bin/opencode2" api get /api/config -H "x-opencode-directory: $project"
+          find "$project/.opencode" -maxdepth 3 -type f -print
 
       - name: Verify plugin is active in real OpenCode 2 host
         shell: bash
         run: |
-          project="$RUNNER_TEMP/opencode-loop-v2-activation"
-          plugins="$("$GITHUB_WORKSPACE/node_modules/.bin/opencode2" api get /api/plugin -H "x-opencode-directory: $project")"
+          cd "$RUNNER_TEMP/opencode-loop-v2-activation"
+          plugins="$("$GITHUB_WORKSPACE/node_modules/.bin/opencode2" plugin list)"
           printf '%s\n' "$plugins"
           printf '%s\n' "$plugins" | grep -F "bybrawe.opencode-loop.v2.experimental"
 
