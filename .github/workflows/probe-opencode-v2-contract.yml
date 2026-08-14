@@ -2,7 +2,7 @@ name: Probe OpenCode V2 Contract
 
 on:
   push:
-    branches: [probe-opencode-v2-reference-activation]
+    branches: [probe-opencode-v2-command-activation]
   workflow_dispatch:
 
 permissions:
@@ -21,9 +21,12 @@ jobs:
         run: npm install -g @opencode-ai/cli@next
       - name: Show V2 version
         run: opencode2 --version
-      - name: Read V2 references after plugin setup
+      - name: Read V2 commands after plugin setup
         working-directory: .v2-probe
-        run: opencode2 api -H "x-opencode-directory:$(pwd)" get /api/reference | tee reference-list.txt
+        run: opencode2 api -H "x-opencode-directory:$(pwd)" get /api/command | tee command-list.txt
+      - name: Require seed command
+        working-directory: .v2-probe
+        run: grep -F "v2-probe" command-list.txt
       - name: Require Loop V2 activation marker
         working-directory: .v2-probe
-        run: grep -F "LOOP_V2_PROBE_ACTIVE" reference-list.txt
+        run: grep -F "LOOP_V2_PROBE_ACTIVE" command-list.txt
