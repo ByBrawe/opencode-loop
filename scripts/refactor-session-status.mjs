@@ -60,13 +60,10 @@ legacy = removeUntil(
   "session status runtime block",
 )
 
-const clearPair = 'sessionStatuses.delete(sessionID)\n  sessionStatusSeenAt.delete(sessionID)'
-let clearCount = 0
-while (legacy.includes(clearPair)) {
-  legacy = legacy.replace(clearPair, 'clearSessionStatus(sessionID)')
-  clearCount++
-}
-if (clearCount !== 1) throw new Error(`expected 1 remaining session-status clear pair, found ${clearCount}`)
+const clearPattern = /sessionStatuses\.delete\(sessionID\)\n\s*sessionStatusSeenAt\.delete\(sessionID\)/g
+const clearMatches = legacy.match(clearPattern) || []
+if (clearMatches.length !== 2) throw new Error(`expected 2 remaining session-status clear pairs, found ${clearMatches.length}`)
+legacy = legacy.replace(clearPattern, 'clearSessionStatus(sessionID)')
 
 const busyPair = 'sessionStatuses.set(sessionID, "busy")\n      sessionStatusSeenAt.set(sessionID, now())'
 let busyCount = 0
@@ -108,7 +105,7 @@ for (const staleReference of ["sessionStatuses", "sessionStatusSeenAt", "session
 }
 if (!imports.includes("createSessionStatusRuntime")) throw new Error("session status runtime import missing")
 if ((legacy.match(/markSessionStatus\(sessionID, "busy"\)/g) || []).length !== 2) throw new Error("expected two busy status helper calls in executor")
-if ((legacy.match(/clearSessionStatus\(sessionID\)/g) || []).length !== 1) throw new Error("expected one clearSessionStatus call in executor")
+if ((legacy.match(/clearSessionStatus\(sessionID\)/g) || []).length !== 2) throw new Error("expected two clearSessionStatus calls in executor")
 
 await fs.writeFile(legacyPath, legacy)
 console.log("session status refactor transform complete")
