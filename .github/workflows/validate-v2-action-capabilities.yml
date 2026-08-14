@@ -1,6 +1,6 @@
-name: Probe V2 action capabilities
+name: Validate V2 command runtime
 
-# Temporary branch-only probe; rerun after exposing the command wrapper source.
+# Temporary branch-only validation; removed before PR.
 on:
   push:
     branches: [feat-v2-action-runtime-20260814]
@@ -11,9 +11,9 @@ permissions:
   contents: read
 
 jobs:
-  probe:
+  validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
@@ -31,6 +31,13 @@ jobs:
           echo "XDG_DATA_HOME=$RUNNER_TEMP/opencode2-home/.local/share" >> "$GITHUB_ENV"
           echo "XDG_STATE_HOME=$RUNNER_TEMP/opencode2-home/.local/state" >> "$GITHUB_ENV"
       - run: npm ci
+      - run: npm run check
+      - run: node scripts/v2-host-contract-test.mjs
+      - run: node scripts/v2-plugin-sentinel-test.mjs
+      - run: node scripts/v2-command-runtime-test.mjs
+      - run: node scripts/v2-command-adapter-test.mjs
+      - run: npm test
+      - run: git diff --check
       - run: npm install -g --allow-scripts=@opencode-ai/cli @opencode-ai/cli@next
       - run: npm install --no-save --package-lock=false @opencode-ai/plugin@next
       - name: Prepare probe project
@@ -60,6 +67,7 @@ jobs:
           for attempt in $(seq 1 50); do
             if [ -f "$OPENCODE_LOOP_V2_MARKER" ]; then
               cat "$OPENCODE_LOOP_V2_MARKER"
+              node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(value.sessionCommand!==true) process.exit(1)' "$OPENCODE_LOOP_V2_MARKER"
               exit 0
             fi
             sleep 0.2
