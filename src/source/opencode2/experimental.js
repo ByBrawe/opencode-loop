@@ -10,6 +10,10 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
     if (!capabilities.commandTransform) {
       throw new Error("OpenCode 2 command.transform capability is unavailable")
     }
+
+    await ctx.command.transform(() => {})
+    if (!capabilities.eventSubscribe || !capabilities.sessionPrompt) return undefined
+
     const subscribe = () => ctx.event.subscribe()
     const sendPrompt = (request) => ctx.session.prompt(request)
     const options = {}
@@ -18,7 +22,6 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
     const host = createOpenCode2HostContract(options)
     const startHost = host.start.bind(host)
     const disposeHost = host.dispose.bind(host)
-    await ctx.command.transform(() => {})
     await startHost()
     return disposeHost
   },
