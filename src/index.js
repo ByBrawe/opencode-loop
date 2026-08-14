@@ -981,64 +981,10 @@ async function toast(client, message, variant = "info") {
   } catch {}
 }
 
-// src/source/legacy-v1.js
-var SERVICE2 = "opencode-loop";
-var DEFAULT_ACTIVE_GUARD_MS = 45000;
-var STALE_ACTIVE_RECOVERY_MS = 45000;
-var IDLE_DEBOUNCE_MS = 1200;
-var BUSY_RETRY_MS = 5000;
-var SESSION_STATUS_CACHE_MS = 1500;
-var MIN_DUE_TIMER_MS = 250;
-var MAX_DUE_TIMER_MS = 2147000000;
-var HEARTBEAT_MS = 2500;
-var MAX_SCAN_FILES = 200;
-var MAX_SCAN_BYTES = 2000000;
-var GOAL_REPORT_DIR = "goals";
-var GOAL_PROMPT_PREFIX = "EXPERIMENTAL OPENCODE GOAL MODE ITERATION";
-var DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180000;
+// src/source/opencode/messages.js
 var LOOP_OWNED_USER_MESSAGE_GUARD_MS = 1e4;
 var LOOP_OWNED_USER_MESSAGE_RETENTION_MS = 10 * 60000;
-var activeRuns = new Map;
-var handledCommands = new Map;
-var handledCommandEvents = new Map;
 var loopOwnedUserMessageGuards = new Map;
-var idleTimers = new Map;
-var dueTimers = new Map;
-var watchdogTimers = new Map;
-var runLocks = new Map;
-var knownSessions = new Map;
-var activeToolCalls = new Map;
-var sessionParents = new Map;
-var heartbeatTimer;
-var sessionStatuses = new Map;
-var sessionStatusSeenAt = new Map;
-var loopCompactionRequests = new Map;
-var DEFAULT_PROGRESS_MD = `# Progress
-
-## Current Goal
-Describe the current project goal here.
-
-## Agent Rules
-- Do not ask questions unless truly blocked.
-- Make reasonable assumptions and continue.
-- Work on unfinished TODOs in order.
-- Mark completed TODOs with [x].
-- Add new bugs, ideas, and follow-up work as TODOs.
-- Run tests, lint, or build when available.
-- Do not run destructive commands, force pushes, production deploys, or database resets.
-
-## Active TODO
-- [ ] Review the project structure and pick the next safe improvement.
-
-## Completed
-- [x] Created progress.md.
-
-## Backlog Ideas
-- [ ] Add more project-specific tasks here.
-
-## Blocked
-- None.
-`;
 function guardLoopOwnedUserMessage(sessionID) {
   if (!sessionID)
     return;
@@ -1084,6 +1030,65 @@ async function say(client, sessionID, text) {
     await sdkCall(client.session.prompt.bind(client.session), { path: { id: sessionID }, body: { noReply: true, parts: [{ type: "text", text }] } }, { path: { sessionID }, body: { noReply: true, parts: [{ type: "text", text }] } }, { sessionID, noReply: true, parts: [{ type: "text", text }] });
   } catch {}
 }
+function clearLoopOwnedUserMessageGuard(sessionID) {
+  loopOwnedUserMessageGuards.delete(sessionID);
+}
+
+// src/source/legacy-v1.js
+var SERVICE2 = "opencode-loop";
+var DEFAULT_ACTIVE_GUARD_MS = 45000;
+var STALE_ACTIVE_RECOVERY_MS = 45000;
+var IDLE_DEBOUNCE_MS = 1200;
+var BUSY_RETRY_MS = 5000;
+var SESSION_STATUS_CACHE_MS = 1500;
+var MIN_DUE_TIMER_MS = 250;
+var MAX_DUE_TIMER_MS = 2147000000;
+var HEARTBEAT_MS = 2500;
+var MAX_SCAN_FILES = 200;
+var MAX_SCAN_BYTES = 2000000;
+var GOAL_REPORT_DIR = "goals";
+var GOAL_PROMPT_PREFIX = "EXPERIMENTAL OPENCODE GOAL MODE ITERATION";
+var DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180000;
+var activeRuns = new Map;
+var handledCommands = new Map;
+var handledCommandEvents = new Map;
+var idleTimers = new Map;
+var dueTimers = new Map;
+var watchdogTimers = new Map;
+var runLocks = new Map;
+var knownSessions = new Map;
+var activeToolCalls = new Map;
+var sessionParents = new Map;
+var heartbeatTimer;
+var sessionStatuses = new Map;
+var sessionStatusSeenAt = new Map;
+var loopCompactionRequests = new Map;
+var DEFAULT_PROGRESS_MD = `# Progress
+
+## Current Goal
+Describe the current project goal here.
+
+## Agent Rules
+- Do not ask questions unless truly blocked.
+- Make reasonable assumptions and continue.
+- Work on unfinished TODOs in order.
+- Mark completed TODOs with [x].
+- Add new bugs, ideas, and follow-up work as TODOs.
+- Run tests, lint, or build when available.
+- Do not run destructive commands, force pushes, production deploys, or database resets.
+
+## Active TODO
+- [ ] Review the project structure and pick the next safe improvement.
+
+## Completed
+- [x] Created progress.md.
+
+## Backlog Ideas
+- [ ] Add more project-specific tasks here.
+
+## Blocked
+- None.
+`;
 function commandKey(sessionID, name, args) {
   return `${sessionID || "no-session"}:${name || ""}:${normalizeArgsForKey(args)}`;
 }
@@ -1295,7 +1300,7 @@ function disposeRuntime(directory, client) {
     watchdogTimers.delete(sessionID);
     runLocks.delete(sessionID);
     knownSessions.delete(sessionID);
-    loopOwnedUserMessageGuards.delete(sessionID);
+    clearLoopOwnedUserMessageGuard(sessionID);
     activeToolCalls.delete(sessionID);
     sessionParents.delete(sessionID);
     sessionStatuses.delete(sessionID);
