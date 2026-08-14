@@ -866,64 +866,8 @@ function deleteSessionExecutionContext(sessionID) {
   sessionExecutionContexts.delete(sessionID);
 }
 
-// src/source/legacy-v1.js
+// src/source/opencode/host.js
 var SERVICE = "opencode-loop";
-var DEFAULT_ACTIVE_GUARD_MS = 45000;
-var STALE_ACTIVE_RECOVERY_MS = 45000;
-var IDLE_DEBOUNCE_MS = 1200;
-var BUSY_RETRY_MS = 5000;
-var SESSION_STATUS_CACHE_MS = 1500;
-var MIN_DUE_TIMER_MS = 250;
-var MAX_DUE_TIMER_MS = 2147000000;
-var HEARTBEAT_MS = 2500;
-var MAX_SCAN_FILES = 200;
-var MAX_SCAN_BYTES = 2000000;
-var GOAL_REPORT_DIR = "goals";
-var GOAL_PROMPT_PREFIX = "EXPERIMENTAL OPENCODE GOAL MODE ITERATION";
-var DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180000;
-var LOOP_OWNED_USER_MESSAGE_GUARD_MS = 1e4;
-var LOOP_OWNED_USER_MESSAGE_RETENTION_MS = 10 * 60000;
-var activeRuns = new Map;
-var handledCommands = new Map;
-var handledCommandEvents = new Map;
-var loopOwnedUserMessageGuards = new Map;
-var idleTimers = new Map;
-var dueTimers = new Map;
-var watchdogTimers = new Map;
-var runLocks = new Map;
-var knownSessions = new Map;
-var activeToolCalls = new Map;
-var sessionParents = new Map;
-var heartbeatTimer;
-var sessionStatuses = new Map;
-var sessionStatusSeenAt = new Map;
-var loopCompactionRequests = new Map;
-var DEFAULT_PROGRESS_MD = `# Progress
-
-## Current Goal
-Describe the current project goal here.
-
-## Agent Rules
-- Do not ask questions unless truly blocked.
-- Make reasonable assumptions and continue.
-- Work on unfinished TODOs in order.
-- Mark completed TODOs with [x].
-- Add new bugs, ideas, and follow-up work as TODOs.
-- Run tests, lint, or build when available.
-- Do not run destructive commands, force pushes, production deploys, or database resets.
-
-## Active TODO
-- [ ] Review the project structure and pick the next safe improvement.
-
-## Completed
-- [x] Created progress.md.
-
-## Backlog Ideas
-- [ ] Add more project-specific tasks here.
-
-## Blocked
-- None.
-`;
 function fireSdk(client, label, method, ...argsList) {
   const pending = Promise.resolve().then(() => sdkCall(method, ...argsList));
   pending.catch((error) => {
@@ -1036,6 +980,65 @@ async function toast(client, message, variant = "info") {
     await sdkCall(client.tui.showToast.bind(client.tui), { body: { message, variant } }, { message, variant });
   } catch {}
 }
+
+// src/source/legacy-v1.js
+var SERVICE2 = "opencode-loop";
+var DEFAULT_ACTIVE_GUARD_MS = 45000;
+var STALE_ACTIVE_RECOVERY_MS = 45000;
+var IDLE_DEBOUNCE_MS = 1200;
+var BUSY_RETRY_MS = 5000;
+var SESSION_STATUS_CACHE_MS = 1500;
+var MIN_DUE_TIMER_MS = 250;
+var MAX_DUE_TIMER_MS = 2147000000;
+var HEARTBEAT_MS = 2500;
+var MAX_SCAN_FILES = 200;
+var MAX_SCAN_BYTES = 2000000;
+var GOAL_REPORT_DIR = "goals";
+var GOAL_PROMPT_PREFIX = "EXPERIMENTAL OPENCODE GOAL MODE ITERATION";
+var DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180000;
+var LOOP_OWNED_USER_MESSAGE_GUARD_MS = 1e4;
+var LOOP_OWNED_USER_MESSAGE_RETENTION_MS = 10 * 60000;
+var activeRuns = new Map;
+var handledCommands = new Map;
+var handledCommandEvents = new Map;
+var loopOwnedUserMessageGuards = new Map;
+var idleTimers = new Map;
+var dueTimers = new Map;
+var watchdogTimers = new Map;
+var runLocks = new Map;
+var knownSessions = new Map;
+var activeToolCalls = new Map;
+var sessionParents = new Map;
+var heartbeatTimer;
+var sessionStatuses = new Map;
+var sessionStatusSeenAt = new Map;
+var loopCompactionRequests = new Map;
+var DEFAULT_PROGRESS_MD = `# Progress
+
+## Current Goal
+Describe the current project goal here.
+
+## Agent Rules
+- Do not ask questions unless truly blocked.
+- Make reasonable assumptions and continue.
+- Work on unfinished TODOs in order.
+- Mark completed TODOs with [x].
+- Add new bugs, ideas, and follow-up work as TODOs.
+- Run tests, lint, or build when available.
+- Do not run destructive commands, force pushes, production deploys, or database resets.
+
+## Active TODO
+- [ ] Review the project structure and pick the next safe improvement.
+
+## Completed
+- [x] Created progress.md.
+
+## Backlog Ideas
+- [ ] Add more project-specific tasks here.
+
+## Blocked
+- None.
+`;
 function guardLoopOwnedUserMessage(sessionID) {
   if (!sessionID)
     return;
@@ -2740,7 +2743,7 @@ async function doctorLoop(directory, client, sessionID) {
   const state = await readState(directory, sessionID);
   await say(client, sessionID, [
     "OpenCode Loop doctor:",
-    `- plugin: ${SERVICE}`,
+    `- plugin: ${SERVICE2}`,
     `- project directory: ${directory}`,
     `- state directory: ${stateDir(directory)}`,
     `- active jobs: ${(state.jobs || []).length}`,
@@ -2924,6 +2927,406 @@ var OpenCodeLoopPlugin = async ({ client, directory }) => {
 };
 var legacy_v1_default = OpenCodeLoopPlugin;
 
+// src/source/runtime/session-registry.js
+var DEFAULT_SESSION_STALE_MS = 12 * 60 * 60 * 1000;
+function sessionKey(sessionID) {
+  return String(sessionID || "").trim();
+}
+function createSessionRegistry({ now: now2 = Date.now, staleAfterMs = DEFAULT_SESSION_STALE_MS } = {}) {
+  if (typeof now2 !== "function")
+    throw new TypeError("session registry requires a clock function");
+  if (!Number.isFinite(staleAfterMs) || staleAfterMs < 0)
+    throw new TypeError("session registry requires a non-negative staleAfterMs");
+  const sessions = new Map;
+  function observeExternal(sessionID, runtime) {
+    const key = sessionKey(sessionID);
+    if (!key)
+      throw new TypeError("session registry requires a session ID");
+    const seenAt = Number(now2());
+    if (!Number.isFinite(seenAt))
+      throw new TypeError("session registry clock must return a finite number");
+    const entry = Object.freeze({ sessionID: key, runtime, seenAt });
+    sessions.set(key, entry);
+    return entry;
+  }
+  function peek(sessionID) {
+    return sessions.get(sessionKey(sessionID));
+  }
+  function remove(sessionID, expectedRuntime) {
+    const key = sessionKey(sessionID);
+    const current = sessions.get(key);
+    if (!current)
+      return false;
+    if (arguments.length > 1 && current.runtime !== expectedRuntime)
+      return false;
+    return sessions.delete(key);
+  }
+  function pruneStale(at = now2()) {
+    const timestamp = Number(at);
+    if (!Number.isFinite(timestamp))
+      throw new TypeError("session registry prune time must be finite");
+    const removed = [];
+    for (const [key, entry] of sessions) {
+      if (timestamp - entry.seenAt < staleAfterMs)
+        continue;
+      sessions.delete(key);
+      removed.push(key);
+    }
+    return removed;
+  }
+  function entries() {
+    return [...sessions.values()];
+  }
+  return Object.freeze({
+    observeExternal,
+    peek,
+    remove,
+    pruneStale,
+    entries
+  });
+}
+
+// src/source/runtime/scope.js
+function createRuntimeScope() {
+  const controller = new AbortController;
+  const cleanups = new Set;
+  let disposed = false;
+  function track(cleanup) {
+    if (typeof cleanup !== "function")
+      throw new TypeError("runtime scope cleanup must be a function");
+    if (disposed) {
+      cleanup();
+      return () => false;
+    }
+    const entry = { cleanup };
+    cleanups.add(entry);
+    let tracked = true;
+    return () => {
+      if (!tracked)
+        return false;
+      tracked = false;
+      return cleanups.delete(entry);
+    };
+  }
+  function guard(callback) {
+    if (typeof callback !== "function")
+      throw new TypeError("runtime scope guard requires a function");
+    return function(...args) {
+      if (disposed)
+        return;
+      return callback.apply(this, args);
+    };
+  }
+  function dispose(reason) {
+    if (disposed)
+      return false;
+    disposed = true;
+    controller.abort(reason);
+    const errors = [];
+    for (const entry of [...cleanups].reverse()) {
+      cleanups.delete(entry);
+      try {
+        entry.cleanup();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length)
+      throw new AggregateError(errors, "runtime scope cleanup failed");
+    return true;
+  }
+  return Object.freeze({
+    signal: controller.signal,
+    isActive: () => !disposed,
+    track,
+    guard,
+    dispose
+  });
+}
+
+// src/source/runtime/timers.js
+function createOwnedTimer(scope, callback, delay2, repeat, api, ref) {
+  if (!scope?.isActive?.())
+    return;
+  let active = true;
+  let release;
+  let handle;
+  const invoke = scope.guard((...args) => {
+    if (!active)
+      return;
+    if (!repeat) {
+      active = false;
+      release?.();
+    }
+    callback(...args);
+  });
+  handle = repeat ? api.setInterval(invoke, delay2) : api.setTimeout(invoke, delay2);
+  release = scope.track(() => {
+    if (repeat)
+      api.clearInterval(handle);
+    else
+      api.clearTimeout(handle);
+  });
+  if (!ref)
+    handle?.unref?.();
+  return Object.freeze({
+    handle,
+    cancel() {
+      if (!active)
+        return false;
+      active = false;
+      if (repeat)
+        api.clearInterval(handle);
+      else
+        api.clearTimeout(handle);
+      release();
+      return true;
+    }
+  });
+}
+function createRuntimeTimers(scope, api = globalThis) {
+  return Object.freeze({
+    timeout(callback, delay2, options = {}) {
+      return createOwnedTimer(scope, callback, delay2, false, api, options.ref !== false);
+    },
+    interval(callback, delay2, options = {}) {
+      return createOwnedTimer(scope, callback, delay2, true, api, options.ref !== false);
+    }
+  });
+}
+
+// src/source/runtime/session-manager.js
+function defaultRuntimeFactory({ sessionID, timerAPI }) {
+  const scope = createRuntimeScope();
+  return Object.freeze({
+    sessionID,
+    scope,
+    timers: createRuntimeTimers(scope, timerAPI),
+    dispose: (reason) => scope.dispose(reason)
+  });
+}
+function validateRuntime(runtime, sessionID) {
+  if (!runtime || runtime.sessionID !== sessionID)
+    throw new TypeError("session runtime factory must preserve the session ID");
+  if (typeof runtime?.scope?.isActive !== "function")
+    throw new TypeError("session runtime factory must provide an active scope");
+  if (typeof runtime.dispose !== "function")
+    throw new TypeError("session runtime factory must provide dispose()");
+  return runtime;
+}
+function createSessionRuntimeManager({
+  now: now2 = Date.now,
+  staleAfterMs = DEFAULT_SESSION_STALE_MS,
+  timerAPI = globalThis,
+  runtimeFactory = defaultRuntimeFactory
+} = {}) {
+  if (typeof runtimeFactory !== "function")
+    throw new TypeError("session runtime manager requires a runtime factory");
+  const registry = createSessionRegistry({ now: now2, staleAfterMs });
+  let disposed = false;
+  function observeExternal(sessionID) {
+    if (disposed)
+      throw new Error("session runtime manager is disposed");
+    const key = String(sessionID || "").trim();
+    if (!key)
+      throw new TypeError("session runtime manager requires a session ID");
+    const current = registry.peek(key);
+    const runtime = current?.runtime?.scope?.isActive?.() ? current.runtime : validateRuntime(runtimeFactory({ sessionID: key, timerAPI }), key);
+    registry.observeExternal(key, runtime);
+    return runtime;
+  }
+  function peek(sessionID) {
+    return registry.peek(sessionID)?.runtime;
+  }
+  function entries() {
+    return registry.entries();
+  }
+  function remove(sessionID, { expectedRuntime, reason } = {}) {
+    const current = registry.peek(sessionID);
+    if (!current)
+      return false;
+    if (expectedRuntime !== undefined && current.runtime !== expectedRuntime)
+      return false;
+    if (!registry.remove(sessionID, current.runtime))
+      return false;
+    current.runtime.dispose(reason);
+    return true;
+  }
+  function pruneStale(at = now2()) {
+    const before = new Map(registry.entries().map((entry) => [entry.sessionID, entry.runtime]));
+    const removed = registry.pruneStale(at);
+    const errors = [];
+    for (const sessionID of removed) {
+      try {
+        before.get(sessionID)?.dispose("stale-session");
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length)
+      throw new AggregateError(errors, "stale session cleanup failed");
+    return removed;
+  }
+  function dispose(reason) {
+    if (disposed)
+      return false;
+    disposed = true;
+    const errors = [];
+    for (const entry of registry.entries()) {
+      registry.remove(entry.sessionID, entry.runtime);
+      try {
+        entry.runtime.dispose(reason);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length)
+      throw new AggregateError(errors, "session runtime manager cleanup failed");
+    return true;
+  }
+  return Object.freeze({
+    observeExternal,
+    peek,
+    entries,
+    remove,
+    pruneStale,
+    dispose
+  });
+}
+
+// src/source/runtime/events.js
+function record(value) {
+  return value && typeof value === "object" ? value : undefined;
+}
+function text(value) {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+function envelope(input) {
+  const outer = record(input);
+  if (!outer)
+    return;
+  const payload = record(outer.payload);
+  if (payload && text(payload.type)) {
+    return { directory: text(outer.directory), event: payload };
+  }
+  const wrappedEvent = record(outer.event);
+  if (wrappedEvent && text(wrappedEvent.type)) {
+    return { directory: text(outer.directory), event: wrappedEvent };
+  }
+  if (!text(outer.type))
+    return;
+  return { directory: undefined, event: outer };
+}
+function freezeEvent(value) {
+  return Object.freeze(value);
+}
+function normalizeOpenCodeEvent(input) {
+  const parsed = envelope(input);
+  if (!parsed)
+    return;
+  const { directory, event } = parsed;
+  const properties = record(event.properties) || {};
+  if (event.type === "session.status") {
+    const sessionID = text(properties.sessionID);
+    const status = text(record(properties.status)?.type);
+    if (!sessionID || !status)
+      return;
+    return freezeEvent({ kind: "session", action: "status", sessionID, directory, status });
+  }
+  if (event.type === "session.idle" || event.type === "session.compacted") {
+    const sessionID = text(properties.sessionID);
+    if (!sessionID)
+      return;
+    return freezeEvent({
+      kind: "session",
+      action: event.type === "session.idle" ? "idle" : "compacted",
+      sessionID,
+      directory
+    });
+  }
+  if (event.type === "session.created" || event.type === "session.updated" || event.type === "session.deleted") {
+    const info = record(properties.info);
+    const sessionID = text(info?.id);
+    if (!sessionID)
+      return;
+    return freezeEvent({
+      kind: "session",
+      action: event.type.slice("session.".length),
+      sessionID,
+      directory: directory || text(info?.directory),
+      parentID: text(info?.parentID)
+    });
+  }
+  if (event.type === "session.error") {
+    const sessionID = text(properties.sessionID);
+    if (!sessionID)
+      return;
+    return freezeEvent({ kind: "session", action: "error", sessionID, directory });
+  }
+  if (event.type === "message.updated") {
+    const info = record(properties.info);
+    const sessionID = text(info?.sessionID);
+    const messageID = text(info?.id);
+    const role = text(info?.role);
+    if (!sessionID || !messageID || !role)
+      return;
+    const time = record(info?.time);
+    return freezeEvent({
+      kind: "message",
+      action: "updated",
+      sessionID,
+      directory,
+      messageID,
+      role,
+      completedAt: Number.isFinite(time?.completed) ? time.completed : undefined,
+      finish: text(info?.finish)
+    });
+  }
+  if (event.type === "command.executed") {
+    const sessionID = text(properties.sessionID);
+    const name = text(properties.name);
+    if (!sessionID || !name)
+      return;
+    return freezeEvent({
+      kind: "command",
+      action: "executed",
+      sessionID,
+      directory,
+      name,
+      arguments: typeof properties.arguments === "string" ? properties.arguments : "",
+      messageID: text(properties.messageID)
+    });
+  }
+  if (event.type === "server.instance.disposed") {
+    const disposedDirectory = directory || text(properties.directory);
+    if (!disposedDirectory)
+      return;
+    return freezeEvent({ kind: "server", action: "disposed", directory: disposedDirectory });
+  }
+  return;
+}
+
+// src/source/runtime/observer.js
+function observeRuntimeEvent(manager, input) {
+  const event = normalizeOpenCodeEvent(input);
+  if (!event || !manager)
+    return event;
+  try {
+    if (event.kind === "server" && event.action === "disposed") {
+      manager.dispose?.("server-disposed");
+      return event;
+    }
+    if (!event.sessionID)
+      return event;
+    if (event.kind === "session" && event.action === "deleted") {
+      manager.remove?.(event.sessionID, { reason: "session-deleted" });
+      return event;
+    }
+    manager.observeExternal?.(event.sessionID);
+  } catch {}
+  return event;
+}
+
 // src/source/v1.js
 var clientGenerations = new WeakMap;
 function reserveClientGeneration(client, directory) {
@@ -2967,13 +3370,24 @@ var OpenCodeLoopPlugin2 = async (input = {}) => {
   const legacyDispose = typeof hooks?.dispose === "function" ? hooks.dispose.bind(hooks) : undefined;
   if (!legacyDispose)
     return hooks;
+  const runtimeManager = createSessionRuntimeManager();
+  const legacyEvent = typeof hooks?.event === "function" ? hooks.event.bind(hooks) : undefined;
   let disposed = false;
   return {
     ...hooks,
+    ...legacyEvent ? {
+      event: async (payload) => {
+        observeRuntimeEvent(runtimeManager, payload);
+        return await legacyEvent(payload);
+      }
+    } : {},
     dispose: async () => {
       if (disposed)
         return;
       disposed = true;
+      try {
+        runtimeManager.dispose("plugin-disposed");
+      } catch {}
       await legacyDispose();
       scheduleLegacyCleanup(legacyDispose, isCurrentGeneration);
     }
