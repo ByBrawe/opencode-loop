@@ -9,15 +9,16 @@ function promptRequest(request) {
 }
 
 function commandRequest(request) {
-  return {
+  const value = {
     sessionID: request.sessionID,
     id: request.id,
-    arguments: request.arguments,
-    agent: request.agent,
-    model: request.model,
-    delivery: request.delivery,
-    resume: request.resume,
   }
+  if (request.arguments !== undefined) value.arguments = request.arguments
+  if (request.agent !== undefined) value.agent = request.agent
+  if (request.model !== undefined) value.model = request.model
+  if (request.delivery !== undefined) value.delivery = request.delivery
+  if (request.resume !== undefined) value.resume = request.resume
+  return value
 }
 
 export function createOpenCode2RuntimeAdapter(ctx, options = {}) {
