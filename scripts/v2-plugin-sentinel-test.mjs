@@ -20,6 +20,8 @@ assert.deepEqual(OPENCODE_LOOP_V2_RUNTIME_REQUIREMENTS, ["event.subscribe", "ses
 
 let transforms = 0
 let registered
+let subscriptions = 0
+let unsubscribes = 0
 const currentContext = {
   command: {
     transform: async (callback) => {
@@ -27,10 +29,22 @@ const currentContext = {
       registered = callback
     },
   },
+  event: {
+    subscribe: async () => {
+      subscriptions += 1
+      return {
+        stream: {
+          async *[Symbol.asyncIterator]() {},
+        },
+        unsubscribe: async () => { unsubscribes += 1 },
+      }
+    },
+  },
 }
 const setupResult = await plugin.setup(currentContext)
-assert.equal(setupResult, undefined)
+assert.equal(typeof setupResult, "function")
 assert.equal(transforms, 1)
+assert.equal(subscriptions, 1)
 assert.equal(typeof registered, "function")
 
 const currentDraft = {
@@ -43,7 +57,7 @@ await registered(currentDraft)
 
 assert.deepEqual(inspectOpenCode2Context(currentContext), {
   commandTransform: true,
-  eventSubscribe: false,
+  eventSubscribe: true,
   sessionHook: false,
   sessionPrompt: false,
   toolTransform: false,
@@ -57,12 +71,15 @@ assert.deepEqual(inspectOpenCode2CommandDraft(currentDraft), {
 })
 
 const currentStatus = openCode2LoopRuntimeStatus(currentContext, currentDraft)
-assert.deepEqual(currentStatus.hostBlockers, ["event.subscribe", "session.prompt"])
-assert.deepEqual(currentStatus.blockers, ["event.subscribe", "session.prompt", "runtime.adapter"])
+assert.deepEqual(currentStatus.hostBlockers, ["session.prompt"])
+assert.deepEqual(currentStatus.blockers, ["session.prompt", "runtime.adapter"])
 assert.equal(currentStatus.hostReady, false)
 assert.equal(currentStatus.implementationReady, false)
 assert.equal(currentStatus.ready, false)
 assert.equal(currentStatus.commandSource, "file-definitions")
+
+await setupResult()
+assert.equal(unsubscribes, 1)
 
 const futureContext = {
   command: { transform: async () => {} },
