@@ -10,6 +10,9 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const opencode2 = process.platform === "win32" ? "opencode2.cmd" : "opencode2"
+const serverUsername = "opencode"
+const serverPassword = "opencode-loop-v2-canary"
+const serverAuthorization = `Basic ${Buffer.from(`${serverUsername}:${serverPassword}`).toString("base64")}`
 
 function append(current, chunk, limit = 120_000) {
   return (current + String(chunk)).slice(-limit)
@@ -229,6 +232,8 @@ async function main() {
     OPENCODE_LOG_LEVEL: "DEBUG",
     OPENCODE_DISABLE_AUTOUPDATE: "true",
     OPENCODE_DISABLE_LSP_DOWNLOAD: "true",
+    OPENCODE_SERVER_USERNAME: serverUsername,
+    OPENCODE_SERVER_PASSWORD: serverPassword,
     CI: "true",
   }
 
@@ -263,6 +268,7 @@ async function main() {
         const response = await fetch(url, {
           method,
           headers: {
+            authorization: serverAuthorization,
             "content-type": "application/json",
             "x-opencode-directory": project,
           },
