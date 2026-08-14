@@ -7,7 +7,7 @@ import { pathExists, readState, writeState } from "./core/state.js"
 import { appendLoopLog, runShellCommand, notifyJob } from "./core/process.js"
 import { sdkErrorMessage, sdkCall } from "./opencode/sdk.js"
 import { normalizedModelRef, updateSessionExecutionContext, setSessionExecutionContext } from "./opencode/session-context.js"
-import { fireSdk, executeTuiCommand, compactTuiCommandName, readRecentSessionMessages, orderedSessionMessages, resolveCompactionModel, compactSession, log, toast } from "./opencode/host.js"
+import { fireSdk, executeTuiCommand, compactTuiCommandName, readRecentSessionMessages, orderedSessionMessages, resolveCompactionModel, log, toast } from "./opencode/host.js"
 import { guardLoopOwnedUserMessage, loopOwnedUserMessageGuardActive, say, clearLoopOwnedUserMessageGuard } from "./opencode/messages.js"
 import { clearCommandLifecycle } from "./opencode/commands.js"
 import { createCommandRouter } from "./opencode/command-router.js"
@@ -16,6 +16,7 @@ import { createLoopCommandHandlers } from "./opencode/loop-commands.js"
 import { createLoopRegistration } from "./opencode/loop-registration.js"
 import { markToolCallActive, markToolCallFinished, updateSessionRelationshipFromEvent, refreshSessionRelationships, updateToolActivityFromEvent, clearSessionActivity } from "./runtime/session-activity.js"
 import { createSessionStatusRuntime } from "./runtime/session-status.js"
+import { createCompactionRuntime } from "./runtime/compaction.js"
 import { createSchedulerRuntime } from "./runtime/scheduler.js"
 import { writeGoalReport, setGoalComplete, setGoalBlocked, setGoalProgress } from "./runtime/goal-runtime.js"
 import { createGoalExecutionPolicy } from "./runtime/goal-policy.js"
@@ -37,7 +38,6 @@ const { runGoalChecks, applyGoalNoProgressGuard } = createGoalExecutionPolicy({ 
 
 const activeRuns = new Map()
 const runLocks = new Map()
-const loopCompactionRequests = new Map()
 
 const {
   updateSessionStatusFromEvent,
@@ -51,6 +51,20 @@ const {
   appendLoopLog,
   now,
 })
+
+const compactionRuntime = createCompactionRuntime({
+  activeRuns,
+  finalizeActiveRun,
+  appendLoopLog,
+  log,
+  errorMessage: sdkErrorMessage,
+  now,
+})
+const {
+  maybeCompact,
+  noteStarted: noteLoopCompactionStarted,
+  noteCompleted: noteLoopCompactionCompleted,
+} = compactionRuntime
 
 const schedulerRuntime = createSchedulerRuntime({
   busyRetryMs: BUSY_RETRY_MS,
@@ -140,23 +154,9 @@ function disposeRuntime(directory, client) {
     runLocks.delete(sessionID)
     clearLoopOwnedUserMessageGuard(sessionID)
     clearSessionActivity(sessionID)
-    loopCompactionRequests.delete(sessionID)
+    compactionRuntime.clear(sessionID)
     clearCommandLifecycle(sessionID)
   }
-}
-
-async function maybeCompact(directory, client, sessionID, job) {
-  const dueRuns = job.compactEveryRuns > 0 && (job.runCount || 0) > 0 && (job.runCount || 0) % job.compactEveryRuns === 0 && job.lastCompactRunCount !== job.runCount
-  const dueTime = job.compactEveryMs > 0 && (!job.lastCompactAt || now() - job.lastCompactAt >= job.compactEveryMs)
-  if (!dueRuns && !dueTime) return { job, started: false }
-  beginLoopCompaction(sessionID, job.id, true)
-  if (await compactSession(directory, client, sessionID, job.model)) {
-    job.lastCompactAt = now()
-    job.lastCompactRunCount = job.runCount || 0
-    return { job, started: true }
-  }
-  loopCompactionRequests.delete(sessionID)
-  return { job, started: false }
 }
 
 function userInterruptSessionFromEvent(event) {
@@ -209,51 +209,8 @@ function dueJobs(state, force = false) {
 function clearActiveRun(sessionID) {
   const active = activeRuns.get(sessionID)
   if (active?.timer) clearTimeout(active.timer)
-  const compact = loopCompactionRequests.get(sessionID)
-  if (!compact || !active || compact.jobId === active.jobId) loopCompactionRequests.delete(sessionID)
+  compactionRuntime.clearForActiveRun(sessionID, active)
   activeRuns.delete(sessionID)
-}
-
-function beginLoopCompaction(sessionID, jobId, resumeAfter = false) {
-  loopCompactionRequests.set(sessionID, {
-    jobId,
-    resumeAfter,
-    requestedAt: now(),
-    startedAt: 0,
-    completedAt: 0,
-  })
-}
-
-async function noteLoopCompactionStarted(directory, sessionID) {
-  const pending = loopCompactionRequests.get(sessionID)
-  if (!pending) return false
-  if (!pending.startedAt) {
-    pending.startedAt = now()
-    loopCompactionRequests.set(sessionID, pending)
-    await appendLoopLog(directory, "compact-started", { sessionID, job: pending.jobId, resumeAfter: pending.resumeAfter })
-  }
-  return true
-}
-
-async function finalizeLoopCompaction(directory, client, sessionID) {
-  const pending = loopCompactionRequests.get(sessionID)
-  const active = activeRuns.get(sessionID)
-  if (!pending || !active || pending.jobId !== active.jobId) return false
-  return await finalizeActiveRun(directory, client, sessionID)
-}
-
-async function noteLoopCompactionCompleted(directory, client, sessionID) {
-  const pending = loopCompactionRequests.get(sessionID)
-  if (!pending) return false
-  pending.completedAt = now()
-  loopCompactionRequests.set(sessionID, pending)
-  await appendLoopLog(directory, "compact-event", { sessionID, job: pending.jobId, resumeAfter: pending.resumeAfter })
-  const timer = setTimeout(() => {
-    finalizeLoopCompaction(directory, client, sessionID)
-      .catch((error) => log(client, "error", "compaction finalization failed", { error: sdkErrorMessage(error) }))
-  }, 0)
-  timer.unref?.()
-  return true
 }
 
 async function recoverActiveDispatchFailure(directory, client, sessionID, jobId, runToken, error) {
@@ -291,7 +248,7 @@ async function finalizeActiveRun(directory, client, sessionID, options = {}) {
   if (!await canFinalizeActiveRun(directory, client, sessionID, active, options)) return false
   const recoveredStale = staleActiveRun(sessionID)
   if (active.compactionOnly) {
-    const pending = loopCompactionRequests.get(sessionID)
+    const pending = compactionRuntime.getPending(sessionID)
     clearActiveRun(sessionID)
     clearSessionStatus(sessionID)
     await appendLoopLog(directory, pending?.completedAt ? "compact-finished" : "compact-idle-fallback", {
@@ -366,9 +323,7 @@ async function fireAction(directory, client, sessionID, job) {
   const agent = job.agent || "build"
   const model = normalizedModelRef(job.model)
   if (kind === "compact") {
-    beginLoopCompaction(sessionID, job.id, false)
-    const ok = await compactSession(directory, client, sessionID, model)
-    if (!ok) loopCompactionRequests.delete(sessionID)
+    const ok = await compactionRuntime.start(directory, client, sessionID, job.id, model, false)
     return { startsAssistantTurn: ok, pause: !ok, reason: "compact_failed", compaction: ok }
   }
   if (kind === "command") {
@@ -381,9 +336,7 @@ async function fireAction(directory, client, sessionID, job) {
     const tuiCommand = compactTuiCommandName(command)
     if (tuiCommand) {
       guardLoopOwnedUserMessage(sessionID)
-      beginLoopCompaction(sessionID, job.id, false)
-      const ok = await compactSession(directory, client, sessionID, model)
-      if (!ok) loopCompactionRequests.delete(sessionID)
+      const ok = await compactionRuntime.start(directory, client, sessionID, job.id, model, false)
       return { startsAssistantTurn: ok, pause: !ok, reason: "compact_failed", compaction: ok }
     }
     guardLoopOwnedUserMessage(sessionID)
@@ -537,9 +490,8 @@ async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
       if (job.timeoutMs > 0) timer = setTimeout(() => { fireSdk(client, "session.abort", client.session.abort.bind(client.session), { path: { id: sessionID }, body: {} }, { path: { sessionID }, body: {} }, { sessionID }); toast(client, `Loop compact timeout fired: ${job.name || job.id}`, "warning").catch(() => {}) }, job.timeoutMs)
       const runToken = `${job.id}:compact:${now().toString(36)}:${Math.random().toString(16).slice(2)}`
       activeRuns.set(sessionID, { jobId: job.id, job, startedAt: now(), timer, runToken, compactionOnly: true })
-      const pending = loopCompactionRequests.get(sessionID)
-      if (pending?.jobId === job.id && pending.completedAt) {
-        await finalizeLoopCompaction(directory, client, sessionID)
+      if (compactionRuntime.isCompleted(sessionID, job.id)) {
+        await compactionRuntime.finalize(directory, client, sessionID)
         return
       }
       markSessionStatus(sessionID, "busy")
@@ -580,11 +532,10 @@ async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
       const runToken = `${job.id}:${now().toString(36)}:${Math.random().toString(16).slice(2)}`
       activeRuns.set(sessionID, { jobId: job.id, job, startedAt: now(), timer, runToken, compactionAction: result.compaction === true })
       if (result.compaction) {
-        const pending = loopCompactionRequests.get(sessionID)
-        if (pending?.jobId === job.id && pending.completedAt) {
-          await finalizeLoopCompaction(directory, client, sessionID)
-          return
-        }
+        if (compactionRuntime.isCompleted(sessionID, job.id)) {
+        await compactionRuntime.finalize(directory, client, sessionID)
+        return
+      }
       }
       if (result.dispatch) {
         void result.dispatch.catch((error) => {
