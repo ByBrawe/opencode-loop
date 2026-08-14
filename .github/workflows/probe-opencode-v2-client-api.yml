@@ -1,0 +1,26 @@
+name: Probe Published OpenCode V2 Client API
+
+on:
+  push:
+    branches: [probe-opencode-v2-published-contract]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - run: npm install --ignore-scripts --no-package-lock --no-save @opencode-ai/plugin@next
+      - name: List client declaration files
+        run: find node_modules/@opencode-ai/client -type f -name '*.d.ts' | sort
+      - name: Show Promise API declaration
+        run: cat node_modules/@opencode-ai/client/dist/promise/api.d.ts
+      - name: Show event schemas
+        run: cat node_modules/@opencode-ai/client/dist/types.d.ts
