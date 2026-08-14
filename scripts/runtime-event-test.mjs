@@ -16,6 +16,85 @@ assert.deepEqual(
 
 assert.deepEqual(
   normalizeOpenCodeEvent({
+    directory: "/workspace",
+    payload: {
+      type: "session.next.step.started",
+      properties: {
+        sessionID: "ses_v2",
+        assistantMessageID: "msg_v2",
+        agent: "build",
+        model: { providerID: "canary", modelID: "canary" },
+      },
+    },
+  }),
+  {
+    kind: "session",
+    action: "step-started",
+    sessionID: "ses_v2",
+    directory: "/workspace",
+    messageID: "msg_v2",
+    agent: "build",
+    model: { providerID: "canary", modelID: "canary" },
+  },
+)
+
+assert.deepEqual(
+  normalizeOpenCodeEvent({
+    directory: "/workspace",
+    payload: {
+      type: "session.next.step.ended",
+      properties: { sessionID: "ses_v2", assistantMessageID: "msg_v2", finish: "stop" },
+    },
+  }),
+  {
+    kind: "session",
+    action: "step-ended",
+    sessionID: "ses_v2",
+    directory: "/workspace",
+    messageID: "msg_v2",
+    finish: "stop",
+  },
+)
+
+const v2Failure = { name: "UnknownError", data: { message: "provider failed" } }
+assert.deepEqual(
+  normalizeOpenCodeEvent({
+    directory: "/workspace",
+    payload: {
+      type: "session.next.step.failed",
+      properties: { sessionID: "ses_v2", assistantMessageID: "msg_v2", error: v2Failure },
+    },
+  }),
+  {
+    kind: "session",
+    action: "step-failed",
+    sessionID: "ses_v2",
+    directory: "/workspace",
+    messageID: "msg_v2",
+    error: v2Failure,
+  },
+)
+
+assert.deepEqual(
+  normalizeOpenCodeEvent({
+    directory: "/workspace",
+    payload: {
+      type: "session.next.compaction.ended",
+      properties: { sessionID: "ses_v2", messageID: "msg_compact", reason: "manual" },
+    },
+  }),
+  {
+    kind: "session",
+    action: "compacted",
+    sessionID: "ses_v2",
+    directory: "/workspace",
+    messageID: "msg_compact",
+    reason: "manual",
+  },
+)
+
+assert.deepEqual(
+  normalizeOpenCodeEvent({
     type: "session.created",
     properties: { info: { id: "ses_child", directory: "/project", parentID: "ses_parent" } },
   }),
