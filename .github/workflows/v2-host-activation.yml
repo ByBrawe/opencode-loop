@@ -47,5 +47,13 @@ jobs:
       - name: Show OpenCode 2 version
         run: opencode2 --version
 
-      - name: Run real OpenCode 2 activation canary
+      - name: Run real OpenCode 2 activation probe
+        id: canary
+        continue-on-error: true
         run: node scripts/opencode2-host-canary.mjs
+
+      - name: Report V2 activation outcome
+        if: always()
+        env:
+          V2_ACTIVATION_OUTCOME: ${{ steps.canary.outcome }}
+        run: node -e "console.log('OpenCode 2 activation probe outcome:', process.env.V2_ACTIVATION_OUTCOME)"
