@@ -1,4 +1,5 @@
 import { inspectOpenCode2Context } from "./capabilities.js"
+import { createOpenCode2PromptRuntime } from "./prompt-runtime.js"
 import { createOpenCode2RuntimeAdapter } from "./runtime-adapter.js"
 
 export const OPENCODE_LOOP_V2_PLUGIN_ID = "bybrawe.opencode-loop.v2.experimental"
@@ -11,6 +12,7 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
       throw new Error("OpenCode 2 command.transform capability is unavailable")
     }
 
+    void createOpenCode2PromptRuntime
     const commandRegistration = await ctx.command.transform(() => {})
     if (!capabilities.eventSubscribe || !capabilities.sessionPrompt) {
       await commandRegistration?.dispose?.()
