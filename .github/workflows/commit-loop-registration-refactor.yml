@@ -1,5 +1,6 @@
 name: Commit Loop registration refactor
 
+# Temporary branch-only workflow; rerun after transform guard correction.
 on:
   push:
     branches: [refactor-loop-registration-20260814]
