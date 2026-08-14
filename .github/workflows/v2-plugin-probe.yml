@@ -25,6 +25,7 @@ jobs:
         working-directory: scripts/fixtures/v2-project
         env:
           OPENCODE_LOG_LEVEL: DEBUG
-        run: ../../../node_modules/.bin/opencode2 --standalone plugin list
+        run: ../../../node_modules/.bin/opencode2 plugin list
       - name: Show V2 server log
-        run: tail -n 240 ~/.local/share/opencode/log/opencode.log
+        if: always()
+        run: tail -n 240 ~/.local/share/opencode/log/opencode.log || true
