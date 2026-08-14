@@ -21,11 +21,14 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm install --no-save --package-lock=false @opencode-ai/cli@0.0.0-next-17430 @opencode-ai/plugin@0.0.0-next-17430
-      - name: List plugins through exact V2 plugin manager
+      - name: Immediate plugin list
         working-directory: scripts/fixtures/v2-project
-        env:
-          OPENCODE_LOG_LEVEL: DEBUG
+        run: ../../../node_modules/.bin/opencode2 plugin list
+      - name: Wait for initial plugin generation
+        run: sleep 3
+      - name: Settled plugin list
+        working-directory: scripts/fixtures/v2-project
         run: ../../../node_modules/.bin/opencode2 plugin list
       - name: Show V2 server log
         if: always()
-        run: tail -n 240 ~/.local/share/opencode/log/opencode.log || true
+        run: tail -n 320 ~/.local/share/opencode/log/opencode.log || true
