@@ -223,8 +223,6 @@ async function main() {
   }
 
   try {
-    await runOpenCode2(["service", "stop"], { cwd: workspace, env, timeoutMs: 15_000, allowFailure: true })
-
     const createBody = {
       title: "OpenCode 2 Loop canary",
       model: { providerID: "canary", id: "canary" },
@@ -232,6 +230,7 @@ async function main() {
     }
     const createdResult = await runOpenCode2([
       "api",
+      "--standalone",
       "v2.session.create",
       "-d",
       JSON.stringify(createBody),
@@ -255,6 +254,7 @@ async function main() {
     }
     const commandPromise = runOpenCode2([
       "api",
+      "--standalone",
       "v2.session.command",
       "--param",
       `sessionID=${sessionID}`,
@@ -300,7 +300,6 @@ async function main() {
       enabled: loop.enabled,
     }, null, 2))
   } finally {
-    await runOpenCode2(["service", "stop"], { cwd: workspace, env, timeoutMs: 15_000, allowFailure: true }).catch(() => undefined)
     await provider.close().catch(() => undefined)
     await rm(workspace, { recursive: true, force: true }).catch(() => undefined)
   }
