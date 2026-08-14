@@ -4,12 +4,16 @@ on:
   pull_request:
     paths:
       - "src/source/opencode2/**"
+      - "src/source/runtime/**"
+      - "commands/**"
       - ".github/workflows/opencode2-activation.yml"
   push:
     branches:
       - main
     paths:
       - "src/source/opencode2/**"
+      - "src/source/runtime/**"
+      - "commands/**"
       - ".github/workflows/opencode2-activation.yml"
   workflow_dispatch:
 
@@ -99,8 +103,6 @@ jobs:
           EOF
           git -C "$project" add .opencode/plugins/opencode-loop-v2-probe.js
           git -C "$project" commit --quiet -m "init"
-          git -C "$project" rev-parse --show-toplevel
-          cat "$plugin_dir/opencode-loop-v2-probe.js"
 
       - name: Verify dependency-free setup runs in real OpenCode 2 host
         shell: bash
@@ -108,12 +110,10 @@ jobs:
           project="$RUNNER_TEMP/opencode-loop-v2-activation"
           marker="$project/v2-activation-marker.json"
           rm -f "$marker"
-
           opencode2 api get /api/command -H "x-opencode-directory: $project" > "$RUNNER_TEMP/opencode2-command.json" 2>&1 || true
           if [ ! -f "$marker" ]; then
             opencode2 api get /api/plugin -H "x-opencode-directory: $project" > "$RUNNER_TEMP/opencode2-plugin.json" 2>&1 || true
           fi
-
           for attempt in $(seq 1 50); do
             if [ -f "$marker" ]; then
               cat "$marker"
@@ -122,13 +122,65 @@ jobs:
             fi
             sleep 0.2
           done
-
           echo "OpenCode 2 did not execute the local plugin setup hook." >&2
-          echo "--- /api/command ---" >&2
           cat "$RUNNER_TEMP/opencode2-command.json" >&2 || true
-          echo "--- /api/plugin ---" >&2
           cat "$RUNNER_TEMP/opencode2-plugin.json" >&2 || true
           exit 1
+
+      - name: Prepare real experimental Loop V2 adapter
+        shell: bash
+        run: |
+          project="$RUNNER_TEMP/opencode-loop-v2-real-adapter"
+          plugin_dir="$project/.opencode/plugins"
+          command_dir="$project/.opencode/commands"
+          mkdir -p "$plugin_dir" "$command_dir"
+          cp "$GITHUB_WORKSPACE"/commands/*.md "$command_dir"/
+          git init --quiet "$project"
+          git -C "$project" config user.email "opencode-loop-ci@example.invalid"
+          git -C "$project" config user.name "OpenCode Loop CI"
+          export LOOP_V2_PLUGIN_FILE="$plugin_dir/opencode-loop-v2-real.js"
+          node --input-type=module <<'EOF'
+          import { writeFile } from "node:fs/promises"
+          import { pathToFileURL } from "node:url"
+          import path from "node:path"
+          const source = pathToFileURL(path.join(process.env.GITHUB_WORKSPACE, "src/source/opencode2/experimental.js")).href
+          const content = [
+            `import plugin from ${JSON.stringify(source)}`,
+            `import { writeFile } from "node:fs/promises"`,
+            `const marker = new URL("../../v2-real-adapter-marker.json", import.meta.url)`,
+            `export default {`,
+            `  id: plugin.id,`,
+            `  async setup(ctx) {`,
+            `    await plugin.setup(ctx)`,
+            `    await writeFile(marker, JSON.stringify({ id: plugin.id, activated: true }, null, 2), "utf8")`,
+            `  },`,
+            `}`,
+          ].join("\n") + "\n"
+          await writeFile(process.env.LOOP_V2_PLUGIN_FILE, content, "utf8")
+          EOF
+          git -C "$project" add .opencode
+          git -C "$project" commit --quiet -m "init"
+
+      - name: Verify real Loop V2 adapter setup and command discovery
+        shell: bash
+        run: |
+          project="$RUNNER_TEMP/opencode-loop-v2-real-adapter"
+          marker="$project/v2-real-adapter-marker.json"
+          command_json="$RUNNER_TEMP/opencode2-real-command.json"
+          plugin_json="$RUNNER_TEMP/opencode2-real-plugin.json"
+          rm -f "$marker"
+          opencode2 api get /api/command -H "x-opencode-directory: $project" > "$command_json" 2>&1 || true
+          opencode2 api get /api/plugin -H "x-opencode-directory: $project" > "$plugin_json" 2>&1 || true
+          for attempt in $(seq 1 50); do
+            if [ -f "$marker" ]; then break; fi
+            sleep 0.2
+          done
+          test -f "$marker"
+          cat "$marker"
+          cat "$command_json"
+          cat "$plugin_json"
+          node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(value.id!=="bybrawe.opencode-loop.v2.experimental" || value.activated!==true) process.exit(1)' "$marker"
+          node -e 'const fs=require("node:fs"); const text=fs.readFileSync(process.argv[1],"utf8"); if(!/\"loop\"/.test(text)) process.exit(1)' "$command_json"
 
       - name: Dump OpenCode 2 logs on failure
         if: failure()
