@@ -47,7 +47,7 @@ function collectPluginIDs(value) {
   if (typeof value === "string") return [value]
   if (!value || typeof value !== "object") return []
   const direct = [value.id, value.pluginID, value.name].filter((item) => typeof item === "string")
-  const nested = [value.data, value.plugins, value.items].flatMap((item) => collectPluginIDs(item))
+  const nested = [value.data, value.plugin, value.plugins, value.items].flatMap((item) => collectPluginIDs(item))
   return [...direct, ...nested]
 }
 
@@ -90,12 +90,12 @@ async function main() {
     mkdir(state, { recursive: true }),
   ])
 
-  await writeFile(sentinelFile, `export default { id: ${JSON.stringify(sentinelID)}, setup: async () => {} }\n`)
+  await writeFile(sentinelFile, `export default { id: ${JSON.stringify(sentinelID)}, server: async () => ({ id: ${JSON.stringify(sentinelID)} }) }\n`)
   await writeFile(adapterBridge, `export { default } from ${JSON.stringify(pathToFileURL(pluginFile).href)}\n`)
   await writeFile(path.join(project, "README.md"), "# OpenCode Loop V2 host canary\n")
   await writeFile(path.join(project, "opencode.json"), `${JSON.stringify({
     $schema: "https://opencode.ai/config.json",
-    plugins: [
+    plugin: [
       "./.opencode/plugins/opencode-loop-v2-sentinel.js",
       "./.opencode/plugins/opencode-loop-v2-canary.js",
     ],
@@ -110,7 +110,7 @@ async function main() {
     XDG_STATE_HOME: state,
     OPENCODE_DB: path.join(data, "opencode", "opencode-loop-v2-canary.db"),
     OPENCODE_LOG_LEVEL: "DEBUG",
-    OPENCODE_CONFIG_CONTENT: JSON.stringify({ plugins: [sentinelURL, adapterURL] }),
+    OPENCODE_CONFIG_CONTENT: JSON.stringify({ plugin: [sentinelURL, adapterURL] }),
     CI: "true",
   }
 
@@ -148,7 +148,7 @@ async function main() {
     const ids = [...new Set([...plainIDs, ...scopedIDs])]
     if (!ids.includes(sentinelID)) {
       throw new Error([
-        `OpenCode 2 did not activate the minimal sentinel. Active IDs: ${JSON.stringify(ids)}`,
+        `OpenCode 2 did not activate the current-loader sentinel. Active IDs: ${JSON.stringify(ids)}`,
         `Plain /api/plugin IDs: ${JSON.stringify(plainIDs)}`,
         `Scoped /api/plugin IDs: ${JSON.stringify(scopedIDs)}`,
         `Plain response: ${String(plainPluginResult.stdout ?? "")}`,
@@ -157,7 +157,7 @@ async function main() {
     }
     if (!ids.includes(pluginID)) {
       throw new Error([
-        `OpenCode 2 activated the sentinel but not ${pluginID}. Active IDs: ${JSON.stringify(ids)}`,
+        `OpenCode 2 activated the current-loader sentinel but not ${pluginID}. Active IDs: ${JSON.stringify(ids)}`,
         `Plain /api/plugin IDs: ${JSON.stringify(plainIDs)}`,
         `Scoped /api/plugin IDs: ${JSON.stringify(scopedIDs)}`,
         `Plain response: ${String(plainPluginResult.stdout ?? "")}`,
