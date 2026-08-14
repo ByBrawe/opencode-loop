@@ -4,9 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import process from "node:process"
 
-const opencode2 = process.platform === "win32" ? "opencode2.cmd" : "opencode2"
-
-function run(command, args, { cwd, env, allowFailure = false, timeout = 60_000 } = {}) {
+function run(command, args, { cwd, env, allowFailure = false, timeout = 60_000, shell = false } = {}) {
   const result = spawnSync(command, args, {
     cwd,
     env,
@@ -14,6 +12,7 @@ function run(command, args, { cwd, env, allowFailure = false, timeout = 60_000 }
     maxBuffer: 8 * 1024 * 1024,
     timeout,
     windowsHide: true,
+    shell,
   })
   if (result.error) throw result.error
   if (!allowFailure && result.status !== 0) {
@@ -24,6 +23,10 @@ function run(command, args, { cwd, env, allowFailure = false, timeout = 60_000 }
     ].filter(Boolean).join("\n"))
   }
   return result
+}
+
+function runOpenCode2(args, options = {}) {
+  return run("opencode2", args, { ...options, shell: process.platform === "win32" })
 }
 
 function output(result) {
@@ -93,6 +96,7 @@ async function main() {
     `  id: "bybrawe.opencode-loop.v2-native-sentinel",`,
     `  setup: async (ctx) => {`,
     `    const keys = (value) => Object.keys(value || {}).sort()`,
+    `    const arity = (value) => typeof value === "function" ? value.length : null`,
     `    const snapshot = {`,
     `      loaded: true,`,
     `      contextKeys: keys(ctx),`,
@@ -105,6 +109,13 @@ async function main() {
     `      shellKeys: keys(ctx?.shell),`,
     `      toolKeys: keys(ctx?.tool),`,
     `      websearchKeys: keys(ctx?.websearch),`,
+    `      arity: {`,
+    `        eventSubscribe: arity(ctx?.event?.subscribe),`,
+    `        sessionPrompt: arity(ctx?.session?.prompt),`,
+    `        sessionHook: arity(ctx?.session?.hook),`,
+    `        sessionGet: arity(ctx?.session?.get),`,
+    `        sessionCommand: arity(ctx?.session?.command),`,
+    `      },`,
     `    }`,
     `    await writeFile(${JSON.stringify(markerFile)}, JSON.stringify(snapshot), "utf8")`,
     `  },`,
@@ -137,16 +148,16 @@ async function main() {
   run("git", ["commit", "-q", "-m", "initialize canary workspace"], { cwd: project, env })
 
   try {
-    run(opencode2, ["service", "stop"], { cwd: project, env, allowFailure: true, timeout: 15_000 })
+    runOpenCode2(["service", "stop"], { cwd: project, env, allowFailure: true, timeout: 15_000 })
 
-    const version = output(run(opencode2, ["--version"], { cwd: project, env, timeout: 30_000 }))
+    const version = output(runOpenCode2(["--version"], { cwd: project, env, timeout: 30_000 }))
     if (!version) throw new Error("opencode2 --version returned no output")
 
-    const health = output(run(opencode2, ["api", "get", "/api/health"], { cwd: project, env }))
+    const health = output(runOpenCode2(["api", "get", "/api/health"], { cwd: project, env }))
     if (!health) throw new Error("OpenCode 2 health API returned no output")
 
     const pluginPath = `/api/plugin?location%5Bdirectory%5D=${encodeURIComponent(project)}`
-    const pluginResult = run(opencode2, ["api", "get", pluginPath], { cwd: project, env })
+    const pluginResult = runOpenCode2(["api", "get", pluginPath], { cwd: project, env })
     const response = parseJSONOutput(pluginResult, "GET /api/plugin at project Location")
     if (response?._tag) throw new Error(`project-scoped /api/plugin rejected the Location: ${JSON.stringify(response)}`)
     if (response?.location?.directory !== project) {
@@ -171,7 +182,7 @@ async function main() {
     if (logs) console.error(`OpenCode 2 server log tail:\n${logs}`)
     throw error
   } finally {
-    run(opencode2, ["service", "stop"], { cwd: project, env, allowFailure: true, timeout: 15_000 })
+    runOpenCode2(["service", "stop"], { cwd: project, env, allowFailure: true, timeout: 15_000 })
     await rm(temp, { recursive: true, force: true })
   }
 }
