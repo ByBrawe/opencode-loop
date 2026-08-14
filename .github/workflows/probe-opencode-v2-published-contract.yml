@@ -21,9 +21,15 @@ jobs:
         run: npm install --ignore-scripts --no-package-lock --no-save @opencode-ai/plugin@next
       - name: Show published package version
         run: node --input-type=module -e "const p=JSON.parse(await (await import('node:fs/promises')).readFile('node_modules/@opencode-ai/plugin/package.json','utf8')); console.log(p.version); console.log(JSON.stringify(p.exports,null,2))"
-      - name: Show published Promise context declaration
+      - name: Show published Promise runtime contract
         run: |
-          find node_modules/@opencode-ai/plugin -type f | sort
-          find node_modules/@opencode-ai/plugin -type f -name '*context*.d.ts' -print -exec cat {} \;
-      - name: Show published Promise entry declaration
-        run: find node_modules/@opencode-ai/plugin -type f -path '*v2*promise*' -name '*.d.ts' -maxdepth 8 -print -exec cat {} \;
+          for file in index plugin types registration session event tool shell command; do
+            echo "===== $file.d.ts ====="
+            cat "node_modules/@opencode-ai/plugin/dist/promise/$file.d.ts"
+          done
+      - name: Show published Effect runtime contract
+        run: |
+          for file in index plugin session event tool shell command; do
+            echo "===== effect/$file.d.ts ====="
+            cat "node_modules/@opencode-ai/plugin/dist/effect/$file.d.ts"
+          done
