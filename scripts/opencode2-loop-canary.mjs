@@ -240,13 +240,6 @@ async function main() {
     const sessionID = String(session?.id ?? "")
     assert.ok(sessionID, `OpenCode 2 did not create a session: ${JSON.stringify(created)}`)
 
-    await waitFor(async () => {
-      try { return Boolean(JSON.parse(await readFile(marker, "utf8"))?.activated) } catch { return false }
-    }, "real V2 adapter activation", async () => {
-      const log = await readOpenCodeLogTail(env)
-      return `provider=${JSON.stringify(provider.stats)}\nlog:\n${log}`
-    })
-
     const commandBody = {
       command: "loop",
       arguments: `0s --max-runs ${EXPECTED_TURNS} ${LOOP_OBJECTIVE}`,
@@ -276,6 +269,10 @@ async function main() {
         `log=${log}`,
       ].join("\n")
     }
+
+    await waitFor(async () => {
+      try { return Boolean(JSON.parse(await readFile(marker, "utf8"))?.activated) } catch { return false }
+    }, "real V2 adapter activation during command execution", diagnostics, 30_000)
 
     await waitFor(() => provider.stats.loopRequests >= EXPECTED_TURNS, `${EXPECTED_TURNS} autonomous OpenCode 2 Loop turns`, diagnostics, 90_000)
     await new Promise((resolve) => setTimeout(resolve, 1_000))
