@@ -25,7 +25,7 @@ jobs:
         working-directory: .v2-probe
         shell: bash
         run: |
-          opencode2 serve --hostname 127.0.0.1 --port 4096 > server.log 2>&1 &
+          OPENCODE_SERVER_PASSWORD= opencode2 serve --hostname 127.0.0.1 --port 4096 > server.log 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
           for attempt in $(seq 1 30); do
