@@ -1,0 +1,35 @@
+name: OpenCode 2 Host Sentinel
+
+on:
+  push:
+    branches: [v2-real-host-sentinel]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sentinel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - name: Install OpenCode 2 beta
+        run: npm install --no-save --package-lock=false @opencode-ai/cli@next @opencode-ai/plugin@next
+      - name: Show versions
+        run: |
+          ./node_modules/.bin/opencode2 --version
+          node -p "require('./node_modules/@opencode-ai/plugin/package.json').version"
+      - name: List active plugins
+        working-directory: scripts/fixtures/v2-project
+        run: ../../../node_modules/.bin/opencode2 api get /api/plugin | tee active-plugins.txt
+      - name: Assert Loop V2 sentinel is active
+        working-directory: scripts/fixtures/v2-project
+        run: grep -F "bybrawe.opencode-loop.v2.experimental" active-plugins.txt
