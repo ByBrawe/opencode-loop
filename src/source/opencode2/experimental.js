@@ -23,6 +23,7 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
     const runtime = createOpenCode2RuntimeAdapter(ctx, { onEvent: onRuntimeEvent })
     promptRuntime = createOpenCode2PromptRuntime({
       prompt: (request) => runtime.prompt(request),
+      command: capabilities.sessionCommand ? (request) => runtime.command(request) : undefined,
     })
 
     try {
