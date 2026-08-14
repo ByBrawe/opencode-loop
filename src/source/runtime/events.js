@@ -13,6 +13,10 @@ function envelope(input) {
   if (payload && text(payload.type)) {
     return { directory: text(outer.directory), event: payload }
   }
+  const wrappedEvent = record(outer.event)
+  if (wrappedEvent && text(wrappedEvent.type)) {
+    return { directory: text(outer.directory), event: wrappedEvent }
+  }
   if (!text(outer.type)) return undefined
   return { directory: undefined, event: outer }
 }

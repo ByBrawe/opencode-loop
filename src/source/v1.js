@@ -1,4 +1,6 @@
 import LegacyOpenCodeLoopPlugin from "./legacy-v1.js"
+import { createSessionRuntimeManager } from "./runtime/session-manager.js"
+import { observeRuntimeEvent } from "./runtime/observer.js"
 
 const clientGenerations = new WeakMap()
 
@@ -43,12 +45,21 @@ export const OpenCodeLoopPlugin = async (input = {}) => {
   const legacyDispose = typeof hooks?.dispose === "function" ? hooks.dispose.bind(hooks) : undefined
   if (!legacyDispose) return hooks
 
+  const runtimeManager = createSessionRuntimeManager()
+  const legacyEvent = typeof hooks?.event === "function" ? hooks.event.bind(hooks) : undefined
   let disposed = false
   return {
     ...hooks,
+    ...(legacyEvent ? {
+      event: async (payload) => {
+        observeRuntimeEvent(runtimeManager, payload)
+        return await legacyEvent(payload)
+      },
+    } : {}),
     dispose: async () => {
       if (disposed) return
       disposed = true
+      try { runtimeManager.dispose("plugin-disposed") } catch {}
       await legacyDispose()
       scheduleLegacyCleanup(legacyDispose, isCurrentGeneration)
     },
