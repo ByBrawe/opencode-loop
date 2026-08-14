@@ -29,7 +29,8 @@ jobs:
         run: ./node_modules/.bin/opencode2 --version
       - name: Verify discovered plugin is active in project location
         run: |
-          request="/api/plugin?directory=${GITHUB_WORKSPACE}"
+          request="/api/plugin?location%5Bdirectory%5D=${GITHUB_WORKSPACE}"
           timeout 45s ./node_modules/.bin/opencode2 api get "$request" > v2-plugins.txt
           cat v2-plugins.txt
+          grep -F "\"directory\":\"${GITHUB_WORKSPACE}\"" v2-plugins.txt
           grep -F 'bybrawe.loop.v2-probe' v2-plugins.txt
