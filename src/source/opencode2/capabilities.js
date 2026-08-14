@@ -9,7 +9,6 @@ function frozenRecord(value) {
 export const OPENCODE_LOOP_V2_HOST_REQUIREMENTS = Object.freeze([
   "event.subscribe",
   "session.prompt",
-  "tool.transform",
 ])
 
 export const OPENCODE_LOOP_V2_RUNTIME_IMPLEMENTED = false
@@ -53,7 +52,6 @@ export function openCode2LoopRuntimeStatus(ctx, commandDraft) {
 
   if (!context.eventSubscribe) hostBlockers.push("event.subscribe")
   if (!context.sessionPrompt) hostBlockers.push("session.prompt")
-  if (!context.toolTransform) hostBlockers.push("tool.transform")
 
   const blockers = [...hostBlockers]
   if (!OPENCODE_LOOP_V2_RUNTIME_IMPLEMENTED) blockers.push("runtime.adapter")
