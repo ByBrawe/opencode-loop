@@ -21,16 +21,12 @@ jobs:
         run: npm install -g @opencode-ai/cli@next
       - name: Show V2 version
         run: opencode2 --version
-      - name: Verify command transform from canonical project root
+      - name: Read canonical project commands
         shell: bash
         run: |
-          for attempt in $(seq 1 12); do
-            opencode2 api -H "x-opencode-directory:$(pwd)" get /api/command > command-list.txt
-            grep -F "V2 activation seed" command-list.txt
-            if grep -F "LOOP_V2_PROBE_ACTIVE" command-list.txt; then
-              exit 0
-            fi
-            node -e "setTimeout(() => {}, 500)"
-          done
+          opencode2 api -H "x-opencode-directory:$(pwd)" get /api/command > command-list.txt
           cat command-list.txt
-          exit 1
+      - name: Require seed command
+        run: grep -F "V2 activation seed" command-list.txt
+      - name: Require Loop V2 activation marker
+        run: grep -F "LOOP_V2_PROBE_ACTIVE" command-list.txt
