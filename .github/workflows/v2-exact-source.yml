@@ -1,0 +1,21 @@
+name: OpenCode 2 Exact Source
+
+on:
+  push:
+    branches: [v2-real-host-sentinel]
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Show CLI package metadata
+        run: npm view @opencode-ai/cli@0.0.0-next-17430 version gitHead repository --json
+      - name: Show plugin package metadata
+        run: npm view @opencode-ai/plugin@0.0.0-next-17430 version gitHead repository --json
