@@ -1,5 +1,5 @@
 import { inspectOpenCode2Context } from "./capabilities.js"
-import { createOpenCode2EventBridge } from "./event-bridge.js"
+import { setupOpenCode2Lifecycle } from "./runtime-bridge.js"
 
 export const OPENCODE_LOOP_V2_PLUGIN_ID = "bybrawe.opencode-loop.v2.experimental"
 
@@ -10,9 +10,8 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
     if (!capabilities.commandTransform) {
       throw new Error("OpenCode 2 command.transform capability is unavailable")
     }
-    const bridge = createOpenCode2EventBridge()
-    void bridge
     await ctx.command.transform(() => {})
+    return setupOpenCode2Lifecycle(ctx)
   },
 }
 
