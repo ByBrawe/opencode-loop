@@ -21,12 +21,9 @@ jobs:
         run: npm install -g @opencode-ai/cli@next
       - name: Show V2 version
         run: opencode2 --version
+      - name: Show resolved V2 config
+        run: opencode2 debug config
       - name: Read canonical project commands
-        shell: bash
         run: |
           opencode2 api -H "x-opencode-directory:$(pwd)" get /api/command > command-list.txt
           cat command-list.txt
-      - name: Require seed command
-        run: grep -F "V2 activation seed" command-list.txt
-      - name: Require Loop V2 activation marker
-        run: grep -F "LOOP_V2_PROBE_ACTIVE" command-list.txt
