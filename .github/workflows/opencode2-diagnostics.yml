@@ -23,7 +23,7 @@ jobs:
       - run: npm ci
       - run: npm install --no-save --package-lock=false @opencode-ai/plugin@next
       - run: npm install --global @opencode-ai/cli@next
-      - name: Inspect native V2 activation
+      - name: Inspect V2 server plugin tools
         shell: bash
         run: |
           project="$RUNNER_TEMP/opencode2-discovery"
@@ -44,7 +44,7 @@ jobs:
           body="$(node -e 'process.stdout.write(JSON.stringify({location:{directory:process.argv[1]}}))' "$project")"
           cd "$project"
           opencode2 api post "/api/session?$query" --data "$body"
-          output="$(opencode2 api get "/api/plugin?$query")"
+          output="$(opencode2 api get "/api/experimental/tool/ids?$query")"
           printf '%s\n' "$output"
-          printf '%s\n' "$output" | grep -F 'bybrawe.opencode-loop.v2'
+          printf '%s\n' "$output" | grep -F 'opencode_loop_goal_progress'
           opencode2 service stop >/dev/null 2>&1 || true
