@@ -1,0 +1,26 @@
+name: OpenCode 2 Plugin Probe
+
+on:
+  push:
+    branches: [v2-real-host-sentinel]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm install --no-save --package-lock=false @opencode-ai/cli@next @opencode-ai/plugin@next
+      - name: Inspect loaded V2 plugins
+        working-directory: scripts/fixtures/v2-project
+        run: ../../../node_modules/.bin/opencode2 api --standalone get /api/plugin
