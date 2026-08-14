@@ -1,5 +1,6 @@
 name: Probe V2 action capabilities
 
+# Temporary branch-only probe; rerun after exposing the command wrapper source.
 on:
   push:
     branches: [feat-v2-action-runtime-20260814]
