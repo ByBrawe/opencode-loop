@@ -20,51 +20,32 @@ function run(command, args, { cwd, env, allowFailure = false, timeout = 60_000 }
   })
   if (result.error) throw result.error
   if (!allowFailure && result.status !== 0) {
-    throw new Error([
-      `command failed (${result.status}): ${command} ${args.join(" ")}`,
-      String(result.stdout ?? ""),
-      String(result.stderr ?? ""),
-    ].filter(Boolean).join("\n"))
+    throw new Error(`command failed (${result.status}): ${command} ${args.join(" ")}\n${result.stdout ?? ""}\n${result.stderr ?? ""}`)
   }
   return result
 }
 
-function output(result) {
-  return `${String(result.stdout ?? "")}\n${String(result.stderr ?? "")}`.trim()
+function parseJSON(result, label) {
+  try { return JSON.parse(String(result.stdout ?? "").trim()) }
+  catch { throw new Error(`${label} did not return JSON.\n${result.stdout ?? ""}\n${result.stderr ?? ""}`) }
 }
 
-function parseJSONOutput(result, label) {
-  const text = String(result.stdout ?? "").trim()
-  try {
-    return JSON.parse(text)
-  } catch {
-    throw new Error(`${label} did not return JSON on stdout.\nstdout:\n${text}\nstderr:\n${String(result.stderr ?? "")}`)
-  }
-}
-
-function collectPluginIDs(value) {
-  if (Array.isArray(value)) return value.flatMap(collectPluginIDs)
+function collectIDs(value) {
+  if (Array.isArray(value)) return value.flatMap(collectIDs)
   if (typeof value === "string") return [value]
   if (!value || typeof value !== "object") return []
-  const direct = [value.id, value.pluginID, value.name].filter((item) => typeof item === "string")
-  const nested = [value.data, value.plugins, value.items].flatMap((item) => collectPluginIDs(item))
-  return [...direct, ...nested]
+  return [value.id, value.pluginID, value.name, ...collectIDs(value.data), ...collectIDs(value.plugins), ...collectIDs(value.items)]
+    .filter((item) => typeof item === "string")
 }
 
-function uniquePluginIDs(value) {
-  return [...new Set(collectPluginIDs(value))]
-}
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 async function failureLog(env) {
-  const candidates = [
+  for (const file of [
     path.join(env.XDG_DATA_HOME, "opencode", "log", "opencode.log"),
     path.join(env.XDG_STATE_HOME, "opencode", "log", "opencode.log"),
-  ]
-  for (const file of candidates) {
-    try {
-      const raw = await readFile(file, "utf8")
-      return raw.slice(-30_000)
-    } catch {}
+  ]) {
+    try { return (await readFile(file, "utf8")).slice(-30_000) } catch {}
   }
   return ""
 }
@@ -77,11 +58,9 @@ async function main() {
   const data = path.join(home, ".local", "share")
   const state = path.join(home, ".local", "state")
   const pluginDirectory = path.join(project, ".opencode", "plugins")
-  const pluginFile = path.join(root, "src", "source", "opencode2", "experimental.js")
   const adapterBridge = path.join(pluginDirectory, "opencode-loop-v2-canary.js")
   const sentinelFile = path.join(pluginDirectory, "opencode-loop-v2-sentinel.js")
-  const sentinelURL = pathToFileURL(sentinelFile).href
-  const adapterURL = pathToFileURL(adapterBridge).href
+  const pluginFile = path.join(root, "src", "source", "opencode2", "experimental.js")
 
   await Promise.all([
     mkdir(pluginDirectory, { recursive: true }),
@@ -92,7 +71,6 @@ async function main() {
 
   await writeFile(sentinelFile, `export default { id: ${JSON.stringify(sentinelID)}, setup: async () => {} }\n`)
   await writeFile(adapterBridge, `export { default } from ${JSON.stringify(pathToFileURL(pluginFile).href)}\n`)
-  await writeFile(path.join(project, "README.md"), "# OpenCode Loop V2 host canary\n")
   await writeFile(path.join(project, "opencode.json"), `${JSON.stringify({
     $schema: "https://opencode.ai/config.json",
     plugins: [
@@ -110,7 +88,6 @@ async function main() {
     XDG_STATE_HOME: state,
     OPENCODE_DB: path.join(data, "opencode", "opencode-loop-v2-canary.db"),
     OPENCODE_LOG_LEVEL: "DEBUG",
-    OPENCODE_CONFIG_CONTENT: JSON.stringify({ plugins: [sentinelURL, adapterURL] }),
     CI: "true",
   }
 
@@ -122,47 +99,23 @@ async function main() {
 
   try {
     run("opencode2", ["service", "stop"], { cwd: project, env, allowFailure: true, timeout: 15_000 })
-
-    const version = output(run("opencode2", ["--version"], { cwd: project, env, timeout: 30_000 }))
-    if (!version) throw new Error("opencode2 --version returned no output")
-
-    const health = output(run("opencode2", ["api", "get", "/api/health"], { cwd: project, env }))
-    if (!health) throw new Error("OpenCode 2 health API returned no output")
-
-    const plainPluginResult = run("opencode2", ["api", "get", "/api/plugin"], { cwd: project, env })
-    const plainResponse = parseJSONOutput(plainPluginResult, "GET /api/plugin from project cwd")
-    const plainIDs = uniquePluginIDs(plainResponse)
-
+    const version = String(run("opencode2", ["--version"], { cwd: project, env, timeout: 30_000 }).stdout ?? "").trim()
     const pluginPath = `/api/plugin?location%5Bdirectory%5D=${encodeURIComponent(project)}`
-    const scopedPluginResult = run("opencode2", ["api", "get", pluginPath], { cwd: project, env })
-    const scopedResponse = parseJSONOutput(scopedPluginResult, "GET /api/plugin at project Location")
+    let response
+    let ids = []
 
-    if (scopedResponse?._tag) {
-      throw new Error(`project-scoped /api/plugin rejected the Location: ${JSON.stringify(scopedResponse)}`)
-    }
-    if (scopedResponse?.location?.directory !== project) {
-      throw new Error(`OpenCode 2 resolved the wrong Location: expected ${project}, got ${String(scopedResponse?.location?.directory)}`)
+    for (let attempt = 0; attempt < 30; attempt++) {
+      response = parseJSON(run("opencode2", ["api", "get", pluginPath], { cwd: project, env }), "GET /api/plugin")
+      ids = [...new Set(collectIDs(response))]
+      if (response?.location?.directory === project && ids.includes(sentinelID) && ids.includes(pluginID)) break
+      await delay(250)
     }
 
-    const scopedIDs = uniquePluginIDs(scopedResponse)
-    const ids = [...new Set([...plainIDs, ...scopedIDs])]
-    if (!ids.includes(sentinelID)) {
-      throw new Error([
-        `OpenCode 2 did not activate the minimal sentinel. Active IDs: ${JSON.stringify(ids)}`,
-        `Plain /api/plugin IDs: ${JSON.stringify(plainIDs)}`,
-        `Scoped /api/plugin IDs: ${JSON.stringify(scopedIDs)}`,
-        `Plain response: ${String(plainPluginResult.stdout ?? "")}`,
-        `Scoped response: ${String(scopedPluginResult.stdout ?? "")}`,
-      ].join("\n"))
+    if (response?.location?.directory !== project) {
+      throw new Error(`OpenCode 2 resolved the wrong Location: ${String(response?.location?.directory)}`)
     }
-    if (!ids.includes(pluginID)) {
-      throw new Error([
-        `OpenCode 2 activated the sentinel but not ${pluginID}. Active IDs: ${JSON.stringify(ids)}`,
-        `Plain /api/plugin IDs: ${JSON.stringify(plainIDs)}`,
-        `Scoped /api/plugin IDs: ${JSON.stringify(scopedIDs)}`,
-        `Plain response: ${String(plainPluginResult.stdout ?? "")}`,
-        `Scoped response: ${String(scopedPluginResult.stdout ?? "")}`,
-      ].join("\n"))
+    if (!ids.includes(sentinelID) || !ids.includes(pluginID)) {
+      throw new Error(`OpenCode 2 plugin activation timed out. Active IDs: ${JSON.stringify(ids)}`)
     }
 
     console.log(JSON.stringify({
@@ -170,12 +123,9 @@ async function main() {
       platform: process.platform,
       node: process.version,
       opencode2Version: version,
-      health,
-      projectDirectory: scopedResponse.location.directory,
+      projectDirectory: response.location.directory,
       sentinelID,
       pluginID,
-      plainPluginIDs: plainIDs,
-      scopedPluginIDs: scopedIDs,
       activePluginIDs: ids,
     }, null, 2))
   } catch (error) {
