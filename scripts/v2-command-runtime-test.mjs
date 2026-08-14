@@ -34,8 +34,9 @@ try {
   const first = await runtime.onEvent({ kind: "session", action: "idle", sessionID, directory })
   assert.equal(first.dispatched, true)
   assert.equal(first.kind, "command")
-  assert.deepEqual(first.request, { sessionID, id: "review", arguments: "--quick" })
-  assert.deepEqual(commands, [{ sessionID, id: "review", arguments: "--quick" }])
+  assert.deepEqual(first.request, { sessionID, command: "review", arguments: "--quick" })
+  assert.deepEqual(commands, [{ sessionID, command: "review", arguments: "--quick" }])
+  assert.equal(Object.prototype.hasOwnProperty.call(commands[0], "id"), false, "OpenCode 2 id is a msg_ message ID, never the command name")
   assert.equal(prompts.length, 0)
   let state = await readState()
   assert.equal(state.jobs[0].runCount, 1)
@@ -43,7 +44,7 @@ try {
 
   const second = await runtime.onEvent({ kind: "session", action: "idle", sessionID, directory })
   assert.equal(second.dispatched, true)
-  assert.deepEqual(commands[1], { sessionID, id: "review", arguments: "--quick" })
+  assert.deepEqual(commands[1], { sessionID, command: "review", arguments: "--quick" })
   state = await readState()
   assert.equal(state.jobs[0].runCount, 2)
   assert.equal(state.jobs[0].enabled, false)
@@ -51,6 +52,17 @@ try {
   const third = await runtime.onEvent({ kind: "session", action: "idle", sessionID, directory })
   assert.equal(third.dispatched, false)
   assert.equal(commands.length, 2)
+
+  const compact = await runtime.onEvent({
+    kind: "command",
+    action: "executed",
+    name: "loop",
+    sessionID,
+    directory,
+    arguments: '0s --command "/compact"',
+  })
+  assert.equal(compact.accepted, false)
+  assert.ok(compact.blockers.includes("kind"), "shared actionKind keeps /compact on the dedicated compact path")
 
   const shell = await runtime.onEvent({
     kind: "command",
