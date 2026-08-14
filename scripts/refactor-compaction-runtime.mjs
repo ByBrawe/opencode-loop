@@ -90,16 +90,10 @@ while (legacy.includes(pendingRead)) {
 }
 if (pendingReads !== 3) throw new Error(`expected three remaining pending reads, found ${pendingReads}`)
 
-const oldStart = `beginLoopCompaction(sessionID, job.id, false)
-    const ok = await compactSession(directory, client, sessionID, model)
-    if (!ok) loopCompactionRequests.delete(sessionID)`
-const newStart = `const ok = await compactionRuntime.start(directory, client, sessionID, job.id, model, false)`
-let startCount = 0
-while (legacy.includes(oldStart)) {
-  legacy = legacy.replace(oldStart, newStart)
-  startCount++
-}
-if (startCount !== 2) throw new Error(`expected two compact action starts, found ${startCount}`)
+const startPattern = /beginLoopCompaction\(sessionID, job\.id, false\)\n\s*const ok = await compactSession\(directory, client, sessionID, model\)\n\s*if \(!ok\) loopCompactionRequests\.delete\(sessionID\)/g
+const startMatches = legacy.match(startPattern) || []
+if (startMatches.length !== 2) throw new Error(`expected two compact action starts, found ${startMatches.length}`)
+legacy = legacy.replace(startPattern, 'const ok = await compactionRuntime.start(directory, client, sessionID, job.id, model, false)')
 
 const completionPattern = /const pending = compactionRuntime\.getPending\(sessionID\)\n\s*if \(pending\?\.jobId === job\.id && pending\.completedAt\) \{\n\s*await finalizeLoopCompaction\(directory, client, sessionID\)\n\s*return\n\s*\}/g
 const completionMatches = legacy.match(completionPattern) || []
