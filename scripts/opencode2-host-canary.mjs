@@ -55,6 +55,14 @@ function uniquePluginIDs(value) {
   return [...new Set(collectPluginIDs(value))]
 }
 
+async function markerExists(file) {
+  try {
+    return (await readFile(file, "utf8")).trim() === "ok"
+  } catch {
+    return false
+  }
+}
+
 async function failureLog(env) {
   const candidates = [
     path.join(env.XDG_DATA_HOME, "opencode", "log", "opencode.log"),
@@ -80,6 +88,8 @@ async function main() {
   const pluginFile = path.join(root, "src", "source", "opencode2", "experimental.js")
   const adapterBridge = path.join(pluginDirectory, "opencode-loop-v2-canary.js")
   const sentinelFile = path.join(pluginDirectory, "opencode-loop-v2-sentinel.js")
+  const sentinelMarker = path.join(temp, "sentinel-activated.txt")
+  const adapterMarker = path.join(temp, "adapter-activated.txt")
   const sentinelURL = pathToFileURL(sentinelFile).href
   const adapterURL = pathToFileURL(adapterBridge).href
 
@@ -90,8 +100,29 @@ async function main() {
     mkdir(state, { recursive: true }),
   ])
 
-  await writeFile(sentinelFile, `export default { id: ${JSON.stringify(sentinelID)}, setup: async () => {} }\n`)
-  await writeFile(adapterBridge, `export { default } from ${JSON.stringify(pathToFileURL(pluginFile).href)}\n`)
+  await writeFile(sentinelFile, [
+    `import { writeFile } from "node:fs/promises"`,
+    `export default {`,
+    `  id: ${JSON.stringify(sentinelID)},`,
+    `  setup: async () => { await writeFile(${JSON.stringify(sentinelMarker)}, "ok", "utf8") },`,
+    `}`,
+    ``,
+  ].join("\n"))
+
+  await writeFile(adapterBridge, [
+    `import { writeFile } from "node:fs/promises"`,
+    `import plugin from ${JSON.stringify(pathToFileURL(pluginFile).href)}`,
+    `export default {`,
+    `  id: plugin.id,`,
+    `  setup: async (ctx) => {`,
+    `    const cleanup = await plugin.setup(ctx)`,
+    `    await writeFile(${JSON.stringify(adapterMarker)}, "ok", "utf8")`,
+    `    return cleanup`,
+    `  },`,
+    `}`,
+    ``,
+  ].join("\n"))
+
   await writeFile(path.join(project, "README.md"), "# OpenCode Loop V2 host canary\n")
   await writeFile(path.join(project, "opencode.json"), `${JSON.stringify({
     $schema: "https://opencode.ai/config.json",
@@ -146,22 +177,23 @@ async function main() {
 
     const scopedIDs = uniquePluginIDs(scopedResponse)
     const ids = [...new Set([...plainIDs, ...scopedIDs])]
-    if (!ids.includes(sentinelID)) {
+    const sentinelActivated = await markerExists(sentinelMarker)
+    const adapterActivated = await markerExists(adapterMarker)
+
+    if (!sentinelActivated) {
       throw new Error([
-        `OpenCode 2 did not activate the minimal sentinel. Active IDs: ${JSON.stringify(ids)}`,
+        "OpenCode 2 discovered the canary project but did not execute the minimal sentinel setup.",
         `Plain /api/plugin IDs: ${JSON.stringify(plainIDs)}`,
         `Scoped /api/plugin IDs: ${JSON.stringify(scopedIDs)}`,
         `Plain response: ${String(plainPluginResult.stdout ?? "")}`,
         `Scoped response: ${String(scopedPluginResult.stdout ?? "")}`,
       ].join("\n"))
     }
-    if (!ids.includes(pluginID)) {
+    if (!adapterActivated) {
       throw new Error([
-        `OpenCode 2 activated the sentinel but not ${pluginID}. Active IDs: ${JSON.stringify(ids)}`,
+        `OpenCode 2 executed the sentinel but did not complete setup for ${pluginID}.`,
         `Plain /api/plugin IDs: ${JSON.stringify(plainIDs)}`,
         `Scoped /api/plugin IDs: ${JSON.stringify(scopedIDs)}`,
-        `Plain response: ${String(plainPluginResult.stdout ?? "")}`,
-        `Scoped response: ${String(scopedPluginResult.stdout ?? "")}`,
       ].join("\n"))
     }
 
@@ -174,9 +206,11 @@ async function main() {
       projectDirectory: scopedResponse.location.directory,
       sentinelID,
       pluginID,
+      sentinelActivated,
+      adapterActivated,
       plainPluginIDs: plainIDs,
       scopedPluginIDs: scopedIDs,
-      activePluginIDs: ids,
+      diagnosticPluginIDs: ids,
     }, null, 2))
   } catch (error) {
     const logs = await failureLog(env)
