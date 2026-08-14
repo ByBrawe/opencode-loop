@@ -1237,28 +1237,220 @@ function clearSessionActivity(sessionID) {
   deleteSessionExecutionContext(sessionID);
 }
 
+// src/source/runtime/scheduler.js
+var DEFAULT_IDLE_DEBOUNCE_MS = 1200;
+var DEFAULT_BUSY_RETRY_MS = 5000;
+var DEFAULT_MIN_DUE_TIMER_MS = 250;
+var DEFAULT_MAX_DUE_TIMER_MS = 2147000000;
+var DEFAULT_HEARTBEAT_MS = 2500;
+var DEFAULT_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+function jobDueAt(job, current = now()) {
+  if (isGoalJob(job) && ["completed", "blocked", "cleared"].includes(job.goalStatus))
+    return Infinity;
+  if (!job.enabled || job.paused)
+    return Infinity;
+  if (job.maxRuns > 0 && (job.runCount || 0) >= job.maxRuns)
+    return Infinity;
+  if (job.watchPaths?.length)
+    return Infinity;
+  const created = Date.parse(job.createdAt || new Date().toISOString());
+  if (job.maxRuntimeMs > 0 && current - created >= job.maxRuntimeMs)
+    return current;
+  if (job.intervalMs === 0)
+    return current;
+  if (!job.lastRunAt)
+    return current;
+  return job.lastRunAt + (job.intervalMs || 0);
+}
+function nextDueDelay(state, current = now()) {
+  let soonest = Infinity;
+  for (const job of state.jobs || [])
+    soonest = Math.min(soonest, jobDueAt(job, current));
+  if (!Number.isFinite(soonest))
+    return Infinity;
+  return Math.max(0, soonest - current);
+}
+function createSchedulerRuntime(options = {}) {
+  const idleTimers = new Map;
+  const dueTimers = new Map;
+  const watchdogTimers = new Map;
+  const knownSessions = new Map;
+  let heartbeatTimer;
+  const clock = options.now || now;
+  const readStateFn = options.readState || readState;
+  const setTimeoutFn = options.setTimeout || setTimeout;
+  const clearTimeoutFn = options.clearTimeout || clearTimeout;
+  const setIntervalFn = options.setInterval || setInterval;
+  const clearIntervalFn = options.clearInterval || clearInterval;
+  const idleDebounceMs = options.idleDebounceMs ?? DEFAULT_IDLE_DEBOUNCE_MS;
+  const busyRetryMs = options.busyRetryMs ?? DEFAULT_BUSY_RETRY_MS;
+  const minDueTimerMs = options.minDueTimerMs ?? DEFAULT_MIN_DUE_TIMER_MS;
+  const maxDueTimerMs = options.maxDueTimerMs ?? DEFAULT_MAX_DUE_TIMER_MS;
+  const heartbeatMs = options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
+  const sessionTtlMs = options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS;
+  const errorMessage = (error) => options.errorMessage ? options.errorMessage(error) : error instanceof Error ? error.message : String(error || "unknown error");
+  const appendLog = async (directory, event, extra) => {
+    if (options.appendLoopLog)
+      await options.appendLoopLog(directory, event, extra);
+  };
+  const toast2 = async (client, message, level) => {
+    if (options.toast)
+      await options.toast(client, message, level);
+  };
+  function stopHeartbeatIfIdle() {
+    if (!knownSessions.size && heartbeatTimer) {
+      clearIntervalFn(heartbeatTimer);
+      heartbeatTimer = undefined;
+    }
+  }
+  function startHeartbeat() {
+    if (heartbeatTimer)
+      return;
+    heartbeatTimer = setIntervalFn(() => {
+      for (const [sessionID, info] of [...knownSessions.entries()]) {
+        if (!info || clock() - (info.seenAt || 0) > sessionTtlMs) {
+          knownSessions.delete(sessionID);
+          continue;
+        }
+        Promise.resolve().then(async () => {
+          await options.finalizeActiveRun?.(info.directory, info.client, sessionID, { requireIdle: true, forceStale: true });
+          await options.maybeRunDueJobs?.(info.directory, info.client, sessionID, { heartbeat: true });
+        }).catch((error) => appendLog(info.directory, "heartbeat-error", { sessionID, error: errorMessage(error) }).catch(() => {}));
+      }
+      stopHeartbeatIfIdle();
+    }, heartbeatMs);
+  }
+  function rememberSession(directory, client, sessionID) {
+    if (!sessionID)
+      return;
+    knownSessions.set(sessionID, { directory, client, seenAt: clock() });
+    startHeartbeat();
+  }
+  function cancelIdleWork(sessionID) {
+    const timer = idleTimers.get(sessionID);
+    if (timer)
+      clearTimeoutFn(timer);
+    idleTimers.delete(sessionID);
+  }
+  function cancelDueWork(sessionID) {
+    const timer = dueTimers.get(sessionID);
+    if (timer)
+      clearTimeoutFn(timer);
+    dueTimers.delete(sessionID);
+  }
+  function scheduleIdleWork(directory, client, sessionID) {
+    cancelIdleWork(sessionID);
+    const timer = setTimeoutFn(() => {
+      idleTimers.delete(sessionID);
+      Promise.resolve().then(async () => {
+        if (!await options.sessionIsIdle?.(client, sessionID, directory)) {
+          await scheduleDueWork(directory, client, sessionID, busyRetryMs);
+          return;
+        }
+        await options.finalizeActiveRun?.(directory, client, sessionID);
+        if (!await options.sessionIsIdle?.(client, sessionID, directory)) {
+          await scheduleDueWork(directory, client, sessionID, busyRetryMs);
+          return;
+        }
+        await options.maybeRunDueJobs?.(directory, client, sessionID);
+      }).catch((error) => {
+        toast2(client, `Loop idle handler failed: ${errorMessage(error)}`, "error").catch(() => {});
+        appendLog(directory, "idle-error", { sessionID, error: errorMessage(error) }).catch(() => {});
+      });
+    }, idleDebounceMs);
+    idleTimers.set(sessionID, timer);
+  }
+  async function startWatchdog(directory, client, sessionID) {
+    if (watchdogTimers.has(sessionID))
+      return;
+    const timer = setIntervalFn(() => {
+      Promise.resolve().then(async () => {
+        const state = await readStateFn(directory, sessionID);
+        const delay2 = nextDueDelay(state, clock());
+        const hasJobs = (state.jobs || []).some((job) => job.enabled !== false && !job.paused && (!isGoalJob(job) || !["completed", "blocked", "cleared"].includes(job.goalStatus)));
+        if (!hasJobs || !Number.isFinite(delay2)) {
+          stopWatchdog(sessionID);
+          return;
+        }
+        if (delay2 <= 0)
+          await options.maybeRunDueJobs?.(directory, client, sessionID);
+        else
+          await scheduleDueWork(directory, client, sessionID);
+      }).catch((error) => appendLog(directory, "watchdog-error", { sessionID, error: errorMessage(error) }).catch(() => {}));
+    }, Math.max(1000, busyRetryMs));
+    watchdogTimers.set(sessionID, timer);
+  }
+  function stopWatchdog(sessionID) {
+    const timer = watchdogTimers.get(sessionID);
+    if (timer)
+      clearIntervalFn(timer);
+    watchdogTimers.delete(sessionID);
+  }
+  async function scheduleDueWork(directory, client, sessionID, minDelayMs = 0) {
+    cancelDueWork(sessionID);
+    const state = await readStateFn(directory, sessionID);
+    const delay2 = nextDueDelay(state, clock());
+    if (!Number.isFinite(delay2))
+      return;
+    const wait = Math.min(Math.max(delay2, minDelayMs, minDueTimerMs), maxDueTimerMs);
+    const timer = setTimeoutFn(() => {
+      dueTimers.delete(sessionID);
+      Promise.resolve().then(async () => {
+        if (!await options.sessionIsIdle?.(client, sessionID, directory)) {
+          await scheduleDueWork(directory, client, sessionID, busyRetryMs);
+          return;
+        }
+        await options.finalizeActiveRun?.(directory, client, sessionID);
+        if (!await options.sessionIsIdle?.(client, sessionID, directory)) {
+          await scheduleDueWork(directory, client, sessionID, busyRetryMs);
+          return;
+        }
+        await options.maybeRunDueJobs?.(directory, client, sessionID);
+      }).catch((error) => {
+        toast2(client, `Loop due timer failed: ${errorMessage(error)}`, "error").catch(() => {});
+        appendLog(directory, "due-timer-error", { sessionID, error: errorMessage(error) }).catch(() => {});
+      });
+    }, wait);
+    dueTimers.set(sessionID, timer);
+    await startWatchdog(directory, client, sessionID);
+  }
+  function sessionIDsForHost(directory, client) {
+    return [...knownSessions.entries()].filter(([, info]) => info?.directory === directory && info?.client === client).map(([sessionID]) => sessionID);
+  }
+  function clearSessionScheduling(sessionID) {
+    cancelIdleWork(sessionID);
+    cancelDueWork(sessionID);
+    stopWatchdog(sessionID);
+    knownSessions.delete(sessionID);
+    stopHeartbeatIfIdle();
+  }
+  return {
+    rememberSession,
+    scheduleIdleWork,
+    scheduleDueWork,
+    startWatchdog,
+    stopWatchdog,
+    cancelIdleWork,
+    cancelDueWork,
+    sessionIDsForHost,
+    clearSessionScheduling,
+    knownSessionCount: () => knownSessions.size
+  };
+}
+
 // src/source/legacy-v1.js
 var SERVICE2 = "opencode-loop";
 var DEFAULT_ACTIVE_GUARD_MS = 45000;
 var STALE_ACTIVE_RECOVERY_MS = 45000;
-var IDLE_DEBOUNCE_MS = 1200;
 var BUSY_RETRY_MS = 5000;
 var SESSION_STATUS_CACHE_MS = 1500;
-var MIN_DUE_TIMER_MS = 250;
-var MAX_DUE_TIMER_MS = 2147000000;
-var HEARTBEAT_MS = 2500;
 var MAX_SCAN_FILES = 200;
 var MAX_SCAN_BYTES = 2000000;
 var GOAL_REPORT_DIR = "goals";
 var GOAL_PROMPT_PREFIX = "EXPERIMENTAL OPENCODE GOAL MODE ITERATION";
 var DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180000;
 var activeRuns = new Map;
-var idleTimers = new Map;
-var dueTimers = new Map;
-var watchdogTimers = new Map;
 var runLocks = new Map;
-var knownSessions = new Map;
-var heartbeatTimer;
 var loopCompactionRequests = new Map;
 var DEFAULT_PROGRESS_MD = `# Progress
 
@@ -1286,58 +1478,26 @@ Describe the current project goal here.
 ## Blocked
 - None.
 `;
-function rememberSession(directory, client, sessionID) {
-  if (!sessionID)
-    return;
-  knownSessions.set(sessionID, { directory, client, seenAt: now() });
-  startHeartbeat();
-}
-function startHeartbeat() {
-  if (heartbeatTimer)
-    return;
-  heartbeatTimer = setInterval(() => {
-    for (const [sessionID, info] of [...knownSessions.entries()]) {
-      if (!info || now() - (info.seenAt || 0) > 12 * 60 * 60 * 1000) {
-        knownSessions.delete(sessionID);
-        continue;
-      }
-      Promise.resolve().then(async () => {
-        await finalizeActiveRun(info.directory, info.client, sessionID, { requireIdle: true, forceStale: true });
-        await maybeRunDueJobs(info.directory, info.client, sessionID, { heartbeat: true });
-      }).catch((error) => appendLoopLog(info.directory, "heartbeat-error", { sessionID, error: sdkErrorMessage(error) }).catch(() => {}));
-    }
-    if (!knownSessions.size && heartbeatTimer) {
-      clearInterval(heartbeatTimer);
-      heartbeatTimer = undefined;
-    }
-  }, HEARTBEAT_MS);
-}
+var schedulerRuntime = createSchedulerRuntime({
+  busyRetryMs: BUSY_RETRY_MS,
+  sessionIsIdle,
+  finalizeActiveRun,
+  maybeRunDueJobs,
+  appendLoopLog,
+  toast,
+  errorMessage: sdkErrorMessage
+});
+var { rememberSession, scheduleIdleWork, scheduleDueWork, stopWatchdog, cancelDueWork } = schedulerRuntime;
 function disposeRuntime(directory, client) {
-  const sessions = [...knownSessions.entries()].filter(([, info]) => info?.directory === directory && info?.client === client).map(([sessionID]) => sessionID);
+  const sessions = schedulerRuntime.sessionIDsForHost(directory, client);
   for (const sessionID of sessions) {
     clearActiveRun(sessionID);
-    const idle = idleTimers.get(sessionID);
-    if (idle)
-      clearTimeout(idle);
-    const due = dueTimers.get(sessionID);
-    if (due)
-      clearTimeout(due);
-    const watchdog = watchdogTimers.get(sessionID);
-    if (watchdog)
-      clearInterval(watchdog);
-    idleTimers.delete(sessionID);
-    dueTimers.delete(sessionID);
-    watchdogTimers.delete(sessionID);
+    schedulerRuntime.clearSessionScheduling(sessionID);
     runLocks.delete(sessionID);
-    knownSessions.delete(sessionID);
     clearLoopOwnedUserMessageGuard(sessionID);
     clearSessionActivity(sessionID);
     loopCompactionRequests.delete(sessionID);
     clearCommandLifecycle(sessionID);
-  }
-  if (!knownSessions.size && heartbeatTimer) {
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = undefined;
   }
 }
 function dangerousShell(command) {
@@ -1755,118 +1915,6 @@ async function sessionStatusType(client, sessionID, directory, options = {}) {
 }
 async function sessionIsIdle(client, sessionID, directory, options = {}) {
   return await sessionStatusType(client, sessionID, directory, options) === "idle";
-}
-function scheduleIdleWork(directory, client, sessionID) {
-  const previous = idleTimers.get(sessionID);
-  if (previous)
-    clearTimeout(previous);
-  const timer = setTimeout(() => {
-    idleTimers.delete(sessionID);
-    Promise.resolve().then(async () => {
-      if (!await sessionIsIdle(client, sessionID, directory)) {
-        await scheduleDueWork(directory, client, sessionID, BUSY_RETRY_MS);
-        return;
-      }
-      await finalizeActiveRun(directory, client, sessionID);
-      if (!await sessionIsIdle(client, sessionID, directory)) {
-        await scheduleDueWork(directory, client, sessionID, BUSY_RETRY_MS);
-        return;
-      }
-      await maybeRunDueJobs(directory, client, sessionID);
-    }).catch((error) => {
-      toast(client, `Loop idle handler failed: ${sdkErrorMessage(error)}`, "error").catch(() => {});
-      appendLoopLog(directory, "idle-error", { sessionID, error: sdkErrorMessage(error) }).catch(() => {});
-    });
-  }, IDLE_DEBOUNCE_MS);
-  idleTimers.set(sessionID, timer);
-}
-function jobDueAt(job, current = now()) {
-  if (isGoalJob(job) && ["completed", "blocked", "cleared"].includes(job.goalStatus))
-    return Infinity;
-  if (!job.enabled || job.paused)
-    return Infinity;
-  if (job.maxRuns > 0 && (job.runCount || 0) >= job.maxRuns)
-    return Infinity;
-  if (job.watchPaths?.length)
-    return Infinity;
-  const created = Date.parse(job.createdAt || new Date().toISOString());
-  if (job.maxRuntimeMs > 0 && current - created >= job.maxRuntimeMs)
-    return current;
-  if (job.intervalMs === 0)
-    return current;
-  if (!job.lastRunAt)
-    return current;
-  return job.lastRunAt + (job.intervalMs || 0);
-}
-function nextDueDelay(state) {
-  const current = now();
-  let soonest = Infinity;
-  for (const job of state.jobs || [])
-    soonest = Math.min(soonest, jobDueAt(job, current));
-  if (!Number.isFinite(soonest))
-    return Infinity;
-  return Math.max(0, soonest - current);
-}
-async function startWatchdog(directory, client, sessionID) {
-  if (watchdogTimers.has(sessionID))
-    return;
-  const timer = setInterval(() => {
-    Promise.resolve().then(async () => {
-      const state = await readState(directory, sessionID);
-      const delay2 = nextDueDelay(state);
-      const hasJobs = (state.jobs || []).some((job) => job.enabled !== false && !job.paused && (!isGoalJob(job) || !["completed", "blocked", "cleared"].includes(job.goalStatus)));
-      if (!hasJobs || !Number.isFinite(delay2)) {
-        const existing = watchdogTimers.get(sessionID);
-        if (existing)
-          clearInterval(existing);
-        watchdogTimers.delete(sessionID);
-        return;
-      }
-      if (delay2 <= 0)
-        await maybeRunDueJobs(directory, client, sessionID);
-      else
-        await scheduleDueWork(directory, client, sessionID);
-    }).catch((error) => appendLoopLog(directory, "watchdog-error", { sessionID, error: sdkErrorMessage(error) }).catch(() => {}));
-  }, Math.max(1000, BUSY_RETRY_MS));
-  watchdogTimers.set(sessionID, timer);
-}
-function stopWatchdog(sessionID) {
-  const timer = watchdogTimers.get(sessionID);
-  if (timer)
-    clearInterval(timer);
-  watchdogTimers.delete(sessionID);
-}
-async function scheduleDueWork(directory, client, sessionID, minDelayMs = 0) {
-  const previous = dueTimers.get(sessionID);
-  if (previous)
-    clearTimeout(previous);
-  const state = await readState(directory, sessionID);
-  const delay2 = nextDueDelay(state);
-  if (!Number.isFinite(delay2)) {
-    dueTimers.delete(sessionID);
-    return;
-  }
-  const wait = Math.min(Math.max(delay2, minDelayMs, MIN_DUE_TIMER_MS), MAX_DUE_TIMER_MS);
-  const timer = setTimeout(() => {
-    dueTimers.delete(sessionID);
-    Promise.resolve().then(async () => {
-      if (!await sessionIsIdle(client, sessionID, directory)) {
-        await scheduleDueWork(directory, client, sessionID, BUSY_RETRY_MS);
-        return;
-      }
-      await finalizeActiveRun(directory, client, sessionID);
-      if (!await sessionIsIdle(client, sessionID, directory)) {
-        await scheduleDueWork(directory, client, sessionID, BUSY_RETRY_MS);
-        return;
-      }
-      await maybeRunDueJobs(directory, client, sessionID);
-    }).catch((error) => {
-      toast(client, `Loop due timer failed: ${sdkErrorMessage(error)}`, "error").catch(() => {});
-      appendLoopLog(directory, "due-timer-error", { sessionID, error: sdkErrorMessage(error) }).catch(() => {});
-    });
-  }, wait);
-  dueTimers.set(sessionID, timer);
-  await startWatchdog(directory, client, sessionID);
 }
 function dueJobs(state, force = false) {
   const current = now();
@@ -2608,10 +2656,7 @@ async function stopLoop(directory, client, sessionID, args) {
   if (!target || target.toLowerCase() === "all") {
     await removeState(directory, sessionID);
     clearActiveRun(sessionID);
-    const due = dueTimers.get(sessionID);
-    if (due)
-      clearTimeout(due);
-    dueTimers.delete(sessionID);
+    cancelDueWork(sessionID);
     stopWatchdog(sessionID);
     await toast(client, "All loops stopped for this session.", "success");
     return;
