@@ -1,5 +1,6 @@
 name: Commit compaction runtime refactor
 
+# Temporary branch-only workflow; rerun after whitespace-tolerant compact start transform.
 on:
   push:
     branches: [refactor-compaction-runtime-20260814]
