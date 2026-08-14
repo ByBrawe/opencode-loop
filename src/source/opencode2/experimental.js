@@ -1,4 +1,5 @@
 import { define } from "@opencode-ai/plugin/v2/promise"
+import { createOpenCode2EventBridge } from "./event-bridge.js"
 
 export const OPENCODE_LOOP_V2_PLUGIN_ID = "bybrawe.opencode-loop.v2.experimental"
 
@@ -10,6 +11,15 @@ export const OpenCodeLoopV2ExperimentalPlugin = define({
     }
 
     await ctx.command.transform(() => {})
+
+    const bridge = createOpenCode2EventBridge()
+    if (typeof ctx?.event?.subscribe === "function") {
+      await bridge.attach(ctx.event.subscribe.bind(ctx.event))
+    }
+
+    return async () => {
+      await bridge.dispose("plugin-cleanup")
+    }
   },
 })
 
