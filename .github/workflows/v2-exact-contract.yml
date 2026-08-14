@@ -1,0 +1,27 @@
+name: OpenCode 2 Exact Contract
+
+on:
+  push:
+    branches: [v2-real-host-sentinel]
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Install exact packages
+        run: npm install --no-save --package-lock=false @opencode-ai/cli@0.0.0-next-17430 @opencode-ai/plugin@0.0.0-next-17430
+      - name: Show plugin package manifest
+        run: cat node_modules/@opencode-ai/plugin/package.json
+      - name: List plugin package files
+        run: find node_modules/@opencode-ai/plugin -maxdepth 4 -type f -print
+      - name: Show V2 promise declarations
+        run: sed -n '1,260p' node_modules/@opencode-ai/plugin/dist/v2/promise/index.d.ts
+      - name: Show CLI package manifest
+        run: cat node_modules/@opencode-ai/cli/package.json
