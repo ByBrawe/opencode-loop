@@ -56,9 +56,15 @@ try {
   assert.equal((await runtime.onEvent({ kind: "session", action: "idle", sessionID, directory })).dispatched, false)
   assert.equal(prompts.length, 2)
 
-  const interval = await runtime.onEvent({ kind: "command", action: "executed", name: "loop", sessionID, directory, arguments: "5m do this later" })
-  assert.equal(interval.accepted, false)
-  assert.ok(interval.blockers.includes("interval"))
+  const interval = await runtime.onEvent({ kind: "command", action: "executed", name: "loop", sessionID, directory, arguments: "5m --name later --multi do this later" })
+  assert.equal(interval.accepted, true)
+  assert.equal(interval.job.intervalMs, 300_000)
+  assert.equal(runtime.scheduledCount(), 0)
+  assert.equal((await readState()).jobs.length, 2)
+
+  const intervalRemoved = await runtime.onEvent({ kind: "command", action: "executed", name: "loop-stop", sessionID, directory, arguments: "later" })
+  assert.equal(intervalRemoved.count, 1)
+  assert.equal((await readState()).jobs.length, 1)
 
   const command = await runtime.onEvent({ kind: "command", action: "executed", name: "loop", sessionID, directory, arguments: "0s --command /compact" })
   assert.equal(command.accepted, false)
@@ -80,5 +86,6 @@ try {
 
   console.log("OpenCode 2 prompt runtime contract passed")
 } finally {
+  await runtime.dispose()
   await rm(directory, { recursive: true, force: true })
 }
