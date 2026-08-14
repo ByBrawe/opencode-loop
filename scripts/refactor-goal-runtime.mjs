@@ -40,8 +40,14 @@ legacy = removeUntil(
 legacy = removeUntil(
   legacy,
   "function goalReportPath(directory, sessionID, job) {",
+  "async function rejectGoalCompletion(directory, sessionID, state, job, reason) {",
+  "goal report/evidence helper block",
+)
+legacy = removeUntil(
+  legacy,
+  "function goalProgressSnapshot(job) {",
   "async function applyGoalNoProgressGuard(directory, client, sessionID, job, beforeJob) {",
-  "goal support helper block",
+  "goal progress helper block",
 )
 
 for (const moved of [
@@ -58,6 +64,9 @@ for (const moved of [
   "function goalMadeMeaningfulProgress(beforeJob, afterJob)",
 ]) {
   if (legacy.includes(moved)) throw new Error(`moved helper remains in legacy source: ${moved}`)
+}
+if (!legacy.includes("async function rejectGoalCompletion(directory, sessionID, state, job, reason)")) {
+  throw new Error("goal completion rejection helper must remain in legacy source")
 }
 await fs.writeFile(legacyPath, legacy)
 
