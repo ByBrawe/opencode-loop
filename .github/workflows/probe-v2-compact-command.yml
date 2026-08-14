@@ -1,6 +1,6 @@
-name: Probe V2 compact command
+name: Validate corrected V2 command transport
 
-# Temporary branch-only probe; rerun with command-field canaries.
+# Temporary branch-only validation; removed before PR.
 on:
   push:
     branches: [feat-v2-compact-runtime-20260814]
@@ -11,9 +11,9 @@ permissions:
   contents: read
 
 jobs:
-  probe:
+  validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
@@ -22,6 +22,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
+          cache: npm
       - name: Isolate OpenCode 2 paths
         shell: bash
         run: |
@@ -29,91 +30,47 @@ jobs:
           echo "XDG_CONFIG_HOME=$RUNNER_TEMP/opencode2-home/.config" >> "$GITHUB_ENV"
           echo "XDG_DATA_HOME=$RUNNER_TEMP/opencode2-home/.local/share" >> "$GITHUB_ENV"
           echo "XDG_STATE_HOME=$RUNNER_TEMP/opencode2-home/.local/state" >> "$GITHUB_ENV"
+      - run: npm ci
+      - run: npm run check
+      - run: node scripts/v2-host-contract-test.mjs
+      - run: node scripts/v2-command-runtime-test.mjs
+      - run: node scripts/v2-command-adapter-test.mjs
+      - run: npm test
+      - run: git diff --check
       - run: npm install -g --allow-scripts=@opencode-ai/cli @opencode-ai/cli@next
-      - name: Prepare probe project
+      - run: npm install --no-save --package-lock=false @opencode-ai/plugin@next
+      - name: Prepare real-adapter probe project
         shell: bash
         run: |
-          project="$RUNNER_TEMP/opencode-loop-v2-compact-probe"
+          project="$RUNNER_TEMP/opencode-loop-v2-command-field-probe"
           plugin_dir="$project/.opencode/plugins"
-          marker="$project/v2-compact-wrapper-marker.json"
           mkdir -p "$plugin_dir" "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
+          cp "$GITHUB_WORKSPACE/scripts/fixtures/opencode2-real-adapter-probe.js" "$plugin_dir/opencode-loop-v2-real.js"
           git init --quiet "$project"
           git -C "$project" config user.email "opencode-loop-ci@example.invalid"
           git -C "$project" config user.name "OpenCode Loop CI"
-          touch "$project/README.md"
-          cat > "$plugin_dir/compact-wrapper-probe.js" <<'EOF'
-          import { writeFile } from "node:fs/promises"
-
-          const marker = new URL("../../v2-compact-wrapper-marker.json", import.meta.url)
-          const safe = (value) => {
-            try { return JSON.parse(JSON.stringify(value)) } catch { return String(value) }
-          }
-          async function callWithTimeout(label, fn) {
-            try {
-              const value = await Promise.race([
-                Promise.resolve().then(fn),
-                new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), 5_000)),
-              ])
-              return { ok: true, value: safe(value) }
-            } catch (error) {
-              return { ok: false, error: error instanceof Error ? error.message : String(error) }
-            }
-          }
-
-          export default {
-            id: "bybrawe.opencode-loop.v2.compact-wrapper-probe",
-            async setup(ctx) {
-              const created = await callWithTimeout("session.create", () => ctx.session.create())
-              const sessionID = created.ok
-                ? String(created.value?.id || created.value?.data?.id || created.value?.sessionID || "")
-                : ""
-              const compactByCommand = sessionID
-                ? await callWithTimeout("session.command command=compact", () => ctx.session.command({ sessionID, command: "compact" }))
-                : { ok: false, error: "session create returned no id" }
-              const reviewByCommand = sessionID
-                ? await callWithTimeout("session.command command=review", () => ctx.session.command({ sessionID, command: "review", arguments: "--quick" }))
-                : { ok: false, error: "session create returned no id" }
-              const compactByName = sessionID
-                ? await callWithTimeout("session.command name=compact", () => ctx.session.command({ sessionID, name: "compact" }))
-                : { ok: false, error: "session create returned no id" }
-
-              await writeFile(marker, JSON.stringify({
-                created,
-                sessionID,
-                compactByCommand,
-                reviewByCommand,
-                compactByName,
-              }, null, 2), "utf8")
-            },
-          }
-          EOF
           git -C "$project" add .
           git -C "$project" commit --quiet -m "init"
+          plugin_url="$(node --input-type=module -e 'import { pathToFileURL } from "node:url"; console.log(pathToFileURL(process.argv[1]).href)' "$GITHUB_WORKSPACE/src/source/opencode2/experimental.js")"
+          echo "OPENCODE_LOOP_V2_PLUGIN_URL=$plugin_url" >> "$GITHUB_ENV"
+          echo "OPENCODE_LOOP_V2_MARKER=$project/v2-real-adapter-marker.json" >> "$GITHUB_ENV"
           echo "OPENCODE_LOOP_V2_PROJECT=$project" >> "$GITHUB_ENV"
-          echo "OPENCODE_LOOP_V2_MARKER=$marker" >> "$GITHUB_ENV"
-      - name: Inspect command registry and command canaries
+      - name: Verify real command-field semantics
         shell: bash
         run: |
-          out="$RUNNER_TEMP/opencode2-command-registry.json"
           rm -f "$OPENCODE_LOOP_V2_MARKER"
-          opencode2 api get /api/command -H "x-opencode-directory: $OPENCODE_LOOP_V2_PROJECT" > "$out"
-          cat "$out"
-          node - <<'NODE' "$out"
-          const fs = require('node:fs')
-          const file = process.argv[2]
-          const value = JSON.parse(fs.readFileSync(file, 'utf8'))
-          const rows = Array.isArray(value) ? value : value?.data || value?.commands || []
-          const ids = rows.map((item) => String(item?.id || item?.name || item?.command || '')).filter(Boolean)
-          console.log('COMMAND_IDS=' + JSON.stringify(ids))
-          console.log('COMPACT_MATCHES=' + JSON.stringify(rows.filter((item) => /compact/i.test(JSON.stringify(item)))))
-          NODE
+          opencode2 api get /api/command -H "x-opencode-directory: $OPENCODE_LOOP_V2_PROJECT" > "$RUNNER_TEMP/opencode2-command-field.json" 2>&1 || true
+          if [ ! -f "$OPENCODE_LOOP_V2_MARKER" ]; then
+            opencode2 api get /api/plugin -H "x-opencode-directory: $OPENCODE_LOOP_V2_PROJECT" > "$RUNNER_TEMP/opencode2-plugin-field.json" 2>&1 || true
+          fi
           for attempt in $(seq 1 80); do
             if [ -f "$OPENCODE_LOOP_V2_MARKER" ]; then
-              echo "--- SESSION COMMAND CANARIES ---"
               cat "$OPENCODE_LOOP_V2_MARKER"
+              node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(value.sessionCommand!==true || value.commandFieldProbe?.matched!==true) process.exit(1)' "$OPENCODE_LOOP_V2_MARKER"
               exit 0
             fi
             sleep 0.2
           done
-          echo "command canary marker missing" >&2
+          cat "$RUNNER_TEMP/opencode2-command-field.json" >&2 || true
+          cat "$RUNNER_TEMP/opencode2-plugin-field.json" >&2 || true
           exit 1
