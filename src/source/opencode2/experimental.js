@@ -9,7 +9,10 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
     if (!capabilities.eventSubscribe || !capabilities.sessionPrompt) {
       throw new Error("OpenCode 2 event.subscribe and session.prompt capabilities are required")
     }
-    startOpenCode2CanaryRuntime(ctx)
+    const runtime = startOpenCode2CanaryRuntime(ctx)
+    runtime.done.catch((error) => {
+      console.error(`[${OPENCODE_LOOP_V2_PLUGIN_ID}] runtime failed`, error)
+    })
   },
 }
 
