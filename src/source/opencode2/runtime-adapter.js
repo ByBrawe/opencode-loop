@@ -4,7 +4,9 @@ import { createOpenCode2HostContract } from "./host-contract.js"
 function promptRequest(request) {
   return {
     sessionID: request.sessionID,
-    text: request.text,
+    prompt: { text: request.text },
+    delivery: request.delivery || "queue",
+    resume: request.resume !== false,
   }
 }
 
