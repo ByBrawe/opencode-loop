@@ -1,0 +1,118 @@
+name: OpenCode 2 Activation
+
+on:
+  pull_request:
+    paths:
+      - "src/source/opencode2/**"
+      - ".github/workflows/opencode2-activation.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "src/source/opencode2/**"
+      - ".github/workflows/opencode2-activation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  activation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Initialize isolated OpenCode 2 paths
+        shell: bash
+        run: |
+          echo "HOME=$RUNNER_TEMP/opencode2-home" >> "$GITHUB_ENV"
+          echo "XDG_CONFIG_HOME=$RUNNER_TEMP/opencode2-home/.config" >> "$GITHUB_ENV"
+          echo "XDG_DATA_HOME=$RUNNER_TEMP/opencode2-home/.local/share" >> "$GITHUB_ENV"
+          echo "XDG_STATE_HOME=$RUNNER_TEMP/opencode2-home/.local/state" >> "$GITHUB_ENV"
+
+      - run: npm ci
+
+      - name: Install OpenCode 2 CLI with postinstall enabled
+        run: npm install -g --allow-scripts=@opencode-ai/cli @opencode-ai/cli@next
+
+      - name: Install matching OpenCode 2 plugin API
+        run: npm install --no-save --package-lock=false @opencode-ai/plugin@next
+
+      - name: Show tested V2 versions and package layout
+        shell: bash
+        run: |
+          node -p "require('./node_modules/@opencode-ai/plugin/package.json').version"
+          command -v opencode2
+          opencode2 --version
+          node -p "JSON.stringify(require('./node_modules/@opencode-ai/plugin/package.json').exports, null, 2)"
+          find "$GITHUB_WORKSPACE/node_modules/@opencode-ai/plugin/dist" -maxdepth 4 -type f -print | sort || true
+
+      - name: Prepare dependency-free V2 activation probe
+        shell: bash
+        run: |
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
+          project="$RUNNER_TEMP/opencode-loop-v2-activation"
+          plugin_dir="$project/.opencode/plugins"
+          mkdir -p "$plugin_dir"
+          git init --quiet "$project"
+          git -C "$project" config user.email "opencode-loop-ci@example.invalid"
+          git -C "$project" config user.name "OpenCode Loop CI"
+          cat > "$plugin_dir/opencode-loop-v2-probe.js" <<'EOF'
+          import { writeFile } from "node:fs/promises"
+
+          const id = "bybrawe.opencode-loop.v2.activation-probe"
+          const marker = new URL("../../v2-activation-marker.json", import.meta.url)
+
+          export default {
+            id,
+            async setup() {
+              await writeFile(marker, JSON.stringify({ id, activated: true }), "utf8")
+            },
+          }
+          EOF
+          git -C "$project" add .opencode/plugins/opencode-loop-v2-probe.js
+          git -C "$project" commit --quiet -m "init"
+          git -C "$project" rev-parse --show-toplevel
+          cat "$plugin_dir/opencode-loop-v2-probe.js"
+
+      - name: Verify dependency-free setup runs in real OpenCode 2 host
+        shell: bash
+        run: |
+          project="$RUNNER_TEMP/opencode-loop-v2-activation"
+          marker="$project/v2-activation-marker.json"
+          rm -f "$marker"
+
+          opencode2 api get /api/command -H "x-opencode-directory: $project" > "$RUNNER_TEMP/opencode2-command.json" 2>&1 || true
+          if [ ! -f "$marker" ]; then
+            opencode2 api get /api/plugin -H "x-opencode-directory: $project" > "$RUNNER_TEMP/opencode2-plugin.json" 2>&1 || true
+          fi
+
+          for attempt in $(seq 1 50); do
+            if [ -f "$marker" ]; then
+              cat "$marker"
+              node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(value.id!=="bybrawe.opencode-loop.v2.activation-probe" || value.activated!==true) process.exit(1)' "$marker"
+              exit 0
+            fi
+            sleep 0.2
+          done
+
+          echo "OpenCode 2 did not execute the local plugin setup hook." >&2
+          echo "--- /api/command ---" >&2
+          cat "$RUNNER_TEMP/opencode2-command.json" >&2 || true
+          echo "--- /api/plugin ---" >&2
+          cat "$RUNNER_TEMP/opencode2-plugin.json" >&2 || true
+          exit 1
+
+      - name: Dump OpenCode 2 logs on failure
+        if: failure()
+        shell: bash
+        run: |
+          find "$XDG_DATA_HOME" -maxdepth 6 -type f -print -exec sh -c 'echo "--- $1"; tail -n 200 "$1"' _ {} \;
