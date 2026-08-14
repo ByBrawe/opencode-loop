@@ -44,6 +44,7 @@ jobs:
       - name: Verify extracted OpenCode host runtime
         run: |
           node --check src/source/opencode/host.js
+          node --check src/source/opencode/messages.js
           node scripts/host-adapter-contract-test.mjs
 
       - run: npm run check
