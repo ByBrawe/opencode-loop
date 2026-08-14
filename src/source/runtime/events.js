@@ -50,6 +50,58 @@ export function normalizeOpenCodeEvent(input) {
     })
   }
 
+  if (
+    event.type === "session.next.step.started" ||
+    event.type === "session.next.step.ended" ||
+    event.type === "session.next.step.failed"
+  ) {
+    const sessionID = text(properties.sessionID)
+    const messageID = text(properties.assistantMessageID)
+    if (!sessionID || !messageID) return undefined
+    if (event.type === "session.next.step.started") {
+      return freezeEvent({
+        kind: "session",
+        action: "step-started",
+        sessionID,
+        directory,
+        messageID,
+        agent: text(properties.agent),
+        model: record(properties.model),
+      })
+    }
+    if (event.type === "session.next.step.ended") {
+      return freezeEvent({
+        kind: "session",
+        action: "step-ended",
+        sessionID,
+        directory,
+        messageID,
+        finish: text(properties.finish),
+      })
+    }
+    return freezeEvent({
+      kind: "session",
+      action: "step-failed",
+      sessionID,
+      directory,
+      messageID,
+      error: record(properties.error) || properties.error,
+    })
+  }
+
+  if (event.type === "session.next.compaction.ended") {
+    const sessionID = text(properties.sessionID)
+    if (!sessionID) return undefined
+    return freezeEvent({
+      kind: "session",
+      action: "compacted",
+      sessionID,
+      directory,
+      messageID: text(properties.messageID),
+      reason: text(properties.reason),
+    })
+  }
+
   if (event.type === "session.created" || event.type === "session.updated" || event.type === "session.deleted") {
     const info = record(properties.info)
     const sessionID = text(info?.id)
