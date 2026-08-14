@@ -283,6 +283,10 @@ async function main() {
     if (!ids.includes(sentinelID) || !ids.includes(pluginID)) throw new Error(`OpenCode 2 plugin activation timed out. Active IDs: ${JSON.stringify(ids)}`)
 
     run("opencode2", ["service", "stop"], { cwd: project, env, allowFailure: true, timeout: 15_000 })
+    const serverPassword = String(run("opencode2", ["service", "password"], { cwd: project, env, timeout: 15_000 }).stdout ?? "").trim()
+    assert.ok(serverPassword, "OpenCode 2 service password command returned an empty password")
+    const serverAuthorization = `Basic ${Buffer.from(`opencode:${serverPassword}`).toString("base64")}`
+
     const port = await reservePort()
     server = spawnCommand("opencode2", ["serve", "--hostname", "127.0.0.1", "--port", String(port)], { cwd: project, env })
     server.stdout?.on("data", (chunk) => { serverLog = (serverLog + String(chunk)).slice(-80_000) })
@@ -295,7 +299,11 @@ async function main() {
       const separator = pathname.includes("?") ? "&" : "?"
       const result = await fetch(`${baseURL}${pathname}${separator}${locationQuery}`, {
         ...init,
-        headers: { "content-type": "application/json", ...(init.headers ?? {}) },
+        headers: {
+          "content-type": "application/json",
+          authorization: serverAuthorization,
+          ...(init.headers ?? {}),
+        },
         signal: init.signal ?? AbortSignal.timeout(45_000),
       })
       const text = await result.text()
