@@ -1717,6 +1717,86 @@ async function setGoalProgress(directory, sessionID, args = {}) {
   return { ok: true, job, message: `Goal progress recorded: ${item.summary}` };
 }
 
+// src/source/runtime/goal-policy.js
+function requireFunction(value, name) {
+  if (typeof value !== "function")
+    throw new TypeError(`createGoalExecutionPolicy requires ${name}`);
+  return value;
+}
+function createGoalExecutionPolicy(options = {}) {
+  const runShellCommand2 = requireFunction(options.runShellCommand, "runShellCommand");
+  const dangerousShell = requireFunction(options.dangerousShell, "dangerousShell");
+  const toast2 = requireFunction(options.toast, "toast");
+  const now2 = typeof options.now === "function" ? options.now : now;
+  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
+  async function applyGoalNoProgressGuard(directory, client, sessionID, job, beforeJob) {
+    if (!isGoalJob(job) || ["completed", "blocked"].includes(job.goalStatus) || job.paused || job.enabled === false)
+      return job;
+    const limit = Number(job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS);
+    if (!Number.isFinite(limit) || limit <= 0)
+      return job;
+    if (goalMadeMeaningfulProgress(beforeJob, job)) {
+      job.noProgressCount = 0;
+      job.lastProgressAt = now2();
+      return job;
+    }
+    job.noProgressCount = (job.noProgressCount || 0) + 1;
+    job.lastNoProgressAt = now2();
+    await appendLoopLog2(directory, "goal-no-progress", { sessionID, job: job.name || job.id, count: job.noProgressCount, limit });
+    if (job.noProgressCount >= limit) {
+      job.paused = true;
+      job.goalNoProgressPausedAt = now2();
+      job.goalNoProgressReason = `Paused after ${job.noProgressCount} turn(s) without recorded progress. Resume with /loop-goal-resume after adjusting the goal or evidence.`;
+      await toast2(client, job.goalNoProgressReason, "warning");
+      await appendLoopLog2(directory, "goal-no-progress-paused", { sessionID, job: job.name || job.id, count: job.noProgressCount, limit });
+    }
+    return job;
+  }
+  async function runGoalChecks(directory, sessionID, job, client) {
+    if (!isGoalJob(job) || !job.goalChecks?.length || ["completed", "blocked"].includes(job.goalStatus))
+      return job;
+    const results = [];
+    for (const command of job.goalChecks) {
+      if (job.safe && dangerousShell(command)) {
+        results.push({ command, code: -1, output: "Blocked dangerous command in safe mode." });
+        continue;
+      }
+      const result = await runShellCommand2(command, directory, job.timeoutMs || 300000);
+      results.push({ command, code: result.code, output: (result.stdout + `
+` + result.stderr).slice(0, 1200) });
+    }
+    job.lastGoalCheckAt = now2();
+    job.lastGoalChecks = results;
+    const allPassed = results.length > 0 && results.every((item) => item.code === 0);
+    if (allPassed) {
+      job.goalChecksPassedAt = now2();
+      job.failureCount = 0;
+      await toast2(client, "Goal checks passed.", "success");
+      if (job.goalCompleteWhenChecksPass) {
+        job.goalStatus = "completed";
+        job.enabled = false;
+        job.paused = true;
+        job.goalCompletedAt = now2();
+        job.goalSummary = job.goalSummary || "All configured goal checks passed.";
+        job.goalEvidence = results.map((item) => `${item.command}: exit ${item.code}`).join(`
+`);
+        await appendLoopLog2(directory, "goal-auto-complete", { sessionID, job: job.name || job.id });
+      }
+    } else {
+      job.failureCount = (job.failureCount || 0) + 1;
+      job.lastVerifyFailure = results.map((item) => `${item.command}
+exit=${item.code}
+${item.output}`).join(`
+
+`).slice(0, 4000);
+      await toast2(client, "Goal checks still failing; goal will continue on next idle turn.", "warning");
+    }
+    await appendLoopLog2(directory, "goal-checks", { sessionID, job: job.name || job.id, results: results.map((item) => ({ command: item.command, code: item.code })) });
+    return job;
+  }
+  return { runGoalChecks, applyGoalNoProgressGuard };
+}
+
 // src/source/legacy-v1.js
 var SERVICE2 = "opencode-loop";
 var DEFAULT_ACTIVE_GUARD_MS = 45000;
@@ -1726,6 +1806,7 @@ var SESSION_STATUS_CACHE_MS = 1500;
 var MAX_SCAN_FILES = 200;
 var MAX_SCAN_BYTES = 2000000;
 var DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180000;
+var { runGoalChecks, applyGoalNoProgressGuard } = createGoalExecutionPolicy({ runShellCommand, dangerousShell, toast, appendLoopLog, now });
 var activeRuns = new Map;
 var runLocks = new Map;
 var loopCompactionRequests = new Map;
@@ -2206,71 +2287,6 @@ async function recoverActiveDispatchFailure(directory, client, sessionID, jobId,
   await toast(client, `Loop dispatch failed${job?.paused ? " and paused" : ""}: ${message}`, job?.paused ? "error" : "warning");
   await scheduleDueWork(directory, client, sessionID, BUSY_RETRY_MS);
   return true;
-}
-async function applyGoalNoProgressGuard(directory, client, sessionID, job, beforeJob) {
-  if (!isGoalJob(job) || ["completed", "blocked"].includes(job.goalStatus) || job.paused || job.enabled === false)
-    return job;
-  const limit = Number(job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS);
-  if (!Number.isFinite(limit) || limit <= 0)
-    return job;
-  if (goalMadeMeaningfulProgress(beforeJob, job)) {
-    job.noProgressCount = 0;
-    job.lastProgressAt = now();
-    return job;
-  }
-  job.noProgressCount = (job.noProgressCount || 0) + 1;
-  job.lastNoProgressAt = now();
-  await appendLoopLog(directory, "goal-no-progress", { sessionID, job: job.name || job.id, count: job.noProgressCount, limit });
-  if (job.noProgressCount >= limit) {
-    job.paused = true;
-    job.goalNoProgressPausedAt = now();
-    job.goalNoProgressReason = `Paused after ${job.noProgressCount} turn(s) without recorded progress. Resume with /loop-goal-resume after adjusting the goal or evidence.`;
-    await toast(client, job.goalNoProgressReason, "warning");
-    await appendLoopLog(directory, "goal-no-progress-paused", { sessionID, job: job.name || job.id, count: job.noProgressCount, limit });
-  }
-  return job;
-}
-async function runGoalChecks(directory, sessionID, job, client) {
-  if (!isGoalJob(job) || !job.goalChecks?.length || ["completed", "blocked"].includes(job.goalStatus))
-    return job;
-  const results = [];
-  for (const command of job.goalChecks) {
-    if (job.safe && dangerousShell(command)) {
-      results.push({ command, code: -1, output: "Blocked dangerous command in safe mode." });
-      continue;
-    }
-    const result = await runShellCommand(command, directory, job.timeoutMs || 300000);
-    results.push({ command, code: result.code, output: (result.stdout + `
-` + result.stderr).slice(0, 1200) });
-  }
-  job.lastGoalCheckAt = now();
-  job.lastGoalChecks = results;
-  const allPassed = results.length > 0 && results.every((item) => item.code === 0);
-  if (allPassed) {
-    job.goalChecksPassedAt = now();
-    job.failureCount = 0;
-    await toast(client, "Goal checks passed.", "success");
-    if (job.goalCompleteWhenChecksPass) {
-      job.goalStatus = "completed";
-      job.enabled = false;
-      job.paused = true;
-      job.goalCompletedAt = now();
-      job.goalSummary = job.goalSummary || "All configured goal checks passed.";
-      job.goalEvidence = results.map((item) => `${item.command}: exit ${item.code}`).join(`
-`);
-      await appendLoopLog(directory, "goal-auto-complete", { sessionID, job: job.name || job.id });
-    }
-  } else {
-    job.failureCount = (job.failureCount || 0) + 1;
-    job.lastVerifyFailure = results.map((item) => `${item.command}
-exit=${item.code}
-${item.output}`).join(`
-
-`).slice(0, 4000);
-    await toast(client, "Goal checks still failing; goal will continue on next idle turn.", "warning");
-  }
-  await appendLoopLog(directory, "goal-checks", { sessionID, job: job.name || job.id, results: results.map((item) => ({ command: item.command, code: item.code })) });
-  return job;
 }
 async function finalizeActiveRun(directory, client, sessionID, options = {}) {
   const active = activeRuns.get(sessionID);
