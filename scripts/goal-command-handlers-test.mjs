@@ -82,7 +82,7 @@ assert.throws(() => createGoalCommandHandlers({ addLoop() {} }), /scheduleDueWor
   assert.match(text, /progress=1/)
   assert.match(text, /no-progress=1\/3/)
   assert.match(text, /completion-rejected/)
-  assert.match(text, /2\. g2: paused/)
+  assert.match(text, /2\. g2 \(g2\): blocked/)
 }
 
 {
