@@ -1,5 +1,6 @@
 name: Commit Goal command handler refactor
 
+# Temporary branch-only workflow; rerun after status fixture correction.
 on:
   push:
     branches: [refactor-goal-command-handlers-20260814]
