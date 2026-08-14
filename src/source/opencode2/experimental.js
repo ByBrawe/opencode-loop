@@ -10,6 +10,8 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
     if (!capabilities.commandTransform) {
       throw new Error("OpenCode 2 command.transform capability is unavailable")
     }
+    const subscribe = () => ctx.event.subscribe()
+    void subscribe
     void createOpenCode2HostContract
     await ctx.command.transform(() => {})
   },
