@@ -6,8 +6,6 @@ import process from "node:process"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
-const pluginID = "bybrawe.opencode-loop.v2.experimental"
-const sentinelID = "bybrawe.opencode-loop.v2-canary-sentinel"
 
 function run(command, args, { cwd, env, allowFailure = false, timeout = 60_000 } = {}) {
   const result = spawnSync(command, args, {
@@ -42,17 +40,20 @@ function parseJSONOutput(result, label) {
   }
 }
 
-function collectPluginIDs(value) {
-  if (Array.isArray(value)) return value.flatMap(collectPluginIDs)
-  if (typeof value === "string") return [value]
-  if (!value || typeof value !== "object") return []
-  const direct = [value.id, value.pluginID, value.name].filter((item) => typeof item === "string")
-  const nested = [value.data, value.plugins, value.items].flatMap((item) => collectPluginIDs(item))
-  return [...direct, ...nested]
-}
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-function uniquePluginIDs(value) {
-  return [...new Set(collectPluginIDs(value))]
+async function waitForMarker(file, label, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs
+  let lastError
+  while (Date.now() < deadline) {
+    try {
+      return JSON.parse(await readFile(file, "utf8"))
+    } catch (error) {
+      lastError = error
+      await delay(50)
+    }
+  }
+  throw new Error(`${label} marker was not written: ${String(lastError ?? "timeout")}`)
 }
 
 async function failureLog(env) {
@@ -77,11 +78,11 @@ async function main() {
   const data = path.join(home, ".local", "share")
   const state = path.join(home, ".local", "state")
   const pluginDirectory = path.join(project, ".opencode", "plugins")
-  const pluginFile = path.join(root, "src", "source", "opencode2", "experimental.js")
-  const adapterBridge = path.join(pluginDirectory, "opencode-loop-v2-canary.js")
+  const stablePlugin = path.join(root, "src", "source", "v1.js")
   const sentinelFile = path.join(pluginDirectory, "opencode-loop-v2-sentinel.js")
-  const sentinelURL = pathToFileURL(sentinelFile).href
-  const adapterURL = pathToFileURL(adapterBridge).href
+  const loopBridge = path.join(pluginDirectory, "opencode-loop-v2-stable-bridge.js")
+  const sentinelMarker = path.join(temp, "sentinel-loaded.json")
+  const loopMarker = path.join(temp, "loop-loaded.json")
 
   await Promise.all([
     mkdir(pluginDirectory, { recursive: true }),
@@ -90,14 +91,33 @@ async function main() {
     mkdir(state, { recursive: true }),
   ])
 
-  await writeFile(sentinelFile, `export default { id: ${JSON.stringify(sentinelID)}, setup: async () => {} }\n`)
-  await writeFile(adapterBridge, `export { default } from ${JSON.stringify(pathToFileURL(pluginFile).href)}\n`)
-  await writeFile(path.join(project, "README.md"), "# OpenCode Loop V2 host canary\n")
+  await writeFile(sentinelFile, [
+    `import { writeFile } from "node:fs/promises"`,
+    `export default async () => {`,
+    `  await writeFile(${JSON.stringify(sentinelMarker)}, JSON.stringify({ loaded: true }), "utf8")`,
+    `  return {}`,
+    `}`,
+    ``,
+  ].join("\n"))
+
+  await writeFile(loopBridge, [
+    `import { writeFile } from "node:fs/promises"`,
+    `import stablePlugin from ${JSON.stringify(pathToFileURL(stablePlugin).href)}`,
+    `export default async (input) => {`,
+    `  const hooks = await stablePlugin(input)`,
+    `  const hookKeys = Object.keys(hooks || {}).sort()`,
+    `  await writeFile(${JSON.stringify(loopMarker)}, JSON.stringify({ loaded: true, hookKeys }), "utf8")`,
+    `  return hooks`,
+    `}`,
+    ``,
+  ].join("\n"))
+
+  await writeFile(path.join(project, "README.md"), "# OpenCode Loop V2 compatibility canary\n")
   await writeFile(path.join(project, "opencode.json"), `${JSON.stringify({
     $schema: "https://opencode.ai/config.json",
     plugins: [
       "./.opencode/plugins/opencode-loop-v2-sentinel.js",
-      "./.opencode/plugins/opencode-loop-v2-canary.js",
+      "./.opencode/plugins/opencode-loop-v2-stable-bridge.js",
     ],
   }, null, 2)}\n`)
 
@@ -110,7 +130,6 @@ async function main() {
     XDG_STATE_HOME: state,
     OPENCODE_DB: path.join(data, "opencode", "opencode-loop-v2-canary.db"),
     OPENCODE_LOG_LEVEL: "DEBUG",
-    OPENCODE_CONFIG_CONTENT: JSON.stringify({ plugins: [sentinelURL, adapterURL] }),
     CI: "true",
   }
 
@@ -129,54 +148,31 @@ async function main() {
     const health = output(run("opencode2", ["api", "get", "/api/health"], { cwd: project, env }))
     if (!health) throw new Error("OpenCode 2 health API returned no output")
 
-    const plainPluginResult = run("opencode2", ["api", "get", "/api/plugin"], { cwd: project, env })
-    const plainResponse = parseJSONOutput(plainPluginResult, "GET /api/plugin from project cwd")
-    const plainIDs = uniquePluginIDs(plainResponse)
-
     const pluginPath = `/api/plugin?location%5Bdirectory%5D=${encodeURIComponent(project)}`
-    const scopedPluginResult = run("opencode2", ["api", "get", pluginPath], { cwd: project, env })
-    const scopedResponse = parseJSONOutput(scopedPluginResult, "GET /api/plugin at project Location")
-
-    if (scopedResponse?._tag) {
-      throw new Error(`project-scoped /api/plugin rejected the Location: ${JSON.stringify(scopedResponse)}`)
-    }
-    if (scopedResponse?.location?.directory !== project) {
-      throw new Error(`OpenCode 2 resolved the wrong Location: expected ${project}, got ${String(scopedResponse?.location?.directory)}`)
+    const pluginResult = run("opencode2", ["api", "get", pluginPath], { cwd: project, env })
+    const response = parseJSONOutput(pluginResult, "GET /api/plugin at project Location")
+    if (response?._tag) throw new Error(`project-scoped /api/plugin rejected the Location: ${JSON.stringify(response)}`)
+    if (response?.location?.directory !== project) {
+      throw new Error(`OpenCode 2 resolved the wrong Location: expected ${project}, got ${String(response?.location?.directory)}`)
     }
 
-    const scopedIDs = uniquePluginIDs(scopedResponse)
-    const ids = [...new Set([...plainIDs, ...scopedIDs])]
-    if (!ids.includes(sentinelID)) {
-      throw new Error([
-        `OpenCode 2 did not activate the minimal sentinel. Active IDs: ${JSON.stringify(ids)}`,
-        `Plain /api/plugin IDs: ${JSON.stringify(plainIDs)}`,
-        `Scoped /api/plugin IDs: ${JSON.stringify(scopedIDs)}`,
-        `Plain response: ${String(plainPluginResult.stdout ?? "")}`,
-        `Scoped response: ${String(scopedPluginResult.stdout ?? "")}`,
-      ].join("\n"))
-    }
-    if (!ids.includes(pluginID)) {
-      throw new Error([
-        `OpenCode 2 activated the sentinel but not ${pluginID}. Active IDs: ${JSON.stringify(ids)}`,
-        `Plain /api/plugin IDs: ${JSON.stringify(plainIDs)}`,
-        `Scoped /api/plugin IDs: ${JSON.stringify(scopedIDs)}`,
-        `Plain response: ${String(plainPluginResult.stdout ?? "")}`,
-        `Scoped response: ${String(scopedPluginResult.stdout ?? "")}`,
-      ].join("\n"))
+    const sentinel = await waitForMarker(sentinelMarker, "legacy sentinel")
+    const loop = await waitForMarker(loopMarker, "stable Loop plugin")
+    if (sentinel?.loaded !== true) throw new Error("legacy sentinel did not finish initialization")
+    if (loop?.loaded !== true) throw new Error("stable Loop plugin did not finish initialization")
+    if (!Array.isArray(loop.hookKeys) || !loop.hookKeys.includes("event") || !loop.hookKeys.includes("command.execute.before")) {
+      throw new Error(`stable Loop plugin returned an unexpected hook surface: ${JSON.stringify(loop?.hookKeys)}`)
     }
 
     console.log(JSON.stringify({
       ok: true,
+      compatibility: "stable-v1-plugin-on-opencode2",
       platform: process.platform,
       node: process.version,
       opencode2Version: version,
       health,
-      projectDirectory: scopedResponse.location.directory,
-      sentinelID,
-      pluginID,
-      plainPluginIDs: plainIDs,
-      scopedPluginIDs: scopedIDs,
-      activePluginIDs: ids,
+      projectDirectory: response.location.directory,
+      stableHookKeys: loop.hookKeys,
     }, null, 2))
   } catch (error) {
     const logs = await failureLog(env)
