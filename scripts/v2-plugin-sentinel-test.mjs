@@ -1,5 +1,9 @@
 import assert from "node:assert/strict"
-import plugin, { OPENCODE_LOOP_V2_PLUGIN_ID } from "../src/source/opencode2/experimental.js"
+import plugin, {
+  OPENCODE_LOOP_V2_PLUGIN_ID,
+  createOpenCode2ExperimentalHost,
+  mapOpenCode2PromptRequest,
+} from "../src/source/opencode2/experimental.js"
 import {
   OPENCODE_LOOP_V2_COMMAND_SOURCE,
   OPENCODE_LOOP_V2_HOST_REQUIREMENTS,
@@ -18,20 +22,63 @@ assert.equal(OPENCODE_LOOP_V2_RUNTIME_IMPLEMENTED, false)
 assert.deepEqual(OPENCODE_LOOP_V2_HOST_REQUIREMENTS, ["event.subscribe", "session.prompt"])
 assert.deepEqual(OPENCODE_LOOP_V2_RUNTIME_REQUIREMENTS, ["event.subscribe", "session.prompt", "runtime.adapter"])
 
-let transforms = 0
-let registered
-const currentContext = {
-  command: {
-    transform: async (callback) => {
-      transforms += 1
-      registered = callback
+async function* emptyStream() {}
+
+let subscribeCalls = 0
+let cleanupCalls = 0
+const promptCalls = []
+const context = {
+  command: { transform: async () => {} },
+  event: {
+    subscribe: async () => {
+      subscribeCalls += 1
+      return { stream: emptyStream(), dispose: async () => { cleanupCalls += 1 } }
+    },
+  },
+  session: {
+    prompt: async (request) => {
+      promptCalls.push(request)
+      return { id: "msg_test", sessionID: request.sessionID, prompt: request.prompt }
     },
   },
 }
-const setupResult = await plugin.setup(currentContext)
-assert.equal(setupResult, undefined)
+
+const host = createOpenCode2ExperimentalHost(context)
+assert.equal(await host.start(), true)
+assert.equal(subscribeCalls, 1)
+const admitted = await host.prompt({ sessionID: "ses_test", text: "continue the project" })
+assert.equal(admitted.id, "msg_test")
+assert.deepEqual(promptCalls, [{
+  sessionID: "ses_test",
+  prompt: { text: "continue the project" },
+  resume: true,
+}])
+assert.equal(await host.dispose(), true)
+assert.equal(cleanupCalls, 1)
+
+assert.deepEqual(mapOpenCode2PromptRequest({ sessionID: "ses_a", text: "next" }), {
+  sessionID: "ses_a",
+  prompt: { text: "next" },
+  resume: true,
+})
+assert.throws(
+  () => mapOpenCode2PromptRequest({ sessionID: "ses_a", text: "next", agent: "build" }),
+  /does not yet support/,
+)
+assert.throws(
+  () => mapOpenCode2PromptRequest({ sessionID: "ses_a", text: "next", noReply: true }),
+  /does not yet support/,
+)
+
+let transforms = 0
+let setupSubscriptions = 0
+await plugin.setup({
+  command: { transform: async () => { transforms += 1 } },
+  event: { subscribe: async () => { setupSubscriptions += 1; return { stream: emptyStream() } } },
+  session: { prompt: async () => ({}) },
+})
 assert.equal(transforms, 1)
-assert.equal(typeof registered, "function")
+assert.equal(setupSubscriptions, 1)
 
 const currentDraft = {
   list: () => [],
@@ -39,13 +86,11 @@ const currentDraft = {
   update: () => {},
   remove: () => {},
 }
-await registered(currentDraft)
-
-assert.deepEqual(inspectOpenCode2Context(currentContext), {
+assert.deepEqual(inspectOpenCode2Context(context), {
   commandTransform: true,
-  eventSubscribe: false,
+  eventSubscribe: true,
   sessionHook: false,
-  sessionPrompt: false,
+  sessionPrompt: true,
   toolTransform: false,
   toolHook: false,
 })
@@ -55,33 +100,21 @@ assert.deepEqual(inspectOpenCode2CommandDraft(currentDraft), {
   update: true,
   remove: true,
 })
+const status = openCode2LoopRuntimeStatus(context, currentDraft)
+assert.deepEqual(status.hostBlockers, [])
+assert.deepEqual(status.blockers, ["runtime.adapter"])
+assert.equal(status.hostReady, true)
+assert.equal(status.implementationReady, false)
+assert.equal(status.ready, false)
+assert.equal(status.commandSource, "file-definitions")
 
-const currentStatus = openCode2LoopRuntimeStatus(currentContext, currentDraft)
-assert.deepEqual(currentStatus.hostBlockers, ["event.subscribe", "session.prompt"])
-assert.deepEqual(currentStatus.blockers, ["event.subscribe", "session.prompt", "runtime.adapter"])
-assert.equal(currentStatus.hostReady, false)
-assert.equal(currentStatus.implementationReady, false)
-assert.equal(currentStatus.ready, false)
-assert.equal(currentStatus.commandSource, "file-definitions")
-
-const futureContext = {
-  command: { transform: async () => {} },
-  event: { subscribe: async () => {} },
-  session: { prompt: async () => ({}) },
-}
-const futureStatus = openCode2LoopRuntimeStatus(futureContext, currentDraft)
-assert.deepEqual(futureStatus.hostBlockers, [])
-assert.deepEqual(futureStatus.blockers, ["runtime.adapter"])
-assert.equal(futureStatus.hostReady, true)
-assert.equal(futureStatus.implementationReady, false)
-assert.equal(futureStatus.ready, false)
-
-let missingCapabilityFailed = false
-try {
-  await plugin.setup({})
-} catch (error) {
-  missingCapabilityFailed = /command\.transform capability is unavailable/.test(String(error))
-}
-assert.equal(missingCapabilityFailed, true)
+await assert.rejects(
+  () => plugin.setup({ event: {}, session: { prompt: async () => ({}) } }),
+  /event\.subscribe capability is unavailable/,
+)
+await assert.rejects(
+  () => plugin.setup({ event: { subscribe: async () => ({ stream: emptyStream() }) }, session: {} }),
+  /session\.prompt capability is unavailable/,
+)
 
 console.log("OpenCode 2 plugin sentinel contract passed")
