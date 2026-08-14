@@ -47,18 +47,23 @@ export function createCompactionRuntime(options = {}) {
     return Boolean(pending && pending.jobId === jobId && pending.completedAt)
   }
 
+  async function start(directory, client, sessionID, jobId, model, resumeAfter = false) {
+    begin(sessionID, jobId, resumeAfter)
+    const ok = await compactSession(directory, client, sessionID, model)
+    if (!ok) clear(sessionID)
+    return ok
+  }
+
   async function maybeCompact(directory, client, sessionID, job) {
     const dueRuns = job.compactEveryRuns > 0 && (job.runCount || 0) > 0 && (job.runCount || 0) % job.compactEveryRuns === 0 && job.lastCompactRunCount !== job.runCount
     const dueTime = job.compactEveryMs > 0 && (!job.lastCompactAt || now() - job.lastCompactAt >= job.compactEveryMs)
     if (!dueRuns && !dueTime) return { job, started: false }
 
-    begin(sessionID, job.id, true)
-    if (await compactSession(directory, client, sessionID, job.model)) {
+    if (await start(directory, client, sessionID, job.id, job.model, true)) {
       job.lastCompactAt = now()
       job.lastCompactRunCount = job.runCount || 0
       return { job, started: true }
     }
-    clear(sessionID)
     return { job, started: false }
   }
 
@@ -108,6 +113,7 @@ export function createCompactionRuntime(options = {}) {
     clear,
     clearForActiveRun,
     isCompleted,
+    start,
     maybeCompact,
     noteStarted,
     finalize,
