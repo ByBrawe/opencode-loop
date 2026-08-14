@@ -13,12 +13,21 @@ export default {
     if (!plugin || typeof plugin.setup !== "function") throw new Error("experimental V2 plugin has no setup function")
     const cleanup = await plugin.setup(ctx)
 
+    const sessionMethods = Object.fromEntries(
+      Object.keys(ctx?.session || {})
+        .sort()
+        .map((key) => [key, typeof ctx.session[key]]),
+    )
+
     await writeFile(marker, JSON.stringify({
       id: plugin.id,
       activated: true,
       commandTransform: typeof ctx?.command?.transform === "function",
       eventSubscribe: typeof ctx?.event?.subscribe === "function",
       sessionPrompt: typeof ctx?.session?.prompt === "function",
+      sessionCommand: typeof ctx?.session?.command === "function",
+      sessionShell: typeof ctx?.session?.shell === "function",
+      sessionMethods,
       toolTransform: typeof ctx?.tool?.transform === "function",
     }, null, 2), "utf8")
 
