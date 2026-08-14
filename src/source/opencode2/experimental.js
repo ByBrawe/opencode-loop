@@ -12,8 +12,10 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
     }
     const subscribe = () => ctx.event.subscribe()
     const sendPrompt = (request) => ctx.session.prompt(request)
-    void subscribe
-    void sendPrompt
+    const options = {}
+    options.subscribe = subscribe
+    options.sendPrompt = sendPrompt
+    void options
     void createOpenCode2HostContract
     await ctx.command.transform(() => {})
   },
