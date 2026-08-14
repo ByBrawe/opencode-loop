@@ -253,10 +253,11 @@ export function createOpenCode2PromptRuntime(options = {}) {
       return runIdlePrompt(event)
     }
     if (event?.kind === "session" && event?.action === "status" && scope) {
-      const isIdle = event.status === "idle"
-      idle.set(scope.key, isIdle)
-      if (isIdle) return await enqueueScope(scope, () => runDuePrompt(scope))
-      return { handled: true, dispatched: false }
+      idle.set(scope.key, event.status === "idle")
+      return await enqueueScope(scope, async () => {
+        await scheduleScope(scope)
+        return { handled: true, dispatched: false }
+      })
     }
     if (event?.kind === "session" && event?.action === "deleted" && scope) {
       clearScope(scope)
