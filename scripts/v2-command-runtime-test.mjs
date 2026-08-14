@@ -71,7 +71,7 @@ try {
       name: "loop",
       sessionID: "ses_no_command",
       directory,
-      arguments: '0s --command "/compact"',
+      arguments: '0s --command "/review"',
     })
     assert.equal(unavailable.accepted, false)
     assert.ok(unavailable.blockers.includes("command-capability"))
