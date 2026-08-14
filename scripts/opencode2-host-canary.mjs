@@ -283,16 +283,15 @@ async function main() {
     if (!ids.includes(sentinelID) || !ids.includes(pluginID)) throw new Error(`OpenCode 2 plugin activation timed out. Active IDs: ${JSON.stringify(ids)}`)
 
     run("opencode2", ["service", "stop"], { cwd: project, env, allowFailure: true, timeout: 15_000 })
-    const serverPassword = String(run("opencode2", ["service", "password"], { cwd: project, env, timeout: 15_000 }).stdout ?? "").trim()
-    assert.ok(serverPassword, "OpenCode 2 service password command returned an empty password")
-    const serverAuthorization = `Basic ${Buffer.from(`opencode:${serverPassword}`).toString("base64")}`
-
     const port = await reservePort()
     server = spawnCommand("opencode2", ["serve", "--hostname", "127.0.0.1", "--port", String(port)], { cwd: project, env })
     server.stdout?.on("data", (chunk) => { serverLog = (serverLog + String(chunk)).slice(-80_000) })
     server.stderr?.on("data", (chunk) => { serverLog = (serverLog + String(chunk)).slice(-80_000) })
     await waitForTcp(port, server, () => serverLog)
 
+    const passwordMatch = serverLog.match(/server password\s+([^\s]+)/)
+    assert.ok(passwordMatch?.[1], `OpenCode 2 serve did not expose its canary password\n${serverLog}`)
+    const serverAuthorization = `Basic ${Buffer.from(`opencode:${passwordMatch[1]}`).toString("base64")}`
     const baseURL = `http://127.0.0.1:${port}`
     const locationQuery = `location%5Bdirectory%5D=${encodeURIComponent(project)}`
     const api = async (pathname, init = {}) => {
