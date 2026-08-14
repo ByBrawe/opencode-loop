@@ -1,4 +1,7 @@
 import assert from "node:assert/strict"
+import { mkdtemp, readFile, rm } from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 
 import OpenCodeLoopV2ExperimentalPlugin from "../src/source/opencode2/experimental.js"
 import { createOpenCode2RuntimeAdapter } from "../src/source/opencode2/runtime-adapter.js"
@@ -36,6 +39,15 @@ function controllableStream() {
 
 async function settle() {
   await new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+async function waitFor(predicate, description, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await predicate()) return
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  throw new Error(`timed out waiting for ${description}`)
 }
 
 {
@@ -106,6 +118,58 @@ async function settle() {
   await cleanup()
   assert.equal(commandDisposals, 1, "plugin cleanup must dispose command.transform registration")
   assert.equal(events.returns(), 1, "plugin cleanup must dispose the V2 event subscription")
+}
+
+{
+  const directory = await mkdtemp(path.join(os.tmpdir(), "opencode-loop-v2-wiring-"))
+  const sessionID = "ses_v2_wiring"
+  const events = controllableStream()
+  const prompts = []
+  const ctx = {
+    command: { transform: async () => ({ dispose: async () => {} }) },
+    event: { subscribe: () => events.stream },
+    session: {
+      prompt: async (input) => {
+        prompts.push(structuredClone(input))
+        return { accepted: true }
+      },
+    },
+  }
+
+  const stateFile = path.join(directory, ".opencode", "opencode-loop", `${sessionID}.json`)
+  const readState = async () => JSON.parse(await readFile(stateFile, "utf8"))
+  const cleanup = await OpenCodeLoopV2ExperimentalPlugin.setup(ctx)
+  try {
+    events.push({
+      directory,
+      payload: {
+        type: "command.executed",
+        properties: { sessionID, name: "loop", arguments: "0s --max-runs 2 continue the wiring test" },
+      },
+    })
+    await waitFor(async () => {
+      try { return (await readState()).jobs?.length === 1 } catch { return false }
+    }, "V2 loop state creation")
+
+    events.push({ directory, payload: { type: "session.idle", properties: { sessionID } } })
+    await waitFor(() => prompts.length === 1, "first V2 prompt dispatch")
+    assert.equal(prompts[0].sessionID, sessionID)
+    assert.ok(prompts[0].text.includes("AUTONOMOUS OPENCODE LOOP ITERATION"))
+    assert.ok(prompts[0].text.includes("continue the wiring test"))
+
+    events.push({ directory, payload: { type: "session.idle", properties: { sessionID } } })
+    await waitFor(() => prompts.length === 2, "second V2 prompt dispatch")
+    const state = await readState()
+    assert.equal(state.jobs[0].runCount, 2)
+    assert.equal(state.jobs[0].enabled, false)
+
+    events.push({ directory, payload: { type: "session.idle", properties: { sessionID } } })
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    assert.equal(prompts.length, 2, "max-runs must stop a third V2 prompt")
+  } finally {
+    await cleanup?.()
+    await rm(directory, { recursive: true, force: true })
+  }
 }
 
 {
