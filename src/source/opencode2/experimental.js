@@ -1,5 +1,5 @@
 import { inspectOpenCode2Context } from "./capabilities.js"
-import { createOpenCode2HostContract } from "./host-contract.js"
+import { createOpenCode2RuntimeAdapter } from "./runtime-adapter.js"
 import { handleOpenCode2LoopStatus } from "./status.js"
 
 export const OPENCODE_LOOP_V2_PLUGIN_ID = "bybrawe.opencode-loop.v2.experimental"
@@ -12,36 +12,35 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
       throw new Error("OpenCode 2 command.transform capability is unavailable")
     }
 
-    await ctx.command.transform(() => {})
-    if (!capabilities.eventSubscribe || !capabilities.sessionPrompt) return undefined
+    const commandRegistration = await ctx.command.transform(() => {})
+    if (!capabilities.eventSubscribe || !capabilities.sessionPrompt) {
+      await commandRegistration?.dispose?.()
+      return undefined
+    }
 
-    const subscribe = () => ctx.event.subscribe()
-    const sendPrompt = (request) => ctx.session.prompt({
-      sessionID: request.sessionID,
-      noReply: request.noReply,
-      ...(request.agent === undefined ? {} : { agent: request.agent }),
-      ...(request.model === undefined ? {} : { model: request.model }),
-      parts: [{ type: "text", text: request.text }],
-    })
-
-    let host
-    const options = {
-      subscribe,
-      sendPrompt,
+    let runtime
+    runtime = createOpenCode2RuntimeAdapter(ctx, {
       onEvent: async (event) => {
         if (event.kind !== "command" || event.action !== "executed" || event.name !== "loop-status") return
         await handleOpenCode2LoopStatus({
           directory: event.directory,
           sessionID: event.sessionID,
-          prompt: host.prompt,
+          prompt: runtime.prompt,
         })
       },
+    })
+
+    try {
+      await runtime.start()
+    } catch (error) {
+      await commandRegistration?.dispose?.().catch(() => undefined)
+      throw error
     }
-    host = createOpenCode2HostContract(options)
-    const startHost = host.start.bind(host)
-    const disposeHost = host.dispose.bind(host)
-    await startHost()
-    return disposeHost
+
+    return async () => {
+      await runtime.dispose("plugin-cleanup")
+      await commandRegistration?.dispose?.()
+    }
   },
 }
 
