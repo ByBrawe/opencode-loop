@@ -55,14 +55,17 @@ jobs:
           node --check src/source/runtime/scope.js
           node --check src/source/runtime/timers.js
           node --check src/source/runtime/session-manager.js
+          node --check src/source/opencode2/event-bridge.js
           node --check src/source/opencode2/experimental.js
           node --check scripts/runtime-contract-test.mjs
           node --check scripts/runtime-scope-test.mjs
           node --check scripts/session-manager-test.mjs
+          node --check scripts/v2-event-bridge-test.mjs
           node --check scripts/v2-plugin-sentinel-test.mjs
           node scripts/runtime-contract-test.mjs
           node scripts/runtime-scope-test.mjs
           node scripts/session-manager-test.mjs
+          node scripts/v2-event-bridge-test.mjs
           node scripts/v2-plugin-sentinel-test.mjs
 
       - run: npm test
