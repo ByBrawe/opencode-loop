@@ -21,25 +21,17 @@ jobs:
         run: npm install -g @opencode-ai/cli@next
       - name: Show V2 version
         run: opencode2 --version
-      - name: Verify command transform on one long-lived V2 host
+      - name: Verify command transform on registered V2 daemon
         working-directory: .v2-probe
         shell: bash
         run: |
-          OPENCODE_SERVER_PASSWORD= opencode2 serve --hostname 127.0.0.1 --port 4096 > server.log 2>&1 &
-          server_pid=$!
-          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
-          for attempt in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:4096/api/health >/dev/null; then break; fi
-            sleep 1
-          done
-          for attempt in $(seq 1 20); do
-            curl -fsS -H "x-opencode-directory:$(pwd)" http://127.0.0.1:4096/api/command > command-list.txt
+          for attempt in $(seq 1 12); do
+            opencode2 api -H "x-opencode-directory:$(pwd)" get /api/command > command-list.txt
+            grep -F "v2-probe" command-list.txt
             if grep -F "LOOP_V2_PROBE_ACTIVE" command-list.txt; then
-              grep -F "v2-probe" command-list.txt
               exit 0
             fi
-            sleep 1
+            node -e "setTimeout(() => {}, 500)"
           done
           cat command-list.txt
-          cat server.log
           exit 1
