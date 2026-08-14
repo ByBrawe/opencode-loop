@@ -330,7 +330,7 @@ async function main() {
 
     await api(`/api/session/${encodeURIComponent(sessionID)}/prompt`, {
       method: "POST",
-      body: JSON.stringify({ prompt: { text: "Start the real OpenCode 2 Loop canary. Reply exactly OK." }, resume: true }),
+      body: JSON.stringify({ text: "Start the real OpenCode 2 Loop canary. Reply exactly OK.", resume: true }),
       signal: AbortSignal.timeout(60_000),
     })
 
