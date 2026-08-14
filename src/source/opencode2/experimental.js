@@ -8,14 +8,13 @@ export const OpenCodeLoopV2ExperimentalPlugin = define({
   id: OPENCODE_LOOP_V2_PLUGIN_ID,
   async setup(ctx) {
     const capabilities = inspectOpenCode2Context(ctx)
-    if (!capabilities.commandTransform) {
-      throw new Error("OpenCode 2 command.transform capability is unavailable")
+
+    if (capabilities.commandTransform) {
+      await ctx.command.transform(() => {})
     }
 
-    await ctx.command.transform(() => {})
-
     const bridge = createOpenCode2EventBridge()
-    if (typeof ctx?.event?.subscribe === "function") {
+    if (capabilities.eventSubscribe) {
       await bridge.attach(ctx.event.subscribe.bind(ctx.event))
     }
 
