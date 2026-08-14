@@ -46,6 +46,8 @@ assert.deepEqual(inspectOpenCode2Context(currentContext), {
   eventSubscribe: false,
   sessionHook: false,
   sessionPrompt: false,
+  sessionCommand: false,
+  sessionShell: false,
   toolTransform: false,
   toolHook: false,
 })
@@ -67,8 +69,14 @@ assert.equal(currentStatus.commandSource, "file-definitions")
 const futureContext = {
   command: { transform: async () => {} },
   event: { subscribe: async () => {} },
-  session: { prompt: async () => ({}) },
+  session: {
+    prompt: async () => ({}),
+    command: async () => ({}),
+  },
 }
+const futureCapabilities = inspectOpenCode2Context(futureContext)
+assert.equal(futureCapabilities.sessionCommand, true)
+assert.equal(futureCapabilities.sessionShell, false)
 const futureStatus = openCode2LoopRuntimeStatus(futureContext, currentDraft)
 assert.deepEqual(futureStatus.hostBlockers, [])
 assert.deepEqual(futureStatus.blockers, ["runtime.adapter"])
