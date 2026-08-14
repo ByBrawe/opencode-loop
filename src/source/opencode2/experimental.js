@@ -10,7 +10,8 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
     if (!capabilities.commandTransform) {
       throw new Error("OpenCode 2 command.transform capability is unavailable")
     }
-    void createOpenCode2EventBridge
+    const bridge = createOpenCode2EventBridge()
+    void bridge
     await ctx.command.transform(() => {})
   },
 }
