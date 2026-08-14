@@ -2,6 +2,10 @@ name: V2 Host Activation
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/v2-host-activation.yml"
 
 permissions:
   contents: read
