@@ -1,6 +1,6 @@
 import { createOpenCode2EventBridge } from "./event-bridge.js"
 
-export async function attachOpenCode2Runtime(ctx) {
+export async function setupOpenCode2Lifecycle(ctx) {
   if (typeof ctx?.event?.subscribe !== "function") {
     throw new Error("OpenCode 2 event.subscribe capability is unavailable")
   }
