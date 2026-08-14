@@ -66,9 +66,9 @@ try {
   assert.equal(intervalRemoved.count, 1)
   assert.equal((await readState()).jobs.length, 1)
 
-  const command = await runtime.onEvent({ kind: "command", action: "executed", name: "loop", sessionID, directory, arguments: "0s --command /compact" })
+  const command = await runtime.onEvent({ kind: "command", action: "executed", name: "loop", sessionID, directory, arguments: "0s --command /review" })
   assert.equal(command.accepted, false)
-  assert.ok(command.blockers.includes("kind"))
+  assert.ok(command.blockers.includes("command-capability"))
   assert.equal((await readState()).jobs.length, 1)
 
   const named = await runtime.onEvent({ kind: "command", action: "executed", name: "loop", sessionID, directory, arguments: "0s --name keep --multi keep working" })

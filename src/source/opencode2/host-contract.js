@@ -16,6 +16,22 @@ function normalizePrompt(input) {
   })
 }
 
+function normalizeCommand(input) {
+  const sessionID = String(input?.sessionID || "").trim()
+  const id = String(input?.id || "").trim().replace(/^\/+/, "")
+  if (!sessionID) throw new TypeError("command requires a session ID")
+  if (!id) throw new TypeError("command requires an ID")
+  return Object.freeze({
+    sessionID,
+    id,
+    arguments: input?.arguments === undefined ? undefined : String(input.arguments),
+    agent: input?.agent,
+    model: input?.model,
+    delivery: input?.delivery,
+    resume: input?.resume,
+  })
+}
+
 export function createOpenCode2HostContract(options = {}) {
   const onEvent = typeof options.onEvent === "function" ? options.onEvent : async () => {}
   let started = false
@@ -49,6 +65,15 @@ export function createOpenCode2HostContract(options = {}) {
     return await options.sendPrompt(Object.freeze({ ...request, runtime }))
   }
 
+  async function command(input) {
+    if (disposed || hostDisposed) throw new Error("OpenCode 2 host contract is unavailable")
+    if (!started) throw new Error("OpenCode 2 host contract is not started")
+    if (typeof options.sendCommand !== "function") throw new Error("OpenCode 2 session.command capability is unavailable")
+    const request = normalizeCommand(input)
+    const runtime = bridge.runtimeManager.observeExternal(request.sessionID)
+    return await options.sendCommand(Object.freeze({ ...request, runtime }))
+  }
+
   async function dispose(reason = "host-contract-disposed") {
     if (disposed) return false
     disposed = true
@@ -59,6 +84,7 @@ export function createOpenCode2HostContract(options = {}) {
   return Object.freeze({
     start,
     prompt,
+    command,
     dispose,
     runtimeManager: bridge.runtimeManager,
     isStarted: () => started,

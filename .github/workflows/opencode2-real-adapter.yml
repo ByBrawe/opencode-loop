@@ -65,7 +65,7 @@ jobs:
           for attempt in $(seq 1 50); do
             if [ -f "$OPENCODE_LOOP_V2_MARKER" ]; then
               cat "$OPENCODE_LOOP_V2_MARKER"
-              node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(value.id!=="bybrawe.opencode-loop.v2.experimental" || value.activated!==true || value.commandTransform!==true || value.eventSubscribe!==true || value.sessionPrompt!==true) process.exit(1)' "$OPENCODE_LOOP_V2_MARKER"
+              node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(value.id!=="bybrawe.opencode-loop.v2.experimental" || value.activated!==true || value.commandTransform!==true || value.eventSubscribe!==true || value.sessionPrompt!==true || value.sessionCommand!==true) process.exit(1)' "$OPENCODE_LOOP_V2_MARKER"
               exit 0
             fi
             sleep 0.2

@@ -31,6 +31,8 @@ export function inspectOpenCode2Context(ctx) {
     eventSubscribe: hasFunction(event, "subscribe"),
     sessionHook: hasFunction(session, "hook"),
     sessionPrompt: hasFunction(session, "prompt"),
+    sessionCommand: hasFunction(session, "command"),
+    sessionShell: hasFunction(session, "shell"),
     toolTransform: hasFunction(tool, "transform"),
     toolHook: hasFunction(tool, "hook"),
   })

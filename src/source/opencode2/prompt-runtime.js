@@ -1,4 +1,4 @@
-import { parseLoopArgs } from "../core/args.js"
+import { parseLoopArgs, splitFirst } from "../core/args.js"
 import { actionKind, decoratePrompt, matchJob } from "../core/jobs.js"
 import { readState, removeState, writeState } from "../core/state.js"
 
@@ -10,10 +10,21 @@ function directoryFrom(event) {
   return typeof event?.directory === "string" && event.directory.trim() ? event.directory : undefined
 }
 
-function unsupportedPromptJob(job) {
+function commandParts(action) {
+  const normalized = String(action || "").trim().replace(/^\/+/, "")
+  return splitFirst(normalized)
+}
+
+function unsupportedRuntimeJob(job, supportsCommand) {
   const blockers = []
-  if (actionKind(job?.action, job) !== "prompt") blockers.push("kind")
+  const kind = actionKind(job?.action, job)
   if (!String(job?.action || "").trim()) blockers.push("action")
+  if (kind === "command") {
+    if (!supportsCommand) blockers.push("command-capability")
+    if (!commandParts(job?.action)[0]) blockers.push("action")
+  } else if (kind !== "prompt") {
+    blockers.push("kind")
+  }
   if (job?.watchPaths?.length) blockers.push("watch")
   if (job?.promptFile) blockers.push("prompt-file")
   if (job?.includeFiles?.length) blockers.push("include-file")
@@ -29,7 +40,7 @@ function unsupportedPromptJob(job) {
   if (job?.maxFailures > 0) blockers.push("max-failures")
   if (job?.until) blockers.push("until")
   if (job?.stopFile) blockers.push("stop-file")
-  return blockers
+  return [...new Set(blockers)]
 }
 
 function jobName(job) {
@@ -51,12 +62,6 @@ function scopeFrom(event) {
   return { directory, sessionID, key: `${directory}\u0000${sessionID}` }
 }
 
-function eligiblePromptJob(job) {
-  if (!job?.enabled || job?.paused) return false
-  if (unsupportedPromptJob(job).length) return false
-  return !(job.maxRuns > 0 && (job.runCount || 0) >= job.maxRuns)
-}
-
 function dueAt(job, current) {
   const intervalMs = Math.max(0, Number(job?.intervalMs || 0))
   const lastRunAt = Number(job?.lastRunAt || 0)
@@ -67,6 +72,7 @@ function dueAt(job, current) {
 export function createOpenCode2PromptRuntime(options = {}) {
   if (typeof options.prompt !== "function") throw new TypeError("V2 prompt runtime requires prompt()")
 
+  const supportsCommand = typeof options.command === "function"
   const now = typeof options.now === "function" ? options.now : Date.now
   const setTimer = typeof options.setTimer === "function" ? options.setTimer : setTimeout
   const clearTimer = typeof options.clearTimer === "function" ? options.clearTimer : clearTimeout
@@ -78,6 +84,12 @@ export function createOpenCode2PromptRuntime(options = {}) {
 
   function report(error) {
     try { onError(error) } catch {}
+  }
+
+  function eligibleRuntimeJob(job) {
+    if (!job?.enabled || job?.paused) return false
+    if (unsupportedRuntimeJob(job, supportsCommand).length) return false
+    return !(job.maxRuns > 0 && (job.runCount || 0) >= job.maxRuns)
   }
 
   function clearScopeTimer(key) {
@@ -116,7 +128,7 @@ export function createOpenCode2PromptRuntime(options = {}) {
     const current = now()
     let earliest
     for (const job of state.jobs || []) {
-      if (!eligiblePromptJob(job)) continue
+      if (!eligibleRuntimeJob(job)) continue
       const intervalMs = Math.max(0, Number(job?.intervalMs || 0))
       if (intervalMs === 0) continue
       const candidate = dueAt(job, current)
@@ -133,7 +145,7 @@ export function createOpenCode2PromptRuntime(options = {}) {
         if (!currentTimer || currentTimer.token !== token) return { handled: false, reason: "stale-timer" }
         timers.delete(scope.key)
         if (idle.get(scope.key) !== true) return { handled: true, dispatched: false, reason: "not-idle" }
-        return await runDuePrompt(scope)
+        return await runDueAction(scope)
       })
       pending.catch(report)
       return pending
@@ -143,10 +155,29 @@ export function createOpenCode2PromptRuntime(options = {}) {
     return earliest
   }
 
-  async function runDuePrompt(scope) {
+  async function dispatchJob(scope, job) {
+    const kind = actionKind(job?.action, job)
+    if (kind === "command") {
+      const [id, argumentsText] = commandParts(job.action)
+      const request = {
+        sessionID: scope.sessionID,
+        id,
+        arguments: argumentsText || undefined,
+      }
+      await options.command(request)
+      return { kind, request }
+    }
+
+    const text = promptText(job)
+    const request = { sessionID: scope.sessionID, text }
+    await options.prompt(request)
+    return { kind: "prompt", request, text }
+  }
+
+  async function runDueAction(scope) {
     const state = await readState(scope.directory, scope.sessionID)
     const current = now()
-    const job = (state.jobs || []).find((candidate) => eligiblePromptJob(candidate) && dueAt(candidate, current) <= current)
+    const job = (state.jobs || []).find((candidate) => eligibleRuntimeJob(candidate) && dueAt(candidate, current) <= current)
     if (!job) {
       await scheduleScope(scope)
       return { handled: true, dispatched: false }
@@ -161,9 +192,8 @@ export function createOpenCode2PromptRuntime(options = {}) {
     idle.set(scope.key, false)
     await scheduleScope(scope)
 
-    const text = promptText(job)
-    await options.prompt({ sessionID: scope.sessionID, text })
-    return { handled: true, dispatched: true, job, text }
+    const dispatched = await dispatchJob(scope, job)
+    return { handled: true, dispatched: true, job, ...dispatched }
   }
 
   async function addPromptLoop(event) {
@@ -173,7 +203,7 @@ export function createOpenCode2PromptRuntime(options = {}) {
       const parsed = parseLoopArgs(event.arguments || "")
       if (!parsed.ok) return { handled: true, accepted: false, reason: "parse", error: parsed.error }
 
-      const blockers = unsupportedPromptJob(parsed.job)
+      const blockers = unsupportedRuntimeJob(parsed.job, supportsCommand)
       if (blockers.length) return { handled: true, accepted: false, reason: "unsupported", blockers }
 
       parsed.job.name = jobName(parsed.job)
@@ -235,7 +265,7 @@ export function createOpenCode2PromptRuntime(options = {}) {
     const scope = scopeFrom(event)
     if (!scope) return { handled: false, reason: "missing-scope" }
     idle.set(scope.key, true)
-    return await enqueueScope(scope, () => runDuePrompt(scope))
+    return await enqueueScope(scope, () => runDueAction(scope))
   }
 
   async function onEvent(event) {
