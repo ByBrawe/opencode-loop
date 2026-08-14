@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { promises as fs } from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { readState, writeState } from "../src/source/core/state.js"
 import {
   buildGoalPrompt,
   goalReportPath,
@@ -14,6 +15,9 @@ import {
   goalRequiresPassingChecks,
   goalProgressSnapshot,
   goalMadeMeaningfulProgress,
+  setGoalComplete,
+  setGoalBlocked,
+  setGoalProgress,
 } from "../src/source/runtime/goal-runtime.js"
 
 const directory = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-loop-goal-runtime-"))
@@ -111,6 +115,87 @@ try {
     lastVerifyAt: 4,
     lastVerifyCode: 0,
   })
+
+  const lifecycleGoal = (id, overrides = {}) => ({
+    id,
+    name: id,
+    kind: "goal",
+    goalStatus: "active",
+    enabled: true,
+    paused: false,
+    createdAt: new Date(0).toISOString(),
+    action: `Goal ${id}`,
+    goalChecks: ["npm test"],
+    lastGoalChecks: [{ command: "npm test", code: 0 }],
+    noProgressCount: 2,
+    ...overrides,
+  })
+
+  const completeSession = "ses-complete"
+  await writeState(directory, completeSession, { jobs: [lifecycleGoal("complete-goal")] })
+  const rejected = await setGoalComplete(directory, completeSession, { summary: "Too early", evidence: "done" })
+  assert.equal(rejected.ok, false)
+  assert.equal(rejected.rejected, true)
+  let persisted = await readState(directory, completeSession)
+  let persistedJob = persisted.jobs[0]
+  assert.equal(persistedJob.goalStatus, "active")
+  assert.equal(persistedJob.goalCompletionRejectedCount, 1)
+  assert.ok(persistedJob.goalCompletionRejectedAt > 0)
+  assert.match(persistedJob.goalCompletionRejectedReason, /concrete evidence is required/)
+
+  const completed = await setGoalComplete(directory, completeSession, {
+    summary: "Feature completed",
+    evidence: "npm test passed after updating src/index.js",
+  })
+  assert.equal(completed.ok, true)
+  persisted = await readState(directory, completeSession)
+  persistedJob = persisted.jobs[0]
+  assert.equal(persistedJob.goalStatus, "completed")
+  assert.equal(persistedJob.enabled, false)
+  assert.equal(persistedJob.paused, true)
+  assert.equal(persistedJob.goalSummary, "Feature completed")
+  assert.equal(persistedJob.goalEvidence, "npm test passed after updating src/index.js")
+  assert.equal(persistedJob.noProgressCount, 0)
+  assert.ok(persistedJob.goalCompletedAt > 0)
+
+  const progressSession = "ses-progress"
+  await writeState(directory, progressSession, { jobs: [lifecycleGoal("progress-goal")] })
+  const progress = await setGoalProgress(directory, progressSession, {
+    summary: "  Patched runtime  ",
+    next: "  Run tests  ",
+    evidence: "  src/index.js updated and npm test prepared  ",
+  })
+  assert.equal(progress.ok, true)
+  persisted = await readState(directory, progressSession)
+  persistedJob = persisted.jobs[0]
+  assert.equal(persistedJob.goalProgress.length, 1)
+  assert.equal(persistedJob.goalProgress[0].summary, "Patched runtime")
+  assert.equal(persistedJob.goalProgress[0].next, "Run tests")
+  assert.equal(persistedJob.goalProgress[0].evidence, "src/index.js updated and npm test prepared")
+  assert.equal(persistedJob.goalEvidence, "src/index.js updated and npm test prepared")
+  assert.equal(persistedJob.noProgressCount, 0)
+  assert.ok(persistedJob.lastProgressAt > 0)
+
+  const blockedSession = "ses-blocked"
+  await writeState(directory, blockedSession, { jobs: [lifecycleGoal("blocked-goal")] })
+  const blocked = await setGoalBlocked(directory, blockedSession, {
+    reason: "Need credential",
+    needed: "API token",
+    evidence: "npm test cannot reach service",
+  })
+  assert.equal(blocked.ok, true)
+  persisted = await readState(directory, blockedSession)
+  persistedJob = persisted.jobs[0]
+  assert.equal(persistedJob.goalStatus, "blocked")
+  assert.equal(persistedJob.enabled, false)
+  assert.equal(persistedJob.paused, true)
+  assert.equal(persistedJob.goalBlockedReason, "Need credential\nNeeded: API token")
+  assert.equal(persistedJob.goalEvidence, "npm test cannot reach service")
+  assert.ok(persistedJob.goalBlockedAt > 0)
+
+  const missing = await setGoalProgress(directory, "ses-missing", { summary: "nothing" })
+  assert.equal(missing.ok, false)
+  assert.match(missing.message, /No active experimental goal/)
 
   console.log("goal runtime tests passed")
 } finally {
