@@ -44,13 +44,6 @@ jobs:
       - name: Build a single-file stable plugin from source
         run: npm run build:plugin
 
-      - name: Upload generated entry
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: runtime-observer-generated-index
-          path: src/index.js
-
       - name: Verify generated entry syntax and tests
         run: |
           node --check src/index.js
