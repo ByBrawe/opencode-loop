@@ -1,0 +1,46 @@
+name: V2 Host Activation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  activation:
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install current V2 plugin package
+        run: npm install --no-save --package-lock=false @opencode-ai/plugin@next
+
+      - name: Install OpenCode 2 beta
+        run: npm install -g @opencode-ai/cli@next
+
+      - name: Verify V2 canary syntax
+        run: |
+          node --check src/source/opencode2/capabilities.js
+          node --check src/source/opencode2/experimental.js
+          node --check scripts/opencode2-host-canary.mjs
+
+      - name: Show OpenCode 2 version
+        run: opencode2 --version
+
+      - name: Run real OpenCode 2 activation canary
+        run: node scripts/opencode2-host-canary.mjs
