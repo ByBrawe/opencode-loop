@@ -26,13 +26,18 @@ jobs:
       - name: Probe external plugin on foreground V2 host
         shell: bash
         run: |
-          OPENCODE_SERVER_PASSWORD=probe opencode2 --print-logs --log-level DEBUG serve --hostname 127.0.0.1 --port 4096 > server.log 2>&1 &
+          OPENCODE_SERVER_PASSWORD=probe opencode2 serve --hostname 127.0.0.1 --port 4096 > server.log 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
-          for attempt in $(seq 1 30); do
-            if curl -fsS -u opencode:probe http://127.0.0.1:4096/api/health >/dev/null; then break; fi
+          ready=0
+          for attempt in $(seq 1 20); do
+            if curl -fsS -u opencode:probe http://127.0.0.1:4096/api/health >/dev/null; then ready=1; break; fi
             node -e "setTimeout(() => {}, 500)"
           done
+          if [ "$ready" -ne 1 ]; then
+            cat server.log
+            exit 1
+          fi
           for attempt in $(seq 1 20); do
             curl -fsS -u opencode:probe -H "x-opencode-directory:$(pwd)" http://127.0.0.1:4096/api/command > command-list.txt
             if grep -F "LOOP_V2_PROBE_ACTIVE" command-list.txt; then
