@@ -10,6 +10,14 @@ function cleanupRegistration(registration) {
   return undefined
 }
 
+function eventStream(registration) {
+  const stream = registration?.stream ?? registration
+  if (!stream || typeof stream[Symbol.asyncIterator] !== "function") {
+    throw new TypeError("OpenCode 2 event subscribe must return an async event stream")
+  }
+  return stream
+}
+
 function sameDirectory(expected, actual) {
   if (!expected || !actual) return true
   return String(expected) === String(actual)
@@ -25,6 +33,9 @@ export function createOpenCode2EventBridge({
   if (typeof onError !== "function") throw new TypeError("OpenCode 2 event bridge requires onError to be a function")
 
   let registration
+  let iterator
+  let iteratorClosed = false
+  let pump
   let attached = false
   let stopped = false
   let disposed = false
@@ -35,6 +46,15 @@ export function createOpenCode2EventBridge({
     if (managerDisposed) return false
     managerDisposed = true
     return runtimeManager.dispose(reason)
+  }
+
+  async function closeIterator() {
+    if (iteratorClosed) return false
+    iteratorClosed = true
+    const current = iterator
+    iterator = undefined
+    if (typeof current?.return === "function") await current.return()
+    return Boolean(current)
   }
 
   async function process(raw) {
@@ -64,18 +84,35 @@ export function createOpenCode2EventBridge({
     return result
   }
 
+  async function consume(stream) {
+    const current = stream[Symbol.asyncIterator]()
+    iterator = current
+    iteratorClosed = false
+    try {
+      while (!stopped) {
+        const next = await current.next()
+        if (next?.done) break
+        await dispatch(next?.value)
+      }
+    } catch (error) {
+      if (!stopped) {
+        try { onError(error) } catch {}
+      }
+    } finally {
+      if (stopped && !iteratorClosed) await closeIterator().catch(() => undefined)
+      if (iterator === current) iterator = undefined
+    }
+  }
+
   async function attach(subscribe) {
     if (disposed) throw new Error("OpenCode 2 event bridge is disposed")
     if (attached) throw new Error("OpenCode 2 event bridge is already attached")
     if (typeof subscribe !== "function") throw new TypeError("OpenCode 2 event bridge requires an event subscribe function")
+
+    registration = await subscribe()
+    const stream = eventStream(registration)
     attached = true
-    registration = await subscribe((raw) => {
-      const pending = dispatch(raw)
-      pending.catch((error) => {
-        try { onError(error) } catch {}
-      })
-      return pending.catch(() => undefined)
-    })
+    pump = consume(stream)
     return registration
   }
 
@@ -83,6 +120,8 @@ export function createOpenCode2EventBridge({
     if (disposed) return false
     disposed = true
     stopped = true
+    await closeIterator().catch(() => undefined)
+    await pump?.catch(() => undefined)
     await queue.catch(() => undefined)
 
     const cleanup = cleanupRegistration(registration)
