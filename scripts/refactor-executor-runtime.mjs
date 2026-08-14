@@ -24,7 +24,7 @@ const replacements = [
   ['import { now, parseDuration, splitFirst, stripOuterQuotes, escapeRegExp, takeFlag, takeFlagValue, takeAllFlagValues, parsePositiveInt, parseNonNegativeInt, parseCompactEvery } from "./core/args.js"', 'import { now } from "./core/args.js"'],
   ['import { actionKind, isGoalJob } from "./core/jobs.js"', 'import { isGoalJob } from "./core/jobs.js"'],
   ['import { pathExists, readState, writeState } from "./core/state.js"', 'import { readState, writeState } from "./core/state.js"'],
-  ['import { appendLoopLog, runShellCommand, notifyJob } from "./core/process.js"', 'import { appendLoopLog } from "./core/process.js"'],
+  ['import { appendLoopLog, runShellCommand, notifyJob } from "./core/process.js"', 'import { appendLoopLog, runShellCommand } from "./core/process.js"'],
   ['import { sdkErrorMessage, sdkCall } from "./opencode/sdk.js"', 'import { sdkErrorMessage } from "./opencode/sdk.js"'],
   ['import { normalizedModelRef, updateSessionExecutionContext, setSessionExecutionContext } from "./opencode/session-context.js"', 'import { updateSessionExecutionContext } from "./opencode/session-context.js"'],
   ['import { fireSdk, executeTuiCommand, compactTuiCommandName, readRecentSessionMessages, orderedSessionMessages, resolveCompactionModel, log, toast } from "./opencode/host.js"', 'import { log, toast } from "./opencode/host.js"'],
@@ -100,7 +100,7 @@ const { rememberSession, scheduleIdleWork, scheduleDueWork, stopWatchdog, cancel
 requireOnce(legacy, oldWorkspaceWiring, "workspace/status/compaction/scheduler wiring")
 const newWorkspaceWiring = `const workspaceRuntime = createJobWorkspaceRuntime({ toast })
 const { snapshotPaths } = workspaceRuntime
-const goalPolicy = createGoalExecutionPolicy({ toast, appendLoopLog, now })
+const goalPolicy = createGoalExecutionPolicy({ runShellCommand, dangerousShell, toast, appendLoopLog, now })
 
 let schedulerRuntime
 const schedulerBridge = {
@@ -193,7 +193,6 @@ for (const stale of [
   "parseCompactEvery",
   "actionKind",
   "pathExists",
-  "runShellCommand",
   "notifyJob",
   "sdkCall",
   "normalizedModelRef",
@@ -211,6 +210,7 @@ for (const stale of [
 ]) {
   if (imports.includes(stale)) throw new Error(`stale executor import remains: ${stale}`)
 }
+if (!imports.includes("runShellCommand") || !imports.includes("dangerousShell")) throw new Error("goal policy shell dependencies must remain")
 if (!imports.includes("createLoopExecutor")) throw new Error("executor import missing")
 if (legacy.includes("activeRuns") || legacy.includes("runLocks") || legacy.includes("compactionRuntime")) {
   throw new Error("legacy executor state reference remains")
