@@ -12,13 +12,15 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
       throw new Error("OpenCode 2 command.transform capability is unavailable")
     }
 
-    void createOpenCode2PromptRuntime
     const commandRegistration = await ctx.command.transform(() => {})
     if (!capabilities.eventSubscribe || !capabilities.sessionPrompt) {
       await commandRegistration?.dispose?.()
       return undefined
     }
 
+    let promptRuntime
+    const onRuntimeEvent = async (event) => promptRuntime?.onEvent(event)
+    void onRuntimeEvent
     const runtime = createOpenCode2RuntimeAdapter(ctx)
     try {
       await runtime.start()
