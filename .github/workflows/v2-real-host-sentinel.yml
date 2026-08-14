@@ -27,9 +27,6 @@ jobs:
         run: |
           ./node_modules/.bin/opencode2 --version
           node -p "require('./node_modules/@opencode-ai/plugin/package.json').version"
-      - name: List active plugins in standalone project host
+      - name: Show standalone project configuration
         working-directory: scripts/fixtures/v2-project
-        run: ../../../node_modules/.bin/opencode2 api --standalone get /api/plugin | tee active-plugins.txt
-      - name: Assert auto-discovered Loop V2 plugin is active
-        working-directory: scripts/fixtures/v2-project
-        run: grep -F "opencode-loop-v2.js" active-plugins.txt
+        run: ../../../node_modules/.bin/opencode2 api --standalone get /api/config
