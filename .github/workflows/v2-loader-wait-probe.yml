@@ -1,0 +1,31 @@
+name: V2 Loader Wait Probe
+
+on:
+  push:
+    branches: [fix-v2-host-loader-wait]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm install --no-save --package-lock=false @opencode-ai/plugin@next
+      - run: npm install -g @opencode-ai/cli@next
+      - run: node --check scripts/opencode2-host-canary.mjs
+      - run: opencode2 --version
+      - run: node scripts/opencode2-host-canary.mjs
