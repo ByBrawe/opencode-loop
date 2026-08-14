@@ -1,6 +1,6 @@
 name: Commit session status refactor
 
-# Temporary branch-only workflow; rerun after status ownership guard correction.
+# Temporary branch-only workflow; rerun after whitespace-tolerant status cleanup fix.
 on:
   push:
     branches: [refactor-session-status-20260814]
