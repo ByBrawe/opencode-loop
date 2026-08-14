@@ -26,6 +26,7 @@ export default {
       eventSubscribe: typeof ctx?.event?.subscribe === "function",
       sessionPrompt: typeof ctx?.session?.prompt === "function",
       sessionCommand: typeof ctx?.session?.command === "function",
+      sessionCommandSource: typeof ctx?.session?.command === "function" ? String(ctx.session.command).slice(0, 1600) : "",
       sessionShell: typeof ctx?.session?.shell === "function",
       sessionMethods,
       toolTransform: typeof ctx?.tool?.transform === "function",
