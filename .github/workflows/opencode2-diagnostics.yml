@@ -1,0 +1,46 @@
+name: OpenCode 2 Discovery Diagnostics
+
+on:
+  push:
+    branches: [experimental-opencode2]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - run: npm install --global @opencode-ai/cli@next
+      - name: Inspect project discovery
+        shell: bash
+        run: |
+          project="$RUNNER_TEMP/opencode2-discovery"
+          mkdir -p "$project/.opencode/plugins" "$project/.opencode/commands"
+          git init -q "$project"
+          printf 'export default async function(){ return {"command.execute.before": async()=>{}} }\n' > "$project/.opencode/plugins/sentinel.js"
+          printf '%s\n' '---' 'description: discovery sentinel' '---' '' 'sentinel' > "$project/.opencode/commands/discovery-sentinel.md"
+          printf '{}\n' > "$project/opencode.json"
+          opencode2 service stop >/dev/null 2>&1 || true
+          encoded="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$project")"
+          query="directory=$encoded&location%5Bdirectory%5D=$encoded"
+          body="$(node -e 'process.stdout.write(JSON.stringify({location:{directory:process.argv[1]}}))' "$project")"
+          cd "$project"
+          echo '--- session create ---'
+          opencode2 api post "/api/session?$query" --data "$body"
+          echo '--- command catalog ---'
+          opencode2 api get "/api/command?$query" || true
+          echo '--- plugin registry ---'
+          opencode2 api get "/api/plugin?$query" || true
+          echo '--- relevant daemon log ---'
+          log="$HOME/.local/share/opencode/log/opencode.log"
+          if [ -f "$log" ]; then grep -Ei 'plugin|config|loading|discovery-sentinel|sentinel\.js' "$log" | tail -n 160 || true; fi
+          opencode2 service stop >/dev/null 2>&1 || true
