@@ -67,10 +67,14 @@ jobs:
           git -C "$project" commit --quiet -m "init"
           cat "$plugin_dir/opencode-loop-v2-probe.js"
 
-      - name: Run dependency-free probe through real OpenCode 2 plugin list
+      - name: Probe V2 plugin activation after service startup
         shell: bash
         run: |
           cd "$RUNNER_TEMP/opencode-loop-v2-activation"
+          echo "--- first plugin list ---"
+          "$GITHUB_WORKSPACE/node_modules/.bin/opencode2" plugin list
+          sleep 1
+          echo "--- second plugin list ---"
           "$GITHUB_WORKSPACE/node_modules/.bin/opencode2" plugin list
 
       - name: Dump OpenCode 2 logs on failure
