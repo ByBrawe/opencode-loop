@@ -770,12 +770,12 @@ async function notifyJob(directory, job, reason) {
 }
 
 // src/source/opencode/sdk.js
-function sdkError2(result) {
+function sdkError(result) {
   if (!result || typeof result !== "object")
     return;
   return result.error || result.error === null ? result.error : undefined;
 }
-function sdkData2(result) {
+function sdkData(result) {
   if (!result || typeof result !== "object")
     return result;
   return Object.prototype.hasOwnProperty.call(result, "data") ? result.data : result;
@@ -805,9 +805,9 @@ async function sdkCall(method, ...argsList) {
       continue;
     try {
       const result = await method(args);
-      const error = sdkError2(result);
+      const error = sdkError(result);
       if (!error)
-        return sdkData2(result);
+        return sdkData(result);
       firstError = firstError || new Error(sdkErrorMessage(error));
     } catch (error) {
       firstError = firstError || error;
@@ -1989,6 +1989,177 @@ function clearSessionActivity(sessionID) {
   deleteSessionExecutionContext(sessionID);
 }
 
+// src/source/runtime/session-status.js
+var DEFAULT_STALE_ACTIVE_RECOVERY_MS = 45000;
+var DEFAULT_SESSION_STATUS_CACHE_MS = 1500;
+function positiveNumber(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : fallback;
+}
+function nonNegativeNumber(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : fallback;
+}
+function createSessionStatusRuntime(options = {}) {
+  const activeRuns = options.activeRuns;
+  if (!(activeRuns instanceof Map))
+    throw new TypeError("createSessionStatusRuntime requires activeRuns Map");
+  const now2 = typeof options.now === "function" ? options.now : now;
+  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
+  const activeRunCompletionFromMessages2 = typeof options.activeRunCompletionFromMessages === "function" ? options.activeRunCompletionFromMessages : activeRunCompletionFromMessages;
+  const staleActiveRecoveryMs = positiveNumber(options.staleActiveRecoveryMs, DEFAULT_STALE_ACTIVE_RECOVERY_MS);
+  const sessionStatusCacheMs = nonNegativeNumber(options.sessionStatusCacheMs, DEFAULT_SESSION_STATUS_CACHE_MS);
+  function markSessionStatus(sessionID, type, observedAt = now2()) {
+    if (typeof sessionID !== "string" || typeof type !== "string")
+      return false;
+    sessionStatuses.set(sessionID, type);
+    sessionStatusSeenAt.set(sessionID, observedAt);
+    return true;
+  }
+  function clearSessionStatus(sessionID) {
+    sessionStatuses.delete(sessionID);
+    sessionStatusSeenAt.delete(sessionID);
+  }
+  function updateSessionStatusFromEvent(event) {
+    const sessionID = event?.properties?.sessionID;
+    if (typeof sessionID !== "string")
+      return;
+    if (event?.type === "session.idle") {
+      markSessionStatus(sessionID, "idle");
+      return { sessionID, idle: true };
+    }
+    if (event?.type === "session.status") {
+      const status = event?.properties?.status;
+      const type = status && typeof status === "object" ? status.type : undefined;
+      if (typeof type === "string")
+        markSessionStatus(sessionID, type);
+      return { sessionID, idle: type === "idle" };
+    }
+    return;
+  }
+  function staleActiveRun(sessionID) {
+    const active = activeRuns.get(sessionID);
+    if (!active)
+      return false;
+    const age = now2() - (active.startedAt || 0);
+    const configured = Number(active.job?.staleActiveRecoveryMs || active.job?.activeRecoveryMs || 0);
+    const threshold = Number.isFinite(configured) && configured > 0 ? configured : staleActiveRecoveryMs;
+    return age >= threshold;
+  }
+  async function readLiveSessionStatus(client, sessionID, directory) {
+    const statusMethod = client?.session?.status;
+    if (typeof statusMethod !== "function")
+      return;
+    const argsList = [];
+    if (directory)
+      argsList.push({ query: { directory } }, { directory }, { workspace: directory });
+    argsList.push({});
+    for (const args of argsList) {
+      try {
+        const result = await statusMethod.call(client.session, args);
+        const error = sdkError(result);
+        if (error)
+          continue;
+        const data = sdkData(result);
+        if (!data || typeof data !== "object" || Array.isArray(data))
+          continue;
+        const observedAt = now2();
+        for (const [observedSessionID, observedStatus] of Object.entries(data)) {
+          const observedType = observedStatus && typeof observedStatus === "object" ? observedStatus.type : undefined;
+          if (typeof observedType !== "string")
+            continue;
+          markSessionStatus(observedSessionID, observedType, observedAt);
+        }
+        for (const childID of sessionParents.keys()) {
+          if (!isDescendantSession(childID, sessionID) || data[childID])
+            continue;
+          markSessionStatus(childID, "idle", observedAt);
+        }
+        if (hasBusyDescendant(sessionID))
+          return { type: "busy", source: "descendant" };
+        const status = data?.[sessionID];
+        const type = status && typeof status === "object" ? status.type : undefined;
+        if (typeof type === "string")
+          return { type, source: "sdk" };
+        return { type: "idle", source: "sdk" };
+      } catch {}
+    }
+    return;
+  }
+  async function canFinalizeActiveRun(directory, client, sessionID, active, options2 = {}) {
+    if (hasActiveToolCalls(sessionID) || hasBusyDescendant(sessionID))
+      return false;
+    if (!options2.requireIdle && !options2.forceStale)
+      return true;
+    const completion = options2.forceStale ? await activeRunCompletionFromMessages2(directory, client, sessionID, active) : undefined;
+    if (completion === "completed")
+      return true;
+    if (!options2.requireIdle)
+      return completion === "unknown" && staleActiveRun(sessionID);
+    const live = await readLiveSessionStatus(client, sessionID, directory);
+    if (live?.type === "idle")
+      return true;
+    if (live?.type) {
+      if ((live.type === "busy" || live.type === "retry") && options2.forceStale && completion === "unknown" && staleActiveRun(sessionID))
+        return true;
+      return false;
+    }
+    if (options2.forceStale && completion === "unknown" && staleActiveRun(sessionID))
+      return true;
+    const cached = sessionStatuses.get(sessionID);
+    const seenAt = sessionStatusSeenAt.get(sessionID) || 0;
+    return cached === "idle" && seenAt > (active.startedAt || 0);
+  }
+  async function sessionStatusType(client, sessionID, directory, options2 = {}) {
+    if (hasActiveToolCalls(sessionID) || hasBusyDescendant(sessionID)) {
+      markSessionStatus(sessionID, "busy");
+      return "busy";
+    }
+    const cached = sessionStatuses.get(sessionID);
+    const seenAt = sessionStatusSeenAt.get(sessionID) || 0;
+    if (cached === "idle")
+      return cached;
+    if (cached && now2() - seenAt < sessionStatusCacheMs)
+      return cached;
+    const live = await readLiveSessionStatus(client, sessionID, directory);
+    if (live?.type) {
+      if ((live.type === "busy" || live.type === "retry") && options2.recoverStaleActive !== false) {
+        const active = activeRuns.get(sessionID);
+        if (active) {
+          const completion = await activeRunCompletionFromMessages2(directory, client, sessionID, active);
+          if (completion === "completed" || completion === "unknown" && staleActiveRun(sessionID)) {
+            markSessionStatus(sessionID, "idle");
+            await appendLoopLog2(directory, completion === "completed" ? "status-message-complete-recovery" : "status-stale-recovery", {
+              sessionID,
+              job: active.job?.name || active.jobId,
+              startedAt: active.startedAt
+            });
+            return "idle";
+          }
+        }
+      }
+      markSessionStatus(sessionID, live.type);
+      return live.type;
+    }
+    const fallback = activeRuns.has(sessionID) && !staleActiveRun(sessionID) ? "busy" : "idle";
+    markSessionStatus(sessionID, fallback);
+    return fallback;
+  }
+  async function sessionIsIdle(client, sessionID, directory, options2 = {}) {
+    return await sessionStatusType(client, sessionID, directory, options2) === "idle";
+  }
+  return {
+    markSessionStatus,
+    clearSessionStatus,
+    updateSessionStatusFromEvent,
+    staleActiveRun,
+    canFinalizeActiveRun,
+    readLiveSessionStatus,
+    sessionStatusType,
+    sessionIsIdle
+  };
+}
+
 // src/source/runtime/scheduler.js
 var DEFAULT_IDLE_DEBOUNCE_MS = 1200;
 var DEFAULT_BUSY_RETRY_MS = 5000;
@@ -2449,9 +2620,7 @@ ${staged.stdout}`);
 
 // src/source/legacy-v1.js
 var DEFAULT_ACTIVE_GUARD_MS = 45000;
-var STALE_ACTIVE_RECOVERY_MS = 45000;
 var BUSY_RETRY_MS = 5000;
-var SESSION_STATUS_CACHE_MS = 1500;
 var {
   buildPrompt,
   ensureBranch,
@@ -2464,6 +2633,18 @@ var { runGoalChecks, applyGoalNoProgressGuard } = createGoalExecutionPolicy({ ru
 var activeRuns = new Map;
 var runLocks = new Map;
 var loopCompactionRequests = new Map;
+var {
+  updateSessionStatusFromEvent,
+  staleActiveRun,
+  canFinalizeActiveRun,
+  sessionIsIdle,
+  markSessionStatus,
+  clearSessionStatus
+} = createSessionStatusRuntime({
+  activeRuns,
+  appendLoopLog,
+  now
+});
 var schedulerRuntime = createSchedulerRuntime({
   busyRetryMs: BUSY_RETRY_MS,
   sessionIsIdle,
@@ -2565,26 +2746,6 @@ async function maybeCompact(directory, client, sessionID, job) {
   loopCompactionRequests.delete(sessionID);
   return { job, started: false };
 }
-function updateSessionStatusFromEvent(event) {
-  const sessionID = event?.properties?.sessionID;
-  if (typeof sessionID !== "string")
-    return;
-  if (event?.type === "session.idle") {
-    sessionStatuses.set(sessionID, "idle");
-    sessionStatusSeenAt.set(sessionID, now());
-    return { sessionID, idle: true };
-  }
-  if (event?.type === "session.status") {
-    const status = event?.properties?.status;
-    const type = status && typeof status === "object" ? status.type : undefined;
-    if (typeof type === "string") {
-      sessionStatuses.set(sessionID, type);
-      sessionStatusSeenAt.set(sessionID, now());
-    }
-    return { sessionID, idle: type === "idle" };
-  }
-  return;
-}
 function userInterruptSessionFromEvent(event) {
   if (!["message.updated", "message.created"].includes(String(event?.type || "")))
     return;
@@ -2621,120 +2782,6 @@ async function pauseGoalsForUserInterrupt(directory, client, sessionID) {
   await appendLoopLog(directory, "goal-user-interrupt", { sessionID, count });
   await scheduleDueWork(directory, client, sessionID);
   return true;
-}
-function staleActiveRun(sessionID) {
-  const active = activeRuns.get(sessionID);
-  if (!active)
-    return false;
-  const age = now() - (active.startedAt || 0);
-  const configured = Number(active.job?.staleActiveRecoveryMs || active.job?.activeRecoveryMs || 0);
-  const threshold = Number.isFinite(configured) && configured > 0 ? configured : STALE_ACTIVE_RECOVERY_MS;
-  return age >= threshold;
-}
-async function canFinalizeActiveRun(directory, client, sessionID, active, options = {}) {
-  if (hasActiveToolCalls(sessionID) || hasBusyDescendant(sessionID))
-    return false;
-  if (!options.requireIdle && !options.forceStale)
-    return true;
-  const completion = options.forceStale ? await activeRunCompletionFromMessages(directory, client, sessionID, active) : undefined;
-  if (completion === "completed")
-    return true;
-  if (!options.requireIdle)
-    return completion === "unknown" && staleActiveRun(sessionID);
-  const live = await readLiveSessionStatus(client, sessionID, directory);
-  if (live?.type === "idle")
-    return true;
-  if (live?.type) {
-    if ((live.type === "busy" || live.type === "retry") && options.forceStale && completion === "unknown" && staleActiveRun(sessionID))
-      return true;
-    return false;
-  }
-  if (options.forceStale && completion === "unknown" && staleActiveRun(sessionID))
-    return true;
-  const cached = sessionStatuses.get(sessionID);
-  const seenAt = sessionStatusSeenAt.get(sessionID) || 0;
-  return cached === "idle" && seenAt > (active.startedAt || 0);
-}
-async function readLiveSessionStatus(client, sessionID, directory) {
-  const argsList = [];
-  if (directory)
-    argsList.push({ query: { directory } }, { directory }, { workspace: directory });
-  argsList.push({});
-  for (const args of argsList) {
-    try {
-      const result = await client.session.status(args);
-      const error = sdkError(result);
-      if (error)
-        continue;
-      const data = sdkData(result);
-      if (!data || typeof data !== "object" || Array.isArray(data))
-        continue;
-      const observedAt = now();
-      for (const [observedSessionID, observedStatus] of Object.entries(data)) {
-        const observedType = observedStatus && typeof observedStatus === "object" ? observedStatus.type : undefined;
-        if (typeof observedType !== "string")
-          continue;
-        sessionStatuses.set(observedSessionID, observedType);
-        sessionStatusSeenAt.set(observedSessionID, observedAt);
-      }
-      for (const childID of sessionParents.keys()) {
-        if (!isDescendantSession(childID, sessionID) || data[childID])
-          continue;
-        sessionStatuses.set(childID, "idle");
-        sessionStatusSeenAt.set(childID, observedAt);
-      }
-      if (hasBusyDescendant(sessionID))
-        return { type: "busy", source: "descendant" };
-      const status = data?.[sessionID];
-      const type = status && typeof status === "object" ? status.type : undefined;
-      if (typeof type === "string")
-        return { type, source: "sdk" };
-      return { type: "idle", source: "sdk" };
-    } catch {}
-  }
-  return;
-}
-async function sessionStatusType(client, sessionID, directory, options = {}) {
-  if (hasActiveToolCalls(sessionID) || hasBusyDescendant(sessionID)) {
-    sessionStatuses.set(sessionID, "busy");
-    sessionStatusSeenAt.set(sessionID, now());
-    return "busy";
-  }
-  const cached = sessionStatuses.get(sessionID);
-  const seenAt = sessionStatusSeenAt.get(sessionID) || 0;
-  if (cached === "idle")
-    return cached;
-  if (cached && now() - seenAt < SESSION_STATUS_CACHE_MS)
-    return cached;
-  const live = await readLiveSessionStatus(client, sessionID, directory);
-  if (live?.type) {
-    if ((live.type === "busy" || live.type === "retry") && options.recoverStaleActive !== false) {
-      const active = activeRuns.get(sessionID);
-      if (active) {
-        const completion = await activeRunCompletionFromMessages(directory, client, sessionID, active);
-        if (completion === "completed" || completion === "unknown" && staleActiveRun(sessionID)) {
-          sessionStatuses.set(sessionID, "idle");
-          sessionStatusSeenAt.set(sessionID, now());
-          await appendLoopLog(directory, completion === "completed" ? "status-message-complete-recovery" : "status-stale-recovery", {
-            sessionID,
-            job: active.job?.name || active.jobId,
-            startedAt: active.startedAt
-          });
-          return "idle";
-        }
-      }
-    }
-    sessionStatuses.set(sessionID, live.type);
-    sessionStatusSeenAt.set(sessionID, now());
-    return live.type;
-  }
-  const fallback = activeRuns.has(sessionID) && !staleActiveRun(sessionID) ? "busy" : "idle";
-  sessionStatuses.set(sessionID, fallback);
-  sessionStatusSeenAt.set(sessionID, now());
-  return fallback;
-}
-async function sessionIsIdle(client, sessionID, directory, options = {}) {
-  return await sessionStatusType(client, sessionID, directory, options) === "idle";
 }
 function dueJobs(state, force = false) {
   const current = now();
@@ -2808,8 +2855,7 @@ async function recoverActiveDispatchFailure(directory, client, sessionID, jobId,
   if (!active || active.jobId !== jobId || active.runToken !== runToken)
     return false;
   clearActiveRun(sessionID);
-  sessionStatuses.delete(sessionID);
-  sessionStatusSeenAt.delete(sessionID);
+  clearSessionStatus(sessionID);
   const message = sdkErrorMessage(error);
   const state = await readState(directory, sessionID);
   const job = (state.jobs || []).find((candidate) => candidate.id === jobId);
@@ -2840,8 +2886,7 @@ async function finalizeActiveRun(directory, client, sessionID, options = {}) {
   if (active.compactionOnly) {
     const pending = loopCompactionRequests.get(sessionID);
     clearActiveRun(sessionID);
-    sessionStatuses.delete(sessionID);
-    sessionStatusSeenAt.delete(sessionID);
+    clearSessionStatus(sessionID);
     await appendLoopLog(directory, pending?.completedAt ? "compact-finished" : "compact-idle-fallback", {
       sessionID,
       job: active.job?.name || active.jobId,
@@ -3085,8 +3130,7 @@ exit=` + preflight.code + `
         await finalizeLoopCompaction(directory, client, sessionID);
         return;
       }
-      sessionStatuses.set(sessionID, "busy");
-      sessionStatusSeenAt.set(sessionID, now());
+      markSessionStatus(sessionID, "busy");
       await reschedule(BUSY_RETRY_MS);
       return;
     }
@@ -3138,8 +3182,7 @@ exit=` + preflight.code + `
           recoverActiveDispatchFailure(directory, client, sessionID, job.id, runToken, error).catch((recoveryError) => log(client, "error", "dispatch recovery failed", { error: sdkErrorMessage(recoveryError) }));
         });
       }
-      sessionStatuses.set(sessionID, "busy");
-      sessionStatusSeenAt.set(sessionID, now());
+      markSessionStatus(sessionID, "busy");
       await reschedule(BUSY_RETRY_MS);
     } catch (error) {
       clearActiveRun(sessionID);
