@@ -11,7 +11,7 @@ export default {
     const module = await import(pluginURL)
     const plugin = module.default
     if (!plugin || typeof plugin.setup !== "function") throw new Error("experimental V2 plugin has no setup function")
-    await plugin.setup(ctx)
+    const cleanup = await plugin.setup(ctx)
 
     await writeFile(marker, JSON.stringify({
       id: plugin.id,
@@ -21,5 +21,9 @@ export default {
       sessionPrompt: typeof ctx?.session?.prompt === "function",
       toolTransform: typeof ctx?.tool?.transform === "function",
     }, null, 2), "utf8")
+
+    return async () => {
+      if (typeof cleanup === "function") await cleanup()
+    }
   },
 }
