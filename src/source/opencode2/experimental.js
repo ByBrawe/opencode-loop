@@ -28,11 +28,13 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
     try {
       await runtime.start()
     } catch (error) {
+      await promptRuntime?.dispose?.().catch(() => undefined)
       await commandRegistration?.dispose?.().catch(() => undefined)
       throw error
     }
 
     return async () => {
+      await promptRuntime?.dispose?.()
       await runtime.dispose("plugin-cleanup")
       await commandRegistration?.dispose?.()
     }
