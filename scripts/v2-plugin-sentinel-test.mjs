@@ -15,8 +15,8 @@ assert.equal(plugin.id, "bybrawe.opencode-loop.v2.experimental")
 assert.equal(typeof plugin.setup, "function")
 assert.equal(OPENCODE_LOOP_V2_COMMAND_SOURCE, "file-definitions")
 assert.equal(OPENCODE_LOOP_V2_RUNTIME_IMPLEMENTED, false)
-assert.deepEqual(OPENCODE_LOOP_V2_HOST_REQUIREMENTS, ["event.subscribe", "session.prompt", "tool.transform"])
-assert.deepEqual(OPENCODE_LOOP_V2_RUNTIME_REQUIREMENTS, ["event.subscribe", "session.prompt", "tool.transform", "runtime.adapter"])
+assert.deepEqual(OPENCODE_LOOP_V2_HOST_REQUIREMENTS, ["event.subscribe", "session.prompt"])
+assert.deepEqual(OPENCODE_LOOP_V2_RUNTIME_REQUIREMENTS, ["event.subscribe", "session.prompt", "runtime.adapter"])
 
 let transforms = 0
 let registered
@@ -28,10 +28,10 @@ const currentContext = {
     },
   },
 }
-const cleanup = await plugin.setup(currentContext)
+const setupResult = await plugin.setup(currentContext)
+assert.equal(setupResult, undefined)
 assert.equal(transforms, 1)
 assert.equal(typeof registered, "function")
-assert.equal(typeof cleanup, "function")
 
 const currentDraft = {
   list: () => [],
@@ -57,26 +57,31 @@ assert.deepEqual(inspectOpenCode2CommandDraft(currentDraft), {
 })
 
 const currentStatus = openCode2LoopRuntimeStatus(currentContext, currentDraft)
-assert.deepEqual(currentStatus.hostBlockers, ["event.subscribe", "session.prompt", "tool.transform"])
-assert.deepEqual(currentStatus.blockers, ["event.subscribe", "session.prompt", "tool.transform", "runtime.adapter"])
+assert.deepEqual(currentStatus.hostBlockers, ["event.subscribe", "session.prompt"])
+assert.deepEqual(currentStatus.blockers, ["event.subscribe", "session.prompt", "runtime.adapter"])
 assert.equal(currentStatus.hostReady, false)
 assert.equal(currentStatus.implementationReady, false)
 assert.equal(currentStatus.ready, false)
+assert.equal(currentStatus.commandSource, "file-definitions")
 
 const futureContext = {
+  command: { transform: async () => {} },
   event: { subscribe: async () => {} },
   session: { prompt: async () => ({}) },
-  tool: { transform: async () => {} },
 }
 const futureStatus = openCode2LoopRuntimeStatus(futureContext, currentDraft)
 assert.deepEqual(futureStatus.hostBlockers, [])
 assert.deepEqual(futureStatus.blockers, ["runtime.adapter"])
 assert.equal(futureStatus.hostReady, true)
+assert.equal(futureStatus.implementationReady, false)
 assert.equal(futureStatus.ready, false)
 
-await cleanup()
-const minimalCleanup = await plugin.setup({})
-assert.equal(typeof minimalCleanup, "function")
-await minimalCleanup()
+let missingCapabilityFailed = false
+try {
+  await plugin.setup({})
+} catch (error) {
+  missingCapabilityFailed = /command\.transform capability is unavailable/.test(String(error))
+}
+assert.equal(missingCapabilityFailed, true)
 
 console.log("OpenCode 2 plugin sentinel contract passed")
