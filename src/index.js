@@ -1791,6 +1791,93 @@ function createLoopCommandHandlers(options = {}) {
   };
 }
 
+// src/source/opencode/loop-registration.js
+var DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180000;
+var FALLBACK_ACTIVE_GUARD_MS = 45000;
+function requireFunction4(value, name) {
+  if (typeof value !== "function")
+    throw new TypeError(`createLoopRegistration requires ${name}`);
+  return value;
+}
+function normalizeActionForCompare(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+function sameLoopDefinition(a, b) {
+  if (!a || !b)
+    return false;
+  return (a.name || "") === (b.name || "") && Number(a.intervalMs || 0) === Number(b.intervalMs || 0) && normalizeActionForCompare(a.action) === normalizeActionForCompare(b.action) && normalizeActionForCompare(a.kind) === normalizeActionForCompare(b.kind) && normalizeActionForCompare(a.promptFile) === normalizeActionForCompare(b.promptFile);
+}
+function createLoopRegistration(options = {}) {
+  const snapshotPaths = requireFunction4(options.snapshotPaths, "snapshotPaths");
+  const scheduleDueWork = requireFunction4(options.scheduleDueWork, "scheduleDueWork");
+  const scheduleIdleWork = requireFunction4(options.scheduleIdleWork, "scheduleIdleWork");
+  const toast2 = requireFunction4(options.toast, "toast");
+  const say2 = requireFunction4(options.say, "say");
+  const parseLoopArgs2 = typeof options.parseLoopArgs === "function" ? options.parseLoopArgs : parseLoopArgs;
+  const readState2 = typeof options.readState === "function" ? options.readState : readState;
+  const writeState2 = typeof options.writeState === "function" ? options.writeState : writeState;
+  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
+  const normalizedModelRef2 = typeof options.normalizedModelRef === "function" ? options.normalizedModelRef : normalizedModelRef;
+  const getSessionExecutionContext2 = typeof options.getSessionExecutionContext === "function" ? options.getSessionExecutionContext : getSessionExecutionContext;
+  const configuredGuard = Number(options.defaultActiveGuardMs);
+  const defaultActiveGuardMs = Number.isFinite(configuredGuard) && configuredGuard > 0 ? configuredGuard : FALLBACK_ACTIVE_GUARD_MS;
+  async function addLoop(directory, client, sessionID, args, defaults = {}) {
+    const parsed = parseLoopArgs2(args, defaults);
+    if (!parsed.ok) {
+      await toast2(client, parsed.error, "warning");
+      return;
+    }
+    const executionContext = getSessionExecutionContext2(sessionID) || { agent: "build" };
+    parsed.job.agent = defaults.agent || executionContext.agent || "build";
+    parsed.job.model = normalizedModelRef2(defaults.model) || executionContext.model;
+    if (defaults.testfixPreset) {
+      const defaultCommand = String(defaults.verifyCommand || "npm test");
+      const parsedAction = String(parsed.job.action || "").trim();
+      const usedDefaultAction = parsedAction === String(defaults.action || "").trim();
+      if (!usedDefaultAction && parsed.job.verifyCommand === defaults.verifyCommand) {
+        parsed.job.verifyCommand = parsedAction;
+        parsed.job.action = `Run the project tests. Fix failures. Re-run the tests. Test command hint: ${parsedAction}`;
+      } else if (usedDefaultAction && parsed.job.verifyCommand !== defaults.verifyCommand) {
+        parsed.job.action = `Run the project tests. Fix failures. Re-run the tests. Test command hint: ${parsed.job.verifyCommand || defaultCommand}`;
+      }
+    }
+    if (parsed.job.watchPaths.length)
+      parsed.job.watchSnapshot = await snapshotPaths(directory, parsed.job.watchPaths);
+    if (!parsed.job.activeRecoveryMs) {
+      parsed.job.activeRecoveryMs = isGoalJob(parsed.job) ? DEFAULT_GOAL_ACTIVE_RECOVERY_MS : Math.max(defaultActiveGuardMs, Math.min(90000, (parsed.job.intervalMs || 0) + 1e4));
+    }
+    if (parsed.job.dryRun) {
+      await toast2(client, `Loop dry run: ${jobLabel(parsed.job)}`, "info");
+      await say2(client, sessionID, "OpenCode loop dry run:\n```json\n" + JSON.stringify(parsed.job, null, 2) + "\n```");
+      return;
+    }
+    const state = await readState2(directory, sessionID);
+    const jobs = Array.isArray(state.jobs) ? state.jobs : [];
+    let replaced = false;
+    if (!parsed.job.multi) {
+      const targetName = parsed.job.name || "default";
+      parsed.job.name = targetName;
+      state.jobs = jobs.filter((existing) => {
+        const existingName = existing.name || "default";
+        const shouldReplace = existingName === targetName || sameLoopDefinition(existing, parsed.job);
+        if (shouldReplace)
+          replaced = true;
+        return !shouldReplace;
+      });
+    } else {
+      state.jobs = jobs;
+    }
+    state.jobs.push(parsed.job);
+    await writeState2(directory, sessionID, state);
+    await scheduleDueWork(directory, client, sessionID);
+    if (parsed.job.immediate)
+      scheduleIdleWork(directory, client, sessionID);
+    await toast2(client, `${replaced ? "Loop replaced" : "Loop added"}: ${jobLabel(parsed.job)}`, "success");
+    await appendLoopLog2(directory, replaced ? "replace" : "add", { sessionID, job: parsed.job.name || parsed.job.id, label: jobLabel(parsed.job) });
+  }
+  return { addLoop };
+}
+
 // src/source/runtime/session-activity.js
 var activeToolCalls = new Map;
 var sessionParents = new Map;
@@ -2105,15 +2192,15 @@ function createSchedulerRuntime(options = {}) {
 }
 
 // src/source/runtime/goal-policy.js
-function requireFunction4(value, name) {
+function requireFunction5(value, name) {
   if (typeof value !== "function")
     throw new TypeError(`createGoalExecutionPolicy requires ${name}`);
   return value;
 }
 function createGoalExecutionPolicy(options = {}) {
-  const runShellCommand2 = requireFunction4(options.runShellCommand, "runShellCommand");
-  const dangerousShell = requireFunction4(options.dangerousShell, "dangerousShell");
-  const toast2 = requireFunction4(options.toast, "toast");
+  const runShellCommand2 = requireFunction5(options.runShellCommand, "runShellCommand");
+  const dangerousShell = requireFunction5(options.dangerousShell, "dangerousShell");
+  const toast2 = requireFunction5(options.toast, "toast");
   const now2 = typeof options.now === "function" ? options.now : now;
   const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
   async function applyGoalNoProgressGuard(directory, client, sessionID, job, beforeJob) {
@@ -2191,7 +2278,6 @@ var BUSY_RETRY_MS = 5000;
 var SESSION_STATUS_CACHE_MS = 1500;
 var MAX_SCAN_FILES = 200;
 var MAX_SCAN_BYTES = 2000000;
-var DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180000;
 var { runGoalChecks, applyGoalNoProgressGuard } = createGoalExecutionPolicy({ runShellCommand, dangerousShell, toast, appendLoopLog, now });
 var activeRuns = new Map;
 var runLocks = new Map;
@@ -2206,6 +2292,14 @@ var schedulerRuntime = createSchedulerRuntime({
   errorMessage: sdkErrorMessage
 });
 var { rememberSession, scheduleIdleWork, scheduleDueWork, stopWatchdog, cancelDueWork } = schedulerRuntime;
+var { addLoop } = createLoopRegistration({
+  snapshotPaths,
+  scheduleDueWork,
+  scheduleIdleWork,
+  toast,
+  say,
+  defaultActiveGuardMs: DEFAULT_ACTIVE_GUARD_MS
+});
 var {
   addGoal,
   statusGoal,
@@ -3025,68 +3119,6 @@ exit=` + preflight.code + `
   } finally {
     runLocks.delete(sessionID);
   }
-}
-function normalizeActionForCompare(value) {
-  return String(value || "").replace(/\s+/g, " ").trim();
-}
-function sameLoopDefinition(a, b) {
-  if (!a || !b)
-    return false;
-  return (a.name || "") === (b.name || "") && Number(a.intervalMs || 0) === Number(b.intervalMs || 0) && normalizeActionForCompare(a.action) === normalizeActionForCompare(b.action) && normalizeActionForCompare(a.kind) === normalizeActionForCompare(b.kind) && normalizeActionForCompare(a.promptFile) === normalizeActionForCompare(b.promptFile);
-}
-async function addLoop(directory, client, sessionID, args, defaults = {}) {
-  const parsed = parseLoopArgs(args, defaults);
-  if (!parsed.ok) {
-    await toast(client, parsed.error, "warning");
-    return;
-  }
-  const executionContext = getSessionExecutionContext(sessionID) || { agent: "build" };
-  parsed.job.agent = defaults.agent || executionContext.agent || "build";
-  parsed.job.model = normalizedModelRef(defaults.model) || executionContext.model;
-  if (defaults.testfixPreset) {
-    const defaultCommand = String(defaults.verifyCommand || "npm test");
-    const parsedAction = String(parsed.job.action || "").trim();
-    const usedDefaultAction = parsedAction === String(defaults.action || "").trim();
-    if (!usedDefaultAction && parsed.job.verifyCommand === defaults.verifyCommand) {
-      parsed.job.verifyCommand = parsedAction;
-      parsed.job.action = `Run the project tests. Fix failures. Re-run the tests. Test command hint: ${parsedAction}`;
-    } else if (usedDefaultAction && parsed.job.verifyCommand !== defaults.verifyCommand) {
-      parsed.job.action = `Run the project tests. Fix failures. Re-run the tests. Test command hint: ${parsed.job.verifyCommand || defaultCommand}`;
-    }
-  }
-  if (parsed.job.watchPaths.length)
-    parsed.job.watchSnapshot = await snapshotPaths(directory, parsed.job.watchPaths);
-  if (!parsed.job.activeRecoveryMs) {
-    parsed.job.activeRecoveryMs = isGoalJob(parsed.job) ? DEFAULT_GOAL_ACTIVE_RECOVERY_MS : Math.max(DEFAULT_ACTIVE_GUARD_MS, Math.min(90000, (parsed.job.intervalMs || 0) + 1e4));
-  }
-  if (parsed.job.dryRun) {
-    await toast(client, `Loop dry run: ${jobLabel(parsed.job)}`, "info");
-    await say(client, sessionID, "OpenCode loop dry run:\n```json\n" + JSON.stringify(parsed.job, null, 2) + "\n```");
-    return;
-  }
-  const state = await readState(directory, sessionID);
-  const jobs = Array.isArray(state.jobs) ? state.jobs : [];
-  let replaced = false;
-  if (!parsed.job.multi) {
-    const targetName = parsed.job.name || "default";
-    parsed.job.name = targetName;
-    state.jobs = jobs.filter((existing) => {
-      const existingName = existing.name || "default";
-      const shouldReplace = existingName === targetName || sameLoopDefinition(existing, parsed.job);
-      if (shouldReplace)
-        replaced = true;
-      return !shouldReplace;
-    });
-  } else {
-    state.jobs = jobs;
-  }
-  state.jobs.push(parsed.job);
-  await writeState(directory, sessionID, state);
-  await scheduleDueWork(directory, client, sessionID);
-  if (parsed.job.immediate)
-    scheduleIdleWork(directory, client, sessionID);
-  await toast(client, `${replaced ? "Loop replaced" : "Loop added"}: ${jobLabel(parsed.job)}`, "success");
-  await appendLoopLog(directory, replaced ? "replace" : "add", { sessionID, job: parsed.job.name || parsed.job.id, label: jobLabel(parsed.job) });
 }
 function goalTools(defaultDirectory) {
   return {
