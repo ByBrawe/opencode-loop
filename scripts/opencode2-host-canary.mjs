@@ -17,6 +17,7 @@ function run(command, args, { cwd, env, allowFailure = false, timeout = 60_000 }
     maxBuffer: 8 * 1024 * 1024,
     timeout,
     windowsHide: true,
+    shell: process.platform === "win32",
   })
   if (result.error) throw result.error
   if (!allowFailure && result.status !== 0) {
