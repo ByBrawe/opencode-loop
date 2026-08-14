@@ -44,7 +44,7 @@ jobs:
           body="$(node -e 'process.stdout.write(JSON.stringify({location:{directory:process.argv[1]}}))' "$project")"
           cd "$project"
           opencode2 api post "/api/session?$query" --data "$body"
-          output="$(opencode2 api get "/api/experimental/tool/ids?$query")"
+          output="$(opencode2 api get "/experimental/tool/ids?$query")"
           printf '%s\n' "$output"
           printf '%s\n' "$output" | grep -F 'opencode_loop_goal_progress'
           opencode2 service stop >/dev/null 2>&1 || true
