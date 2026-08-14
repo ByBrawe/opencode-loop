@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - main
+      - v2-adapter-step1
     paths:
       - "src/source/opencode2/**"
       - ".github/workflows/opencode2-activation.yml"
@@ -99,8 +100,6 @@ jobs:
           EOF
           git -C "$project" add .opencode/plugins/opencode-loop-v2-probe.js
           git -C "$project" commit --quiet -m "init"
-          git -C "$project" rev-parse --show-toplevel
-          cat "$plugin_dir/opencode-loop-v2-probe.js"
 
       - name: Verify dependency-free setup runs in real OpenCode 2 host
         shell: bash
@@ -108,26 +107,60 @@ jobs:
           project="$RUNNER_TEMP/opencode-loop-v2-activation"
           marker="$project/v2-activation-marker.json"
           rm -f "$marker"
-
           opencode2 api get /api/command -H "x-opencode-directory: $project" > "$RUNNER_TEMP/opencode2-command.json" 2>&1 || true
-          if [ ! -f "$marker" ]; then
-            opencode2 api get /api/plugin -H "x-opencode-directory: $project" > "$RUNNER_TEMP/opencode2-plugin.json" 2>&1 || true
-          fi
-
           for attempt in $(seq 1 50); do
             if [ -f "$marker" ]; then
               cat "$marker"
               node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(value.id!=="bybrawe.opencode-loop.v2.activation-probe" || value.activated!==true) process.exit(1)' "$marker"
+              break
+            fi
+            sleep 0.2
+          done
+          test -f "$marker"
+
+      - name: Prepare experimental Loop V2 source probe
+        shell: bash
+        run: |
+          project="$RUNNER_TEMP/opencode-loop-v2-source"
+          plugin_dir="$project/.opencode/plugins"
+          mkdir -p "$plugin_dir"
+          git init --quiet "$project"
+          git -C "$project" config user.email "opencode-loop-ci@example.invalid"
+          git -C "$project" config user.name "OpenCode Loop CI"
+          source_url="$(node -e 'const {pathToFileURL}=require("node:url"); console.log(pathToFileURL(process.argv[1]).href)' "$GITHUB_WORKSPACE/src/source/opencode2/experimental.js")"
+          cat > "$plugin_dir/opencode-loop-v2-source-probe.js" <<EOF
+          import { writeFile } from "node:fs/promises"
+          import plugin from ${source_url@Q}
+
+          const marker = new URL("../../v2-source-marker.json", import.meta.url)
+          export default {
+            id: "bybrawe.opencode-loop.v2.source-probe",
+            async setup(ctx) {
+              await plugin.setup(ctx)
+              await writeFile(marker, JSON.stringify({ id: plugin.id, started: true }), "utf8")
+            },
+          }
+          EOF
+          git -C "$project" add .opencode/plugins/opencode-loop-v2-source-probe.js
+          git -C "$project" commit --quiet -m "init"
+
+      - name: Verify experimental Loop V2 source starts in real host
+        shell: bash
+        run: |
+          project="$RUNNER_TEMP/opencode-loop-v2-source"
+          marker="$project/v2-source-marker.json"
+          rm -f "$marker"
+          opencode2 api get /api/command -H "x-opencode-directory: $project" > "$RUNNER_TEMP/opencode2-source-command.json" 2>&1 || true
+          for attempt in $(seq 1 50); do
+            if [ -f "$marker" ]; then
+              cat "$marker"
+              node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(value.id!=="bybrawe.opencode-loop.v2.experimental" || value.started!==true) process.exit(1)' "$marker"
               exit 0
             fi
             sleep 0.2
           done
-
-          echo "OpenCode 2 did not execute the local plugin setup hook." >&2
-          echo "--- /api/command ---" >&2
-          cat "$RUNNER_TEMP/opencode2-command.json" >&2 || true
-          echo "--- /api/plugin ---" >&2
-          cat "$RUNNER_TEMP/opencode2-plugin.json" >&2 || true
+          echo "Experimental OpenCode Loop V2 source did not finish setup." >&2
+          cat "$RUNNER_TEMP/opencode2-source-command.json" >&2 || true
           exit 1
 
       - name: Dump OpenCode 2 logs on failure
