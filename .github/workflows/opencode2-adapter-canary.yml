@@ -1,0 +1,48 @@
+name: OpenCode 2 Adapter Canary
+
+on:
+  pull_request:
+    paths:
+      - "src/source/opencode2/**"
+      - "scripts/opencode2-adapter-canary.mjs"
+      - ".github/workflows/opencode2-adapter-canary.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/source/opencode2/**"
+      - "scripts/opencode2-adapter-canary.mjs"
+      - ".github/workflows/opencode2-adapter-canary.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  adapter-canary:
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - name: Install OpenCode 2 beta
+        run: npm install -g --allow-scripts=@opencode-ai/cli @opencode-ai/cli@next
+      - name: Install matching V2 plugin API
+        run: npm install --no-save --package-lock=false @opencode-ai/plugin@next
+      - name: Show tested versions
+        run: |
+          opencode2 --version
+          node -p "require('./node_modules/@opencode-ai/plugin/package.json').version"
+      - name: Verify repository V2 adapter imports with next API
+        run: node -e "import('./src/source/opencode2/experimental.js').then(m => console.log(m.default.id))"
+      - name: Run repository V2 adapter in real host
+        run: node scripts/opencode2-adapter-canary.mjs
