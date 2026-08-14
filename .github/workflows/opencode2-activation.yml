@@ -70,11 +70,30 @@ jobs:
 
           const id = "bybrawe.opencode-loop.v2.activation-probe"
           const marker = new URL("../../v2-activation-marker.json", import.meta.url)
+          const keys = (value) => value && typeof value === "object" ? Object.keys(value).sort() : []
 
           export default {
             id,
-            async setup() {
-              await writeFile(marker, JSON.stringify({ id, activated: true }), "utf8")
+            async setup(ctx) {
+              await writeFile(marker, JSON.stringify({
+                id,
+                activated: true,
+                keys: {
+                  context: keys(ctx),
+                  command: keys(ctx?.command),
+                  event: keys(ctx?.event),
+                  session: keys(ctx?.session),
+                  tool: keys(ctx?.tool),
+                },
+                capabilities: {
+                  commandTransform: typeof ctx?.command?.transform === "function",
+                  eventSubscribe: typeof ctx?.event?.subscribe === "function",
+                  sessionHook: typeof ctx?.session?.hook === "function",
+                  sessionPrompt: typeof ctx?.session?.prompt === "function",
+                  toolTransform: typeof ctx?.tool?.transform === "function",
+                  toolHook: typeof ctx?.tool?.hook === "function",
+                },
+              }, null, 2), "utf8")
             },
           }
           EOF
