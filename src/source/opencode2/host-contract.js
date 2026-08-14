@@ -15,9 +15,16 @@ export function createOpenCode2HostContract(options = {}) {
     if (disposed) throw new Error("OpenCode 2 host contract is disposed")
     if (started) return false
     if (typeof options.subscribe !== "function") throw new TypeError("subscribe must be a function")
+    if (typeof options.sendPrompt !== "function") throw new TypeError("sendPrompt must be a function")
     await bridge.attach(options.subscribe)
     started = true
     return true
+  }
+
+  async function prompt(input) {
+    if (disposed) throw new Error("OpenCode 2 host contract is disposed")
+    if (!started) throw new Error("OpenCode 2 host contract is not started")
+    return await options.sendPrompt(input)
   }
 
   async function dispose(reason = "host-contract-disposed") {
@@ -29,6 +36,7 @@ export function createOpenCode2HostContract(options = {}) {
 
   return Object.freeze({
     start,
+    prompt,
     dispose,
     runtimeManager: bridge.runtimeManager,
     isStarted: () => started,
