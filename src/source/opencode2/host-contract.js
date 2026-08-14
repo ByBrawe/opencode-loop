@@ -17,14 +17,19 @@ function normalizePrompt(input) {
 }
 
 export function createOpenCode2HostContract(options = {}) {
-  const bridge = createOpenCode2EventBridge({
-    directory: options.directory,
-    onEvent: options.onEvent,
-    onError: options.onError,
-  })
+  const onEvent = typeof options.onEvent === "function" ? options.onEvent : async () => {}
   let started = false
   let disposed = false
   let hostDisposed = false
+
+  const bridge = createOpenCode2EventBridge({
+    directory: options.directory,
+    onError: options.onError,
+    onEvent: async (event, runtime) => {
+      if (event.kind === "server" && event.action === "disposed") hostDisposed = true
+      await onEvent(event, runtime)
+    },
+  })
 
   async function start() {
     if (disposed) throw new Error("OpenCode 2 host contract is disposed")
@@ -56,7 +61,6 @@ export function createOpenCode2HostContract(options = {}) {
     prompt,
     dispose,
     runtimeManager: bridge.runtimeManager,
-    markHostDisposed: () => { hostDisposed = true },
     isStarted: () => started,
     isDisposed: () => disposed,
     isHostDisposed: () => hostDisposed,
