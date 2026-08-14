@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const pluginID = "bybrawe.opencode-loop.v2.experimental"
 const sentinelID = "bybrawe.opencode-loop.v2-canary-sentinel"
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function run(command, args, { cwd, env, allowFailure = false, timeout = 60_000 } = {}) {
   const result = spawnSync(command, args, {
@@ -17,6 +18,7 @@ function run(command, args, { cwd, env, allowFailure = false, timeout = 60_000 }
     maxBuffer: 8 * 1024 * 1024,
     timeout,
     windowsHide: true,
+    shell: process.platform === "win32" && command === "opencode2",
   })
   if (result.error) throw result.error
   if (!allowFailure && result.status !== 0) {
@@ -47,7 +49,7 @@ function collectPluginIDs(value) {
   if (typeof value === "string") return [value]
   if (!value || typeof value !== "object") return []
   const direct = [value.id, value.pluginID, value.name].filter((item) => typeof item === "string")
-  const nested = [value.data, value.plugin, value.plugins, value.items].flatMap((item) => collectPluginIDs(item))
+  const nested = [value.data, value.plugins, value.items].flatMap((item) => collectPluginIDs(item))
   return [...direct, ...nested]
 }
 
@@ -67,6 +69,29 @@ async function failureLog(env) {
     } catch {}
   }
   return ""
+}
+
+async function waitForScopedPlugins(project, env, attempts = 20, intervalMs = 250) {
+  const pluginPath = `/api/plugin?location%5Bdirectory%5D=${encodeURIComponent(project)}`
+  let last
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const result = run("opencode2", ["api", "get", pluginPath], { cwd: project, env })
+    const response = parseJSONOutput(result, "GET /api/plugin at project Location")
+    if (response?._tag) {
+      throw new Error(`project-scoped /api/plugin rejected the Location: ${JSON.stringify(response)}`)
+    }
+    if (response?.location?.directory !== project) {
+      throw new Error(`OpenCode 2 resolved the wrong Location: expected ${project}, got ${String(response?.location?.directory)}`)
+    }
+
+    const ids = uniquePluginIDs(response)
+    last = { attempt, result, response, ids }
+    if (ids.includes(sentinelID) && ids.includes(pluginID)) return last
+    if (attempt < attempts) await delay(intervalMs)
+  }
+
+  return last
 }
 
 async function main() {
@@ -90,12 +115,12 @@ async function main() {
     mkdir(state, { recursive: true }),
   ])
 
-  await writeFile(sentinelFile, `export default { id: ${JSON.stringify(sentinelID)}, server: async () => ({ id: ${JSON.stringify(sentinelID)} }) }\n`)
+  await writeFile(sentinelFile, `export default { id: ${JSON.stringify(sentinelID)}, setup: async () => {} }\n`)
   await writeFile(adapterBridge, `export { default } from ${JSON.stringify(pathToFileURL(pluginFile).href)}\n`)
   await writeFile(path.join(project, "README.md"), "# OpenCode Loop V2 host canary\n")
   await writeFile(path.join(project, "opencode.json"), `${JSON.stringify({
     $schema: "https://opencode.ai/config.json",
-    plugin: [
+    plugins: [
       "./.opencode/plugins/opencode-loop-v2-sentinel.js",
       "./.opencode/plugins/opencode-loop-v2-canary.js",
     ],
@@ -110,7 +135,7 @@ async function main() {
     XDG_STATE_HOME: state,
     OPENCODE_DB: path.join(data, "opencode", "opencode-loop-v2-canary.db"),
     OPENCODE_LOG_LEVEL: "DEBUG",
-    OPENCODE_CONFIG_CONTENT: JSON.stringify({ plugin: [sentinelURL, adapterURL] }),
+    OPENCODE_CONFIG_CONTENT: JSON.stringify({ plugins: [sentinelURL, adapterURL] }),
     CI: "true",
   }
 
@@ -133,35 +158,26 @@ async function main() {
     const plainResponse = parseJSONOutput(plainPluginResult, "GET /api/plugin from project cwd")
     const plainIDs = uniquePluginIDs(plainResponse)
 
-    const pluginPath = `/api/plugin?location%5Bdirectory%5D=${encodeURIComponent(project)}`
-    const scopedPluginResult = run("opencode2", ["api", "get", pluginPath], { cwd: project, env })
-    const scopedResponse = parseJSONOutput(scopedPluginResult, "GET /api/plugin at project Location")
-
-    if (scopedResponse?._tag) {
-      throw new Error(`project-scoped /api/plugin rejected the Location: ${JSON.stringify(scopedResponse)}`)
-    }
-    if (scopedResponse?.location?.directory !== project) {
-      throw new Error(`OpenCode 2 resolved the wrong Location: expected ${project}, got ${String(scopedResponse?.location?.directory)}`)
-    }
-
-    const scopedIDs = uniquePluginIDs(scopedResponse)
+    const scoped = await waitForScopedPlugins(project, env)
+    const scopedIDs = scoped?.ids ?? []
     const ids = [...new Set([...plainIDs, ...scopedIDs])]
+
     if (!ids.includes(sentinelID)) {
       throw new Error([
-        `OpenCode 2 did not activate the current-loader sentinel. Active IDs: ${JSON.stringify(ids)}`,
+        `OpenCode 2 did not activate the minimal sentinel after ${scoped?.attempt ?? 0} scoped probes. Active IDs: ${JSON.stringify(ids)}`,
         `Plain /api/plugin IDs: ${JSON.stringify(plainIDs)}`,
         `Scoped /api/plugin IDs: ${JSON.stringify(scopedIDs)}`,
         `Plain response: ${String(plainPluginResult.stdout ?? "")}`,
-        `Scoped response: ${String(scopedPluginResult.stdout ?? "")}`,
+        `Scoped response: ${String(scoped?.result?.stdout ?? "")}`,
       ].join("\n"))
     }
     if (!ids.includes(pluginID)) {
       throw new Error([
-        `OpenCode 2 activated the current-loader sentinel but not ${pluginID}. Active IDs: ${JSON.stringify(ids)}`,
+        `OpenCode 2 activated the sentinel but not ${pluginID} after ${scoped?.attempt ?? 0} scoped probes. Active IDs: ${JSON.stringify(ids)}`,
         `Plain /api/plugin IDs: ${JSON.stringify(plainIDs)}`,
         `Scoped /api/plugin IDs: ${JSON.stringify(scopedIDs)}`,
         `Plain response: ${String(plainPluginResult.stdout ?? "")}`,
-        `Scoped response: ${String(scopedPluginResult.stdout ?? "")}`,
+        `Scoped response: ${String(scoped?.result?.stdout ?? "")}`,
       ].join("\n"))
     }
 
@@ -171,7 +187,8 @@ async function main() {
       node: process.version,
       opencode2Version: version,
       health,
-      projectDirectory: scopedResponse.location.directory,
+      projectDirectory: scoped.response.location.directory,
+      activationProbeAttempts: scoped.attempt,
       sentinelID,
       pluginID,
       plainPluginIDs: plainIDs,
