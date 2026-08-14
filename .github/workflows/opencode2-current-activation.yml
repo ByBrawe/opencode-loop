@@ -1,0 +1,71 @@
+name: OpenCode 2 Current Activation
+
+on:
+  push:
+    branches: [v2-current-activation]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  activation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Isolate OpenCode 2 data
+        shell: bash
+        run: |
+          echo "HOME=$RUNNER_TEMP/opencode2-home" >> "$GITHUB_ENV"
+          echo "XDG_CONFIG_HOME=$RUNNER_TEMP/opencode2-home/.config" >> "$GITHUB_ENV"
+          echo "XDG_DATA_HOME=$RUNNER_TEMP/opencode2-home/.local/share" >> "$GITHUB_ENV"
+          echo "XDG_STATE_HOME=$RUNNER_TEMP/opencode2-home/.local/state" >> "$GITHUB_ENV"
+
+      - run: npm ci
+
+      - name: Install matching V2 beta packages
+        run: npm install --no-save --package-lock=false @opencode-ai/cli@next @opencode-ai/plugin@next
+
+      - name: Show tested versions
+        shell: bash
+        run: |
+          node -p "require('./node_modules/@opencode-ai/plugin/package.json').version"
+          "$GITHUB_WORKSPACE/node_modules/.bin/opencode2" --version
+
+      - name: Verify current V2 plugin entrypoint imports
+        run: node --input-type=module -e "const p=await import('./src/source/opencode2/experimental.js'); if(p.default?.id!=='bybrawe.opencode-loop.v2.experimental') throw new Error('unexpected V2 plugin id'); console.log('V2 direct import passed')"
+
+      - name: Prepare isolated V2 project
+        shell: bash
+        run: |
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
+          project="$RUNNER_TEMP/opencode-loop-v2-current"
+          mkdir -p "$project"
+          git init --quiet "$project"
+          node -e "const fs=require('node:fs'); const path=require('node:path'); const project=process.env.RUNNER_TEMP+'/opencode-loop-v2-current'; const plugin=path.resolve(process.env.GITHUB_WORKSPACE,'src/source/opencode2/experimental.js'); fs.writeFileSync(path.join(project,'opencode.json'), JSON.stringify({plugins:[plugin]}, null, 2))"
+          git -C "$project" add opencode.json
+          git -C "$project" -c user.name='OpenCode Loop CI' -c user.email='ci@example.invalid' commit --quiet -m init
+          cat "$project/opencode.json"
+
+      - name: Verify plugin is active in real V2 host
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/opencode-loop-v2-current"
+          plugins="$("$GITHUB_WORKSPACE/node_modules/.bin/opencode2" api get /api/plugin)"
+          printf '%s\n' "$plugins"
+          printf '%s\n' "$plugins" | grep -F "bybrawe.opencode-loop.v2.experimental"
+
+      - name: Dump V2 logs on failure
+        if: failure()
+        shell: bash
+        run: |
+          find "$XDG_DATA_HOME" -maxdepth 6 -type f -print -exec sh -c 'echo "--- $1"; tail -n 200 "$1"' _ {} \;
