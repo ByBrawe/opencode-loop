@@ -11,7 +11,12 @@ const runtime = createOpenCode2PromptRuntime({ prompt: async (request) => { prom
 
 async function readState() {
   const file = path.join(directory, ".opencode", "opencode-loop", `${sessionID}.json`)
-  return JSON.parse(await readFile(file, "utf8"))
+  try {
+    return JSON.parse(await readFile(file, "utf8"))
+  } catch (error) {
+    if (error?.code === "ENOENT") return { jobs: [] }
+    throw error
+  }
 }
 
 try {
@@ -30,6 +35,19 @@ try {
   assert.equal(state.jobs[0].runCount, 1)
   assert.equal(state.jobs[0].enabled, true)
 
+  const paused = await runtime.onEvent({ kind: "command", action: "executed", name: "loop-pause", sessionID, directory, arguments: "" })
+  assert.equal(paused.count, 1)
+  state = await readState()
+  assert.equal(state.jobs[0].paused, true)
+  assert.equal((await runtime.onEvent({ kind: "session", action: "idle", sessionID, directory })).dispatched, false)
+  assert.equal(prompts.length, 1)
+
+  const resumed = await runtime.onEvent({ kind: "command", action: "executed", name: "loop-resume", sessionID, directory, arguments: "" })
+  assert.equal(resumed.count, 1)
+  state = await readState()
+  assert.equal(state.jobs[0].paused, false)
+  assert.equal(state.jobs[0].lastRunAt, 0)
+
   assert.equal((await runtime.onEvent({ kind: "session", action: "idle", sessionID, directory })).dispatched, true)
   state = await readState()
   assert.equal(state.jobs[0].runCount, 2)
@@ -46,6 +64,19 @@ try {
   assert.equal(command.accepted, false)
   assert.ok(command.blockers.includes("kind"))
   assert.equal((await readState()).jobs.length, 1)
+
+  const named = await runtime.onEvent({ kind: "command", action: "executed", name: "loop", sessionID, directory, arguments: "0s --name keep --multi keep working" })
+  assert.equal(named.accepted, true)
+  assert.equal((await readState()).jobs.length, 2)
+
+  const removed = await runtime.onEvent({ kind: "command", action: "executed", name: "loop-stop", sessionID, directory, arguments: "keep" })
+  assert.equal(removed.count, 1)
+  assert.equal((await readState()).jobs.length, 1)
+
+  const cleared = await runtime.onEvent({ kind: "command", action: "executed", name: "loop-clear", sessionID, directory, arguments: "missing-target-is-ignored" })
+  assert.equal(cleared.count, 1)
+  assert.equal(cleared.target, "all")
+  assert.equal((await readState()).jobs.length, 0)
 
   console.log("OpenCode 2 prompt runtime contract passed")
 } finally {
