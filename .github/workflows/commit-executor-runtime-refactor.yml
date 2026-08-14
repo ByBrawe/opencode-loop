@@ -1,0 +1,36 @@
+name: Commit executor runtime refactor
+
+on:
+  push:
+    branches: [refactor-executor-runtime-20260814]
+    paths:
+      - .github/workflows/commit-executor-runtime-refactor.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refactor-executor-runtime-20260814
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - uses: oven-sh/setup-bun@v2
+      - run: npm ci
+      - run: node scripts/refactor-executor-runtime.mjs
+      - run: npm run build:plugin
+      - run: npm run check
+      - run: npm test
+      - run: git diff --check
+      - name: Commit generated refactor
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/source/legacy-v1.js src/index.js
+          git commit -m "refactor: extract loop executor runtime"
+          git push origin HEAD:refactor-executor-runtime-20260814
