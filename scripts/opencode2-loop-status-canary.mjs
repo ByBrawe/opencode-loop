@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { createServer } from "node:http"
+import net from "node:net"
 import { spawn } from "node:child_process"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
@@ -10,8 +11,18 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const opencode2 = process.platform === "win32" ? "opencode2.cmd" : "opencode2"
 
-function append(current, chunk, limit = 80_000) {
+function append(current, chunk, limit = 120_000) {
   return (current + String(chunk)).slice(-limit)
+}
+
+async function stopProcess(child, timeoutMs = 3_000) {
+  if (!child || child.exitCode !== null) return
+  try { child.kill() } catch {}
+  await new Promise((resolve) => {
+    if (child.exitCode !== null) return resolve()
+    const timer = setTimeout(resolve, timeoutMs)
+    child.once("close", () => { clearTimeout(timer); resolve() })
+  })
 }
 
 async function run(command, args, { cwd, env, timeoutMs = 90_000, allowFailure = false } = {}) {
@@ -29,7 +40,7 @@ async function run(command, args, { cwd, env, timeoutMs = 90_000, allowFailure =
     child.stdout?.on("data", (chunk) => { stdout = append(stdout, chunk) })
     child.stderr?.on("data", (chunk) => { stderr = append(stderr, chunk) })
     const timer = setTimeout(() => {
-      try { child.kill() } catch {}
+      void stopProcess(child)
       finish(reject, new Error(`command timed out: ${command} ${args.join(" ")}\nstdout:\n${stdout}\nstderr:\n${stderr}`))
     }, timeoutMs)
     child.once("error", (error) => finish(reject, error))
@@ -43,13 +54,32 @@ async function run(command, args, { cwd, env, timeoutMs = 90_000, allowFailure =
   })
 }
 
-function json(result, label) {
-  const text = String(result.stdout ?? "").trim()
-  try {
-    return JSON.parse(text)
-  } catch {
-    throw new Error(`${label} did not return JSON.\nstdout:\n${text}\nstderr:\n${result.stderr ?? ""}`)
+async function reservePort() {
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer()
+    server.once("error", reject)
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address()
+      if (!address || typeof address === "string") return reject(new Error("failed to reserve server port"))
+      server.close((error) => error ? reject(error) : resolve(address.port))
+    })
+  })
+}
+
+async function waitForTcp(port, child, logs, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) throw new Error(`OpenCode 2 server exited before ready.\n${logs()}`)
+    const connected = await new Promise((resolve) => {
+      const socket = net.createConnection({ host: "127.0.0.1", port })
+      socket.once("connect", () => { socket.destroy(); resolve(true) })
+      socket.once("error", () => resolve(false))
+      socket.setTimeout(500, () => { socket.destroy(); resolve(false) })
+    })
+    if (connected) return
+    await new Promise((resolve) => setTimeout(resolve, 100))
   }
+  throw new Error(`timed out waiting for OpenCode 2 server on ${port}\n${logs()}`)
 }
 
 function contentText(value) {
@@ -134,7 +164,7 @@ function startProvider() {
   }
 }
 
-async function waitFor(read, predicate, timeoutMs = 15_000) {
+async function waitFor(read, predicate, timeoutMs = 20_000) {
   const deadline = Date.now() + timeoutMs
   let value
   while (Date.now() < deadline) {
@@ -153,10 +183,21 @@ async function main() {
   const commandDir = path.join(project, ".opencode", "commands")
   const provider = startProvider()
   const providerPort = await provider.listen()
+  let server
+  let serverLog = ""
 
-  await mkdir(pluginDir, { recursive: true })
-  await mkdir(commandDir, { recursive: true })
-  await mkdir(home, { recursive: true })
+  const xdgConfig = path.join(home, ".config")
+  const xdgData = path.join(home, ".local", "share")
+  const xdgState = path.join(home, ".local", "state")
+  const xdgCache = path.join(home, ".cache")
+  await Promise.all([
+    mkdir(pluginDir, { recursive: true }),
+    mkdir(commandDir, { recursive: true }),
+    mkdir(xdgConfig, { recursive: true }),
+    mkdir(xdgData, { recursive: true }),
+    mkdir(xdgState, { recursive: true }),
+    mkdir(xdgCache, { recursive: true }),
+  ])
 
   const pluginURL = pathToFileURL(path.join(root, "src", "source", "opencode2", "experimental.js")).href
   await writeFile(path.join(pluginDir, "opencode-loop-v2.js"), `export { default } from ${JSON.stringify(pluginURL)}\n`)
@@ -171,12 +212,7 @@ async function main() {
         npm: "@ai-sdk/openai-compatible",
         name: "Deterministic V2 Status Canary",
         options: { baseURL: `http://127.0.0.1:${providerPort}/v1`, apiKey: "canary-key" },
-        models: {
-          canary: {
-            name: "Deterministic V2 Status Canary",
-            limit: { context: 100000, output: 4096 },
-          },
-        },
+        models: { canary: { name: "Deterministic V2 Status Canary", limit: { context: 100000, output: 4096 } } },
       },
     },
   }, null, 2)}\n`)
@@ -185,19 +221,15 @@ async function main() {
     ...process.env,
     HOME: home,
     USERPROFILE: home,
-    XDG_CONFIG_HOME: path.join(home, ".config"),
-    XDG_DATA_HOME: path.join(home, ".local", "share"),
-    XDG_STATE_HOME: path.join(home, ".local", "state"),
-    XDG_CACHE_HOME: path.join(home, ".cache"),
-    OPENCODE_DB: path.join(home, ".local", "share", "opencode", "status-canary.db"),
+    XDG_CONFIG_HOME: xdgConfig,
+    XDG_DATA_HOME: xdgData,
+    XDG_STATE_HOME: xdgState,
+    XDG_CACHE_HOME: xdgCache,
+    OPENCODE_DB: ":memory:",
     OPENCODE_LOG_LEVEL: "DEBUG",
+    OPENCODE_DISABLE_AUTOUPDATE: "true",
+    OPENCODE_DISABLE_LSP_DOWNLOAD: "true",
     CI: "true",
-  }
-
-  const api = async (method, pathname, data) => {
-    const args = ["api", method.toLowerCase(), pathname, "-H", `x-opencode-directory: ${project}`]
-    if (data !== undefined) args.push("-d", JSON.stringify(data))
-    return json(await run(opencode2, args, { cwd: project, env }), `${method} ${pathname}`)
   }
 
   try {
@@ -207,21 +239,60 @@ async function main() {
     await run("git", ["add", "."], { cwd: project, env })
     await run("git", ["commit", "-q", "-m", "initialize V2 status canary"], { cwd: project, env })
 
-    await run(opencode2, ["service", "stop"], { cwd: project, env, allowFailure: true, timeoutMs: 15_000 })
     const version = (await run(opencode2, ["--version"], { cwd: project, env, timeoutMs: 30_000 })).stdout.trim()
     assert.ok(version)
 
-    const commandCatalog = await api("GET", "/api/command")
+    const port = await reservePort()
+    server = spawn(opencode2, ["serve", "--hostname", "127.0.0.1", "--port", String(port)], {
+      cwd: project,
+      env,
+      windowsHide: true,
+    })
+    server.stdout?.on("data", (chunk) => { serverLog = append(serverLog, chunk) })
+    server.stderr?.on("data", (chunk) => { serverLog = append(serverLog, chunk) })
+    await waitForTcp(port, server, () => serverLog)
+
+    const baseURL = `http://127.0.0.1:${port}`
+    const request = async (method, paths, data) => {
+      const candidates = Array.isArray(paths) ? paths : [paths]
+      let last
+      for (let index = 0; index < candidates.length; index++) {
+        const pathname = candidates[index]
+        const separator = pathname.includes("?") ? "&" : "?"
+        const url = `${baseURL}${pathname}${separator}directory=${encodeURIComponent(project)}`
+        const response = await fetch(url, {
+          method,
+          headers: {
+            "content-type": "application/json",
+            "x-opencode-directory": project,
+          },
+          body: data === undefined ? undefined : JSON.stringify(data),
+          signal: AbortSignal.timeout(30_000),
+        })
+        const text = await response.text()
+        last = { response, text, pathname }
+        if (response.status === 404 && index < candidates.length - 1) continue
+        if (!response.ok) throw new Error(`${method} ${pathname} returned HTTP ${response.status}: ${text}\nserver log:\n${serverLog}`)
+        if (!text) return null
+        try { return JSON.parse(text) } catch { return text }
+      }
+      throw new Error(`${method} ${candidates.join(" or ")} failed: ${last?.text ?? "no response"}`)
+    }
+
+    const commandCatalog = await request("GET", ["/api/command", "/command"])
     const commands = commandCatalog?.data ?? commandCatalog
     assert.ok(Array.isArray(commands), `command catalog was not an array: ${JSON.stringify(commandCatalog)}`)
     assert.ok(commands.some((item) => item?.name === "loop-status" || item?.id === "loop-status"), `loop-status was not discovered: ${JSON.stringify(commands)}`)
 
-    const createdPayload = await api("POST", "/session", { title: "OpenCode Loop V2 status canary" })
+    const createdPayload = await request("POST", ["/api/session", "/session"], { title: "OpenCode Loop V2 status canary" })
     const session = createdPayload?.data ?? createdPayload
     const sessionID = String(session?.id ?? "")
     assert.ok(sessionID, `session creation failed: ${JSON.stringify(createdPayload)}`)
 
-    await api("POST", `/session/${encodeURIComponent(sessionID)}/command`, {
+    await request("POST", [
+      `/api/session/${encodeURIComponent(sessionID)}/command`,
+      `/session/${encodeURIComponent(sessionID)}/command`,
+    ], {
       agent: "build",
       model: "canary/canary",
       command: "loop-status",
@@ -229,7 +300,10 @@ async function main() {
     })
 
     const readMessages = async () => {
-      const payload = await api("GET", `/session/${encodeURIComponent(sessionID)}/message`)
+      const payload = await request("GET", [
+        `/api/session/${encodeURIComponent(sessionID)}/message`,
+        `/session/${encodeURIComponent(sessionID)}/message`,
+      ])
       return payload?.data ?? payload
     }
     const messages = await waitFor(
@@ -239,7 +313,7 @@ async function main() {
 
     assert.ok(Array.isArray(messages), `session messages were not an array: ${JSON.stringify(messages)}`)
     const texts = messages.map(messageText)
-    assert.ok(texts.some((text) => text.includes("OpenCode loop status:\nNo active loop jobs.")), `V2 status response was not persisted. Messages: ${JSON.stringify(texts)}`)
+    assert.ok(texts.some((text) => text.includes("OpenCode loop status:\nNo active loop jobs.")), `V2 status response was not persisted. Messages: ${JSON.stringify(texts)}\nserver log:\n${serverLog}`)
     assert.ok(provider.stats.chatRequests >= 1, `command did not reach deterministic provider: ${JSON.stringify(provider.stats)}`)
 
     console.log(JSON.stringify({
@@ -248,6 +322,7 @@ async function main() {
       sessionID,
       provider: provider.stats,
       messageTexts: texts,
+      serverLog,
     }, null, 2))
   } catch (error) {
     let logTail = ""
@@ -256,9 +331,10 @@ async function main() {
       logTail = (await readFile(logFile, "utf8")).slice(-30_000)
     } catch {}
     if (logTail) console.error(`OpenCode 2 log tail:\n${logTail}`)
+    if (serverLog) console.error(`OpenCode 2 server output:\n${serverLog}`)
     throw error
   } finally {
-    await run(opencode2, ["service", "stop"], { cwd: project, env, allowFailure: true, timeoutMs: 15_000 }).catch(() => {})
+    await stopProcess(server)
     await provider.close()
     await rm(temp, { recursive: true, force: true })
   }
