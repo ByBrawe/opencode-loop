@@ -49,4 +49,6 @@ jobs:
         run: opencode2 --version
 
       - name: Run real OpenCode 2 activation and continuation canary
+        env:
+          OPENCODE_LOOP_V2_CANARY_TRACE: "1"
         run: node scripts/opencode2-host-canary.mjs
