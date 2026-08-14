@@ -1,0 +1,27 @@
+name: Probe OpenCode V2 Service
+
+on:
+  push:
+    branches: [probe-opencode-v2-contract]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  service:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - run: npm install -g @opencode-ai/cli@next
+      - run: opencode2 --version
+      - name: Check API health
+        run: opencode2 api get /api/health
+      - name: Show service status
+        run: opencode2 service status
+      - name: List log files
+        run: find "$HOME/.local/share/opencode/log" -maxdepth 1 -type f -print
