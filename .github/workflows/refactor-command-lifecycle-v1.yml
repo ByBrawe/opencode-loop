@@ -1,0 +1,53 @@
+name: Refactor Command Lifecycle V1
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [refactor-command-lifecycle-v1]
+    paths:
+      - "scripts/refactor-command-lifecycle-v1.mjs"
+      - ".github/workflows/refactor-command-lifecycle-v1.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: npm ci
+      - name: Apply exact command lifecycle extraction
+        run: node scripts/refactor-command-lifecycle-v1.mjs
+      - name: Rebuild stable single-file plugin
+        run: npm run build:plugin
+      - name: Verify migrated source and bundle
+        run: |
+          node --check src/source/opencode/commands.js
+          node --check scripts/command-lifecycle-test.mjs
+          node scripts/command-lifecycle-test.mjs
+          node --check src/source/legacy-v1.js
+          node --check src/index.js
+          npm run check
+          npm test
+          git diff --check
+      - name: Commit verified migration
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/source/legacy-v1.js src/index.js
+          if git diff --cached --quiet; then
+            echo "No verified migration diff to commit."
+            exit 0
+          fi
+          git commit -m "refactor: use extracted OpenCode command lifecycle"
+          git push origin HEAD:refactor-command-lifecycle-v1
