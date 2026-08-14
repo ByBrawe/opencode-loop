@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - main
+      - v2-real-host-plugin-list
     paths:
       - "src/source/opencode2/**"
       - ".github/workflows/opencode2-activation.yml"
