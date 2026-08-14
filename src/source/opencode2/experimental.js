@@ -1,4 +1,5 @@
 import { inspectOpenCode2Context } from "./capabilities.js"
+import { createOpenCode2RuntimeAdapter } from "./runtime-adapter.js"
 
 export const OPENCODE_LOOP_V2_PLUGIN_ID = "bybrawe.opencode-loop.v2.experimental"
 
@@ -9,7 +10,20 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
     if (!capabilities.commandTransform) {
       throw new Error("OpenCode 2 command.transform capability is unavailable")
     }
-    await ctx.command.transform(() => {})
+
+    const commandRegistration = await ctx.command.transform(() => {})
+    const runtime = createOpenCode2RuntimeAdapter(ctx)
+    try {
+      await runtime.start()
+    } catch (error) {
+      await commandRegistration?.dispose?.().catch(() => undefined)
+      throw error
+    }
+
+    return async () => {
+      await runtime.dispose("plugin-cleanup")
+      await commandRegistration?.dispose?.()
+    }
   },
 }
 
