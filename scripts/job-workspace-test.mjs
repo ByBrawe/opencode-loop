@@ -133,15 +133,15 @@ try {
   )
   await runtime.createCheckpoint(directory, "session/checkpoint", { id: "job", name: "workspace", checkpointOnly: true, gitCheckpoint: true }, client)
   const checkpointCalls = processCalls.slice(checkpointProcessStart)
-  assert.deepEqual(checkpointCalls.map((call) => call[1]), [
+  assert.deepEqual(checkpointCalls.slice(0, 5).map((call) => call[1]), [
     ["rev-parse", "--is-inside-work-tree"],
     ["status", "--short"],
     ["diff", "--binary"],
     ["diff", "--cached", "--binary"],
     ["add", "-A"],
-    assert.arrayContaining(["commit", "-m"]),
   ])
-  assert.match(checkpointCalls.at(-1)[1][2], /^chore: opencode loop checkpoint /)
+  assert.deepEqual(checkpointCalls[5][1].slice(0, 2), ["commit", "-m"])
+  assert.match(checkpointCalls[5][1][2], /^chore: opencode loop checkpoint /)
 
   const checkpointDir = path.join(stateDir(directory), "checkpoints", "session-checkpoint")
   const checkpointFiles = await fs.readdir(checkpointDir)
