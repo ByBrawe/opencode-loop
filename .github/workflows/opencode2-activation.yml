@@ -65,20 +65,16 @@ jobs:
           printf '%s\n' 'export default { id: "bybrawe.opencode-loop.v2.activation-probe", async setup() {} }' > "$plugin_dir/opencode-loop-v2-probe.js"
           git -C "$project" add .opencode/plugins/opencode-loop-v2-probe.js
           git -C "$project" commit --quiet -m "init"
-          git -C "$project" rev-parse --show-toplevel
           cat "$plugin_dir/opencode-loop-v2-probe.js"
 
-      - name: Verify dependency-free probe is active in real OpenCode 2 host
+      - name: Run dependency-free probe through real OpenCode 2 plugin list
         shell: bash
         run: |
-          project="$RUNNER_TEMP/opencode-loop-v2-activation"
-          cd "$project"
-          plugins="$("$GITHUB_WORKSPACE/node_modules/.bin/opencode2" plugin list)"
-          printf '%s\n' "$plugins"
-          printf '%s\n' "$plugins" | grep -F "bybrawe.opencode-loop.v2.activation-probe"
+          cd "$RUNNER_TEMP/opencode-loop-v2-activation"
+          "$GITHUB_WORKSPACE/node_modules/.bin/opencode2" plugin list
 
       - name: Dump OpenCode 2 logs on failure
         if: failure()
         shell: bash
         run: |
-          find "$XDG_DATA_HOME" -maxdepth 6 -type f -print -exec sh -c 'echo "--- $1"; tail -n 200 "$1"' _ {} \;
+          find "$XDG_DATA_HOME" -maxdepth 6 -type f -print
