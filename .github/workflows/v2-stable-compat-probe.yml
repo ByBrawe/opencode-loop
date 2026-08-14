@@ -1,0 +1,38 @@
+name: V2 Stable Compatibility Probe
+
+on:
+  push:
+    branches:
+      - v2-stable-compat-probe
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - name: Install OpenCode 2 beta
+        run: npm install -g @opencode-ai/cli@next
+      - name: Verify compatibility canary syntax
+        run: |
+          node --check src/source/v1.js
+          node --check scripts/opencode2-host-canary.mjs
+      - name: Show OpenCode 2 version
+        run: opencode2 --version
+      - name: Run stable Loop plugin on OpenCode 2
+        run: node scripts/opencode2-host-canary.mjs
