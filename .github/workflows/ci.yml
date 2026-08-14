@@ -41,11 +41,14 @@ jobs:
 
       - run: npm ci
 
-      - name: Verify extracted OpenCode host runtime
+      - name: Verify extracted OpenCode adapter modules
         run: |
           node --check src/source/opencode/host.js
           node --check src/source/opencode/messages.js
+          node --check src/source/opencode/commands.js
+          node --check scripts/command-lifecycle-test.mjs
           node scripts/host-adapter-contract-test.mjs
+          node scripts/command-lifecycle-test.mjs
 
       - run: npm run check
 

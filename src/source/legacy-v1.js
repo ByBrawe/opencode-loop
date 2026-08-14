@@ -10,6 +10,7 @@ import { sdkErrorMessage, sdkCall } from "./opencode/sdk.js"
 import { normalizedModelRef, updateSessionExecutionContext, captureSessionExecutionContext, getSessionExecutionContext, setSessionExecutionContext, deleteSessionExecutionContext } from "./opencode/session-context.js"
 import { fireSdk, executeTuiCommand, compactTuiCommandName, readRecentSessionMessages, orderedSessionMessages, activeRunCompletionFromMessages, resolveCompactionModel, compactSession, log, toast } from "./opencode/host.js"
 import { guardLoopOwnedUserMessage, loopOwnedUserMessageGuardActive, say, clearLoopOwnedUserMessageGuard } from "./opencode/messages.js"
+import { markHandled, consumeHandled, hasHandledCommandEvent, markHandledCommandEvent, forgetHandledCommandEvent, clearCommandLifecycle, commandName, isPreset, isLoopCommandName, commandArgsText } from "./opencode/commands.js"
 
 const SERVICE = "opencode-loop"
 const DEFAULT_ACTIVE_GUARD_MS = 45_000
@@ -27,8 +28,6 @@ const GOAL_PROMPT_PREFIX = "EXPERIMENTAL OPENCODE GOAL MODE ITERATION"
 const DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180_000
 
 const activeRuns = new Map()
-const handledCommands = new Map()
-const handledCommandEvents = new Map()
 const idleTimers = new Map()
 const dueTimers = new Map()
 const watchdogTimers = new Map()
@@ -73,54 +72,6 @@ Describe the current project goal here.
 
 
 
-function commandKey(sessionID, name, args) { return `${sessionID || "no-session"}:${name || ""}:${normalizeArgsForKey(args)}` }
-function markHandled(sessionID, name, args) {
-  const key = commandKey(sessionID, name, args)
-  const previous = handledCommands.get(key)
-  const pending = previous && now() - previous.time < 30_000 ? previous.pending + 1 : 1
-  handledCommands.set(key, { time: now(), pending })
-  for (const [entryKey, entry] of handledCommands.entries()) if (now() - entry.time > 30_000) handledCommands.delete(entryKey)
-  for (const [entryKey, time] of handledCommandEvents.entries()) if (now() - time > 30_000) handledCommandEvents.delete(entryKey)
-}
-function consumeHandled(sessionID, name, args) {
-  const key = commandKey(sessionID, name, args)
-  const entry = handledCommands.get(key)
-  if (!entry || now() - entry.time >= 30_000) {
-    handledCommands.delete(key)
-    return false
-  }
-  if (entry.pending <= 1) handledCommands.delete(key)
-  else handledCommands.set(key, { time: entry.time, pending: entry.pending - 1 })
-  return true
-}
-function commandEventKey(sessionID, messageID) {
-  return `${sessionID || "no-session"}:event:${messageID || "no-message"}`
-}
-
-function commandName(name) { return String(name || "") }
-function isPreset(name) { return ["loop-dev", "loop-testfix", "loop-compact", "loop-progress", "loop-safe-dev", "loop-command", "loop-cmd", "loop-prompt", "loop-ask", "loop-shell"].includes(name) }
-function isLoopCommandName(name) {
-  return name === "loop" || name === "loop-stop" || name === "loop-remove" || name === "loop-clear" || name === "loop-status" || name === "loop-logs" || name === "loop-help" || name === "loop-now" || name === "loop-pause" || name === "loop-resume" || name === "loop-doctor" || name === "loop-init" || name === "loop-export" || name === "loop-goal" || name === "loop-goal-status" || name === "loop-goal-pause" || name === "loop-goal-resume" || name === "loop-goal-clear" || name === "loop-goal-done" || name === "loop-goal-complete" || name === "loop-goal-blocked" || isPreset(name)
-}
-
-function normalizeArgsForKey(args) {
-  if (args === undefined || args === null) return ""
-  if (typeof args === "string") return args.trim().replace(/\s+/g, " ")
-  if (Array.isArray(args)) return args.map(normalizeArgsForKey).join(" ").trim().replace(/\s+/g, " ")
-  try { return JSON.stringify(args) } catch { return String(args) }
-}
-
-function commandArgsText(args) {
-  if (args === undefined || args === null) return ""
-  if (typeof args === "string") return args
-  if (Array.isArray(args)) return args.map(commandArgsText).join(" ")
-  if (typeof args === "object") {
-    for (const key of ["arguments", "args", "message", "text", "value"]) {
-      if (args[key] !== undefined) return commandArgsText(args[key])
-    }
-  }
-  return String(args)
-}
 
 function rememberSession(directory, client, sessionID) {
   if (!sessionID) return
@@ -268,8 +219,7 @@ function disposeRuntime(directory, client) {
     sessionStatusSeenAt.delete(sessionID)
     deleteSessionExecutionContext(sessionID)
     loopCompactionRequests.delete(sessionID)
-    for (const key of handledCommands.keys()) if (key.startsWith(`${sessionID}:`)) handledCommands.delete(key)
-    for (const key of handledCommandEvents.keys()) if (key.startsWith(`${sessionID}:`)) handledCommandEvents.delete(key)
+    clearCommandLifecycle(sessionID)
   }
   if (!knownSessions.size && heartbeatTimer) {
     clearInterval(heartbeatTimer)
@@ -1652,9 +1602,8 @@ async function handleCommand(directory, client, input, fallbackName, fallbackArg
   if (isLoopCommandName(name)) await captureSessionExecutionContext(client, sessionID)
   if (source === "event") {
     if (consumeHandled(sessionID, name, args)) return true
-    const eventKey = commandEventKey(sessionID, input?.messageID)
-    if (handledCommandEvents.has(eventKey)) return true
-    handledCommandEvents.set(eventKey, now())
+    if (hasHandledCommandEvent(sessionID, input?.messageID)) return true
+    markHandledCommandEvent(sessionID, input?.messageID)
   } else {
     // Every before-hook invocation is an intentional command. Keep a pending
     // count only so the matching command.executed compatibility event can be
@@ -1691,7 +1640,7 @@ async function handleCommand(directory, client, input, fallbackName, fallbackArg
   if (name === "loop-doctor") return await doctorLoop(directory, client, sessionID), handled()
   if (name === "loop-init") return await initLoop(directory, client, sessionID, args), handled()
   if (name === "loop-export") return await exportLoop(directory, client, sessionID), handled()
-  if (source === "event") handledCommandEvents.delete(commandEventKey(sessionID, input?.messageID))
+  if (source === "event") forgetHandledCommandEvent(sessionID, input?.messageID)
   else consumeHandled(sessionID, name, args)
   return false
 }
