@@ -58,6 +58,13 @@ jobs:
           node -e 'const fs=require("node:fs"),path=require("node:path");const project=process.argv[1],plugin=path.resolve(process.argv[2]);fs.writeFileSync(path.join(project,"opencode.json"),JSON.stringify({plugins:[plugin]},null,2)+"\n")' "$project" "$GITHUB_WORKSPACE/src/source/opencode2/experimental.js"
           cat "$project/opencode.json"
 
+      - name: Show project config through real OpenCode 2 host
+        shell: bash
+        continue-on-error: true
+        run: |
+          project="$RUNNER_TEMP/opencode-loop-v2-activation"
+          "$GITHUB_WORKSPACE/node_modules/.bin/opencode2" api get /api/config -H "x-opencode-directory: $project"
+
       - name: Verify plugin is active in real OpenCode 2 host
         shell: bash
         run: |
@@ -65,3 +72,9 @@ jobs:
           plugins="$("$GITHUB_WORKSPACE/node_modules/.bin/opencode2" api get /api/plugin -H "x-opencode-directory: $project")"
           printf '%s\n' "$plugins"
           printf '%s\n' "$plugins" | grep -F "bybrawe.opencode-loop.v2.experimental"
+
+      - name: Dump OpenCode 2 logs on failure
+        if: failure()
+        shell: bash
+        run: |
+          find "$XDG_DATA_HOME" -maxdepth 6 -type f -print -exec sh -c 'echo "--- $1"; tail -n 200 "$1"' _ {} \;
