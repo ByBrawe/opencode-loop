@@ -1,9 +1,11 @@
-import { define } from "@opencode-ai/plugin/v2/promise"
 import { inspectOpenCode2Context } from "./capabilities.js"
 
 export const OPENCODE_LOOP_V2_PLUGIN_ID = "bybrawe.opencode-loop.v2.experimental"
 
-export const OpenCodeLoopV2ExperimentalPlugin = define({
+// OpenCode's V2 define() helper is an identity function. Keeping the descriptor
+// dependency-free lets the experimental adapter load across beta package layouts
+// where the Promise API moved from ./v2/promise to the package root.
+export const OpenCodeLoopV2ExperimentalPlugin = {
   id: OPENCODE_LOOP_V2_PLUGIN_ID,
   async setup(ctx) {
     const capabilities = inspectOpenCode2Context(ctx)
@@ -12,6 +14,6 @@ export const OpenCodeLoopV2ExperimentalPlugin = define({
     }
     await ctx.command.transform(() => {})
   },
-})
+}
 
 export default OpenCodeLoopV2ExperimentalPlugin
