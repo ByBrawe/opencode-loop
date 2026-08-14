@@ -88,7 +88,7 @@ while (legacy.includes(pendingRead)) {
   legacy = legacy.replace(pendingRead, 'const pending = compactionRuntime.getPending(sessionID)')
   pendingReads++
 }
-if (pendingReads !== 1) throw new Error(`expected one remaining pending read in finalizeActiveRun, found ${pendingReads}`)
+if (pendingReads !== 3) throw new Error(`expected three remaining pending reads, found ${pendingReads}`)
 
 const oldStart = `beginLoopCompaction(sessionID, job.id, false)
     const ok = await compactSession(directory, client, sessionID, model)
