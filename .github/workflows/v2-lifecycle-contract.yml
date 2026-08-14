@@ -9,6 +9,7 @@ on:
       - "scripts/v2-event-stream-contract-test.mjs"
       - "scripts/v2-host-contract-test.mjs"
       - "scripts/v2-plugin-sentinel-test.mjs"
+      - "scripts/v2-loop-status-test.mjs"
       - ".github/workflows/v2-lifecycle-contract.yml"
   push:
     branches: [main]
@@ -19,6 +20,7 @@ on:
       - "scripts/v2-event-stream-contract-test.mjs"
       - "scripts/v2-host-contract-test.mjs"
       - "scripts/v2-plugin-sentinel-test.mjs"
+      - "scripts/v2-loop-status-test.mjs"
       - ".github/workflows/v2-lifecycle-contract.yml"
 
 permissions:
@@ -43,11 +45,14 @@ jobs:
       - run: npm ci
       - run: node --check src/source/opencode2/event-bridge.js
       - run: node --check src/source/opencode2/host-contract.js
+      - run: node --check src/source/opencode2/status.js
       - run: node --check src/source/opencode2/experimental.js
       - run: node --check scripts/v2-event-bridge-test.mjs
       - run: node --check scripts/v2-event-stream-contract-test.mjs
       - run: node --check scripts/v2-host-contract-test.mjs
+      - run: node --check scripts/v2-loop-status-test.mjs
       - run: node scripts/v2-event-bridge-test.mjs
       - run: node scripts/v2-event-stream-contract-test.mjs
       - run: node scripts/v2-host-contract-test.mjs
       - run: node scripts/v2-plugin-sentinel-test.mjs
+      - run: node scripts/v2-loop-status-test.mjs
