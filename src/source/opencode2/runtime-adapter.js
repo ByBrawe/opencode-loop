@@ -11,7 +11,7 @@ function promptRequest(request) {
 function commandRequest(request) {
   const value = {
     sessionID: request.sessionID,
-    id: request.id,
+    command: request.command,
   }
   if (request.arguments !== undefined) value.arguments = request.arguments
   if (request.agent !== undefined) value.agent = request.agent
