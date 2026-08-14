@@ -56,8 +56,14 @@ legacy = legacy.replace(runMaps, statusWiring)
 legacy = removeUntil(
   legacy,
   "function updateSessionStatusFromEvent(event) {",
+  "function userInterruptSessionFromEvent(event) {",
+  "session status event block",
+)
+legacy = removeUntil(
+  legacy,
+  "function staleActiveRun(sessionID) {",
   "function dueJobs(state, force = false) {",
-  "session status runtime block",
+  "session status recovery block",
 )
 
 const clearPattern = /sessionStatuses\.delete\(sessionID\)\n\s*sessionStatusSeenAt\.delete\(sessionID\)/g
@@ -83,6 +89,8 @@ for (const moved of [
 ]) {
   if (legacy.includes(moved)) throw new Error(`moved session-status function remains in legacy source: ${moved}`)
 }
+if (!legacy.includes("function userInterruptSessionFromEvent(event)")) throw new Error("user interrupt event helper must remain in legacy source")
+if (!legacy.includes("async function pauseGoalsForUserInterrupt(directory, client, sessionID)")) throw new Error("goal user-interrupt pause helper must remain in legacy source")
 if (!legacy.includes("createSessionStatusRuntime({")) throw new Error("session status runtime wiring missing")
 if (!legacy.includes("function dueJobs(state, force = false)")) throw new Error("dueJobs must remain in legacy source")
 if (!legacy.includes("async function finalizeActiveRun(directory, client, sessionID, options = {})")) throw new Error("finalizeActiveRun must remain in legacy source")
