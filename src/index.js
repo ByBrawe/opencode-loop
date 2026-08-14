@@ -1,7 +1,7 @@
 // @bun
 // src/source/legacy-v1.js
-import { promises as fs4 } from "fs";
-import path4 from "path";
+import { promises as fs5 } from "fs";
+import path5 from "path";
 import { tool } from "@opencode-ai/plugin/tool";
 
 // src/source/core/args.js
@@ -1614,6 +1614,183 @@ function createGoalCommandHandlers(options = {}) {
   };
 }
 
+// src/source/opencode/loop-commands.js
+import { promises as fs4 } from "fs";
+import path4 from "path";
+var SERVICE2 = "opencode-loop";
+var DEFAULT_PROGRESS_MD = `# Progress
+
+## Current Goal
+Describe the current project goal here.
+
+## Agent Rules
+- Do not ask questions unless truly blocked.
+- Make reasonable assumptions and continue.
+- Work on unfinished TODOs in order.
+- Mark completed TODOs with [x].
+- Add new bugs, ideas, and follow-up work as TODOs.
+- Run tests, lint, or build when available.
+- Do not run destructive commands, force pushes, production deploys, or database resets.
+
+## Active TODO
+- [ ] Review the project structure and pick the next safe improvement.
+
+## Completed
+- [x] Created progress.md.
+
+## Backlog Ideas
+- [ ] Add more project-specific tasks here.
+
+## Blocked
+- None.
+`;
+function requireFunction3(value, name) {
+  if (typeof value !== "function")
+    throw new TypeError(`createLoopCommandHandlers requires ${name}`);
+  return value;
+}
+function createLoopCommandHandlers(options = {}) {
+  const clearActiveRun = requireFunction3(options.clearActiveRun, "clearActiveRun");
+  const cancelDueWork = requireFunction3(options.cancelDueWork, "cancelDueWork");
+  const stopWatchdog = requireFunction3(options.stopWatchdog, "stopWatchdog");
+  const scheduleDueWork = requireFunction3(options.scheduleDueWork, "scheduleDueWork");
+  const maybeRunDueJobs = requireFunction3(options.maybeRunDueJobs, "maybeRunDueJobs");
+  const toast2 = requireFunction3(options.toast, "toast");
+  const say2 = requireFunction3(options.say, "say");
+  const now2 = typeof options.now === "function" ? options.now : now;
+  const readState2 = typeof options.readState === "function" ? options.readState : readState;
+  const writeState2 = typeof options.writeState === "function" ? options.writeState : writeState;
+  const removeState2 = typeof options.removeState === "function" ? options.removeState : removeState;
+  const pathExists2 = typeof options.pathExists === "function" ? options.pathExists : pathExists;
+  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
+  const readFile = typeof options.readFile === "function" ? options.readFile : (...args) => fs4.readFile(...args);
+  const writeFile = typeof options.writeFile === "function" ? options.writeFile : (...args) => fs4.writeFile(...args);
+  const runtimeVersion = options.runtimeVersion || process.version;
+  const runtimePlatform = options.runtimePlatform || process.platform;
+  async function stopLoop(directory, client, sessionID, args) {
+    const target = String(args || "").trim();
+    if (!target || target.toLowerCase() === "all") {
+      await removeState2(directory, sessionID);
+      clearActiveRun(sessionID);
+      cancelDueWork(sessionID);
+      stopWatchdog(sessionID);
+      await toast2(client, "All loops stopped for this session.", "success");
+      return;
+    }
+    const state = await readState2(directory, sessionID);
+    const before = state.jobs.length;
+    state.jobs = state.jobs.filter((job, index) => !matchJob(job, target, index));
+    await writeState2(directory, sessionID, state);
+    await scheduleDueWork(directory, client, sessionID);
+    await toast2(client, `Stopped ${before - state.jobs.length} loop(s).`, "success");
+  }
+  async function updateJobState(directory, client, sessionID, args, updater, message) {
+    const target = String(args || "").trim() || "all";
+    const state = await readState2(directory, sessionID);
+    let count = 0;
+    state.jobs = (state.jobs || []).map((job, index) => matchJob(job, target, index) ? (count++, updater(job)) : job);
+    await writeState2(directory, sessionID, state);
+    await scheduleDueWork(directory, client, sessionID);
+    await toast2(client, `${message}: ${count} loop(s).`, count ? "success" : "warning");
+  }
+  async function statusLoop(directory, client, sessionID) {
+    const state = await readState2(directory, sessionID);
+    const jobs = state.jobs || [];
+    const lines = jobs.length ? jobs.map((job, index) => {
+      const dueIn = Math.max(0, job.intervalMs - (now2() - (job.lastRunAt || 0)));
+      const flags = [isGoalJob(job) ? `goal:${goalStatusText(job)}` : undefined, job.paused ? "paused" : "active", job.safe ? "safe" : undefined, job.askNever ? "ask-never" : undefined, job.noOverlap ? "no-overlap" : undefined, job.checkpointOnly ? "checkpoint-only" : undefined, job.gitCheckpoint ? "git-checkpoint" : undefined].filter(Boolean).join(",");
+      return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${jobLabel(job)} | runs=${job.runCount || 0} | failures=${job.failureCount || 0} | due in ${durationToText(dueIn)} | ${flags}`;
+    }) : ["No active loop jobs."];
+    await toast2(client, jobs.length ? `${jobs.length} loop job(s).` : "No active loop jobs.", jobs.length ? "info" : "warning");
+    await say2(client, sessionID, `OpenCode loop status:
+` + lines.join(`
+`));
+  }
+  async function logsLoop(directory, client, sessionID) {
+    let text = "No loop log found.";
+    try {
+      text = (await readFile(path4.join(stateDir(directory), "loop.log"), "utf8")).trim().split(/\r?\n/).slice(-80).join(`
+`) || text;
+    } catch {}
+    await say2(client, sessionID, `OpenCode loop logs:
+` + text);
+  }
+  async function helpLoop(client, sessionID) {
+    await say2(client, sessionID, [
+      "OpenCode Loop help:",
+      "/loop 0s <prompt>                                Claude Code style auto-continue",
+      "/loop 5m --ask-never --safe <prompt>              interval autonomous prompt loop",
+      "/loop-command 200m /compact                       OpenCode slash-command loop, waits for idle",
+      "/loop-ask 1h did you run tests and tsc --noEmit?   scheduled question/check prompt",
+      "/loop-shell 10m npm test                           shell loop, waits for idle",
+      "/loop-goal finish the feature and keep tests green  experimental persistent goal mode",
+      '/loop-goal --check "npm run build" --check "npm test" --complete-when-checks-pass ship it',
+      "/loop-goal status | pause | resume | clear          manage experimental goals",
+      "/loop 200m --command /compact                     same as command loop",
+      '/loop 0s --verify "npm test" <prompt>            verify after each assistant turn',
+      "/loop 0s --prompt-file loop-prompt.md             load prompt from a file",
+      "/loop 0s --max-runtime 6h --max-failures 3 <task> stop safely after limits",
+      "/loop-doctor | /loop-init | /loop-export"
+    ].join(`
+`));
+  }
+  async function runNow(directory, client, sessionID, args) {
+    const target = String(args || "").trim() || "all";
+    const state = await readState2(directory, sessionID);
+    let count = 0;
+    for (const [index, job] of (state.jobs || []).entries())
+      if (matchJob(job, target, index)) {
+        job.lastRunAt = 0;
+        job.paused = false;
+        count++;
+      }
+    await writeState2(directory, sessionID, state);
+    await toast2(client, `Marked ${count} loop job(s) due now.`, count ? "success" : "warning");
+    await maybeRunDueJobs(directory, client, sessionID, { force: true });
+  }
+  async function doctorLoop(directory, client, sessionID) {
+    const state = await readState2(directory, sessionID);
+    await say2(client, sessionID, [
+      "OpenCode Loop doctor:",
+      `- plugin: ${SERVICE2}`,
+      `- project directory: ${directory}`,
+      `- state directory: ${stateDir(directory)}`,
+      `- active jobs: ${(state.jobs || []).length}`,
+      `- node: ${runtimeVersion}`,
+      `- platform: ${runtimePlatform}`,
+      "- smoke test: /loop 0s --max-runs 1 --dry-run continue from progress.md",
+      "- experimental goal smoke test: /loop-goal --dry-run finish the current task and verify it"
+    ].join(`
+`));
+  }
+  async function initLoop(directory, client, sessionID, args) {
+    const target = String(args || "").trim() || "progress.md";
+    const full = path4.resolve(directory, target);
+    if (await pathExists2(full)) {
+      await toast2(client, `${target} already exists.`, "warning");
+      return;
+    }
+    await writeFile(full, DEFAULT_PROGRESS_MD, "utf8");
+    await toast2(client, `Created ${target}.`, "success");
+    await appendLoopLog2(directory, "init", { sessionID, file: target });
+  }
+  async function exportLoop(directory, client, sessionID) {
+    const state = await readState2(directory, sessionID);
+    await say2(client, sessionID, "OpenCode loop state export:\n```json\n" + JSON.stringify(state, null, 2) + "\n```");
+  }
+  return {
+    stopLoop,
+    updateJobState,
+    statusLoop,
+    logsLoop,
+    helpLoop,
+    runNow,
+    doctorLoop,
+    initLoop,
+    exportLoop
+  };
+}
+
 // src/source/runtime/session-activity.js
 var activeToolCalls = new Map;
 var sessionParents = new Map;
@@ -1928,15 +2105,15 @@ function createSchedulerRuntime(options = {}) {
 }
 
 // src/source/runtime/goal-policy.js
-function requireFunction3(value, name) {
+function requireFunction4(value, name) {
   if (typeof value !== "function")
     throw new TypeError(`createGoalExecutionPolicy requires ${name}`);
   return value;
 }
 function createGoalExecutionPolicy(options = {}) {
-  const runShellCommand2 = requireFunction3(options.runShellCommand, "runShellCommand");
-  const dangerousShell = requireFunction3(options.dangerousShell, "dangerousShell");
-  const toast2 = requireFunction3(options.toast, "toast");
+  const runShellCommand2 = requireFunction4(options.runShellCommand, "runShellCommand");
+  const dangerousShell = requireFunction4(options.dangerousShell, "dangerousShell");
+  const toast2 = requireFunction4(options.toast, "toast");
   const now2 = typeof options.now === "function" ? options.now : now;
   const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
   async function applyGoalNoProgressGuard(directory, client, sessionID, job, beforeJob) {
@@ -2008,7 +2185,6 @@ ${item.output}`).join(`
 }
 
 // src/source/legacy-v1.js
-var SERVICE2 = "opencode-loop";
 var DEFAULT_ACTIVE_GUARD_MS = 45000;
 var STALE_ACTIVE_RECOVERY_MS = 45000;
 var BUSY_RETRY_MS = 5000;
@@ -2020,32 +2196,6 @@ var { runGoalChecks, applyGoalNoProgressGuard } = createGoalExecutionPolicy({ ru
 var activeRuns = new Map;
 var runLocks = new Map;
 var loopCompactionRequests = new Map;
-var DEFAULT_PROGRESS_MD = `# Progress
-
-## Current Goal
-Describe the current project goal here.
-
-## Agent Rules
-- Do not ask questions unless truly blocked.
-- Make reasonable assumptions and continue.
-- Work on unfinished TODOs in order.
-- Mark completed TODOs with [x].
-- Add new bugs, ideas, and follow-up work as TODOs.
-- Run tests, lint, or build when available.
-- Do not run destructive commands, force pushes, production deploys, or database resets.
-
-## Active TODO
-- [ ] Review the project structure and pick the next safe improvement.
-
-## Completed
-- [x] Created progress.md.
-
-## Backlog Ideas
-- [ ] Add more project-specific tasks here.
-
-## Blocked
-- None.
-`;
 var schedulerRuntime = createSchedulerRuntime({
   busyRetryMs: BUSY_RETRY_MS,
   sessionIsIdle,
@@ -2070,6 +2220,26 @@ var {
   scheduleIdleWork,
   toast,
   say
+});
+var {
+  stopLoop,
+  updateJobState,
+  statusLoop,
+  logsLoop,
+  helpLoop,
+  runNow,
+  doctorLoop,
+  initLoop,
+  exportLoop
+} = createLoopCommandHandlers({
+  clearActiveRun,
+  cancelDueWork,
+  stopWatchdog,
+  scheduleDueWork,
+  maybeRunDueJobs,
+  toast,
+  say,
+  now
 });
 var handleCommand = createCommandRouter({
   rememberSession,
@@ -2126,7 +2296,7 @@ async function buildPrompt(directory, job) {
     return await buildGoalPrompt(directory, job);
   const sections = [];
   if (job.promptFile) {
-    const text = await readSmallTextFile(path4.resolve(directory, job.promptFile));
+    const text = await readSmallTextFile(path5.resolve(directory, job.promptFile));
     if (text.trim())
       sections.push(`Instructions from ${job.promptFile}:
 ${text.trim()}`);
@@ -2136,7 +2306,7 @@ ${text.trim()}`);
   if (job.action)
     sections.push(decoratePrompt(job));
   for (const file of job.includeFiles || []) {
-    const text = await readSmallTextFile(path4.resolve(directory, file), 80000);
+    const text = await readSmallTextFile(path5.resolve(directory, file), 80000);
     if (text.trim())
       sections.push(`Context from ${file}:
 ${text.trim().slice(0, 20000)}`);
@@ -2182,7 +2352,7 @@ async function snapshotPaths(directory, files) {
   const snapshot = {};
   for (const file of files || []) {
     try {
-      const stat = await fs4.stat(path4.resolve(directory, file));
+      const stat = await fs5.stat(path5.resolve(directory, file));
       snapshot[file] = `${stat.mtimeMs}:${stat.size}`;
     } catch {
       snapshot[file] = "missing";
@@ -2202,10 +2372,10 @@ async function watchChanged(directory, job) {
 }
 async function fileContains(filePath, needle) {
   try {
-    const stat = await fs4.stat(filePath);
+    const stat = await fs5.stat(filePath);
     if (!stat.isFile() || stat.size > MAX_SCAN_BYTES)
       return false;
-    return (await fs4.readFile(filePath, "utf8")).includes(needle);
+    return (await fs5.readFile(filePath, "utf8")).includes(needle);
   } catch {
     return false;
   }
@@ -2213,9 +2383,9 @@ async function fileContains(filePath, needle) {
 async function untilReached(directory, job) {
   if (!job.until)
     return false;
-  const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path4.join(".opencode", "opencode-loop", "until.txt")];
+  const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path5.join(".opencode", "opencode-loop", "until.txt")];
   for (const file of files)
-    if (await fileContains(path4.resolve(directory, file), job.until))
+    if (await fileContains(path5.resolve(directory, file), job.until))
       return true;
   let scanned = 0;
   async function walk(current) {
@@ -2223,7 +2393,7 @@ async function untilReached(directory, job) {
       return false;
     let entries;
     try {
-      entries = await fs4.readdir(current, { withFileTypes: true });
+      entries = await fs5.readdir(current, { withFileTypes: true });
     } catch {
       return false;
     }
@@ -2232,7 +2402,7 @@ async function untilReached(directory, job) {
         return false;
       if ([".git", "node_modules", "dist", "build", ".next", "coverage"].includes(entry.name))
         continue;
-      const full = path4.join(current, entry.name);
+      const full = path5.join(current, entry.name);
       if (entry.isDirectory()) {
         if (await walk(full))
           return true;
@@ -2256,13 +2426,13 @@ async function createCheckpoint(directory, sessionID, job, client) {
   if (!status.stdout.trim())
     return;
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const checkpointDir = path4.join(stateDir(directory), "checkpoints", safeID(sessionID));
+  const checkpointDir = path5.join(stateDir(directory), "checkpoints", safeID(sessionID));
   await ensureDir(checkpointDir);
   const diff = await runProcess("git", ["diff", "--binary"], directory, 120000);
   const staged = await runProcess("git", ["diff", "--cached", "--binary"], directory, 120000);
   const prefix = `${timestamp}-${safeID(job.name || job.id)}`;
-  await fs4.writeFile(path4.join(checkpointDir, `${prefix}.status.txt`), status.stdout + status.stderr);
-  await fs4.writeFile(path4.join(checkpointDir, `${prefix}.patch`), `${diff.stdout}
+  await fs5.writeFile(path5.join(checkpointDir, `${prefix}.status.txt`), status.stdout + status.stderr);
+  await fs5.writeFile(path5.join(checkpointDir, `${prefix}.patch`), `${diff.stdout}
 ${staged.stdout}`);
   if (job.gitCheckpoint) {
     await runProcess("git", ["add", "-A"], directory, 120000);
@@ -2729,7 +2899,7 @@ async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
       await reschedule();
       return;
     }
-    if (job.stopFile && await pathExists(path4.resolve(directory, job.stopFile))) {
+    if (job.stopFile && await pathExists(path5.resolve(directory, job.stopFile))) {
       state.jobs = (state.jobs || []).filter((candidate) => candidate.id !== job.id);
       await writeState(directory, sessionID, state);
       await notifyJob(directory, job, "stop_file");
@@ -2917,117 +3087,6 @@ async function addLoop(directory, client, sessionID, args, defaults = {}) {
     scheduleIdleWork(directory, client, sessionID);
   await toast(client, `${replaced ? "Loop replaced" : "Loop added"}: ${jobLabel(parsed.job)}`, "success");
   await appendLoopLog(directory, replaced ? "replace" : "add", { sessionID, job: parsed.job.name || parsed.job.id, label: jobLabel(parsed.job) });
-}
-async function stopLoop(directory, client, sessionID, args) {
-  const target = String(args || "").trim();
-  if (!target || target.toLowerCase() === "all") {
-    await removeState(directory, sessionID);
-    clearActiveRun(sessionID);
-    cancelDueWork(sessionID);
-    stopWatchdog(sessionID);
-    await toast(client, "All loops stopped for this session.", "success");
-    return;
-  }
-  const state = await readState(directory, sessionID);
-  const before = state.jobs.length;
-  state.jobs = state.jobs.filter((job, index) => !matchJob(job, target, index));
-  await writeState(directory, sessionID, state);
-  await scheduleDueWork(directory, client, sessionID);
-  await toast(client, `Stopped ${before - state.jobs.length} loop(s).`, "success");
-}
-async function updateJobState(directory, client, sessionID, args, updater, message) {
-  const target = String(args || "").trim() || "all";
-  const state = await readState(directory, sessionID);
-  let count = 0;
-  state.jobs = (state.jobs || []).map((job, index) => matchJob(job, target, index) ? (count++, updater(job)) : job);
-  await writeState(directory, sessionID, state);
-  await scheduleDueWork(directory, client, sessionID);
-  await toast(client, `${message}: ${count} loop(s).`, count ? "success" : "warning");
-}
-async function statusLoop(directory, client, sessionID) {
-  const state = await readState(directory, sessionID);
-  const jobs = state.jobs || [];
-  const lines = jobs.length ? jobs.map((job, index) => {
-    const dueIn = Math.max(0, job.intervalMs - (now() - (job.lastRunAt || 0)));
-    const flags = [isGoalJob(job) ? `goal:${goalStatusText(job)}` : undefined, job.paused ? "paused" : "active", job.safe ? "safe" : undefined, job.askNever ? "ask-never" : undefined, job.noOverlap ? "no-overlap" : undefined, job.checkpointOnly ? "checkpoint-only" : undefined, job.gitCheckpoint ? "git-checkpoint" : undefined].filter(Boolean).join(",");
-    return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${jobLabel(job)} | runs=${job.runCount || 0} | failures=${job.failureCount || 0} | due in ${durationToText(dueIn)} | ${flags}`;
-  }) : ["No active loop jobs."];
-  await toast(client, jobs.length ? `${jobs.length} loop job(s).` : "No active loop jobs.", jobs.length ? "info" : "warning");
-  await say(client, sessionID, `OpenCode loop status:
-` + lines.join(`
-`));
-}
-async function logsLoop(directory, client, sessionID) {
-  let text = "No loop log found.";
-  try {
-    text = (await fs4.readFile(path4.join(stateDir(directory), "loop.log"), "utf8")).trim().split(/\r?\n/).slice(-80).join(`
-`) || text;
-  } catch {}
-  await say(client, sessionID, `OpenCode loop logs:
-` + text);
-}
-async function helpLoop(client, sessionID) {
-  await say(client, sessionID, [
-    "OpenCode Loop help:",
-    "/loop 0s <prompt>                                Claude Code style auto-continue",
-    "/loop 5m --ask-never --safe <prompt>              interval autonomous prompt loop",
-    "/loop-command 200m /compact                       OpenCode slash-command loop, waits for idle",
-    "/loop-ask 1h did you run tests and tsc --noEmit?   scheduled question/check prompt",
-    "/loop-shell 10m npm test                           shell loop, waits for idle",
-    "/loop-goal finish the feature and keep tests green  experimental persistent goal mode",
-    '/loop-goal --check "npm run build" --check "npm test" --complete-when-checks-pass ship it',
-    "/loop-goal status | pause | resume | clear          manage experimental goals",
-    "/loop 200m --command /compact                     same as command loop",
-    '/loop 0s --verify "npm test" <prompt>            verify after each assistant turn',
-    "/loop 0s --prompt-file loop-prompt.md             load prompt from a file",
-    "/loop 0s --max-runtime 6h --max-failures 3 <task> stop safely after limits",
-    "/loop-doctor | /loop-init | /loop-export"
-  ].join(`
-`));
-}
-async function runNow(directory, client, sessionID, args) {
-  const target = String(args || "").trim() || "all";
-  const state = await readState(directory, sessionID);
-  let count = 0;
-  for (const [index, job] of (state.jobs || []).entries())
-    if (matchJob(job, target, index)) {
-      job.lastRunAt = 0;
-      job.paused = false;
-      count++;
-    }
-  await writeState(directory, sessionID, state);
-  await toast(client, `Marked ${count} loop job(s) due now.`, count ? "success" : "warning");
-  await maybeRunDueJobs(directory, client, sessionID, { force: true });
-}
-async function doctorLoop(directory, client, sessionID) {
-  const state = await readState(directory, sessionID);
-  await say(client, sessionID, [
-    "OpenCode Loop doctor:",
-    `- plugin: ${SERVICE2}`,
-    `- project directory: ${directory}`,
-    `- state directory: ${stateDir(directory)}`,
-    `- active jobs: ${(state.jobs || []).length}`,
-    `- node: ${process.version}`,
-    `- platform: ${process.platform}`,
-    "- smoke test: /loop 0s --max-runs 1 --dry-run continue from progress.md",
-    "- experimental goal smoke test: /loop-goal --dry-run finish the current task and verify it"
-  ].join(`
-`));
-}
-async function initLoop(directory, client, sessionID, args) {
-  const target = String(args || "").trim() || "progress.md";
-  const full = path4.resolve(directory, target);
-  if (await pathExists(full)) {
-    await toast(client, `${target} already exists.`, "warning");
-    return;
-  }
-  await fs4.writeFile(full, DEFAULT_PROGRESS_MD, "utf8");
-  await toast(client, `Created ${target}.`, "success");
-  await appendLoopLog(directory, "init", { sessionID, file: target });
-}
-async function exportLoop(directory, client, sessionID) {
-  const state = await readState(directory, sessionID);
-  await say(client, sessionID, "OpenCode loop state export:\n```json\n" + JSON.stringify(state, null, 2) + "\n```");
 }
 function goalTools(defaultDirectory) {
   return {

@@ -2,9 +2,9 @@ import { promises as fs } from "node:fs"
 import path from "node:path"
 import { spawn } from "node:child_process"
 import { tool } from "@opencode-ai/plugin/tool"
-import { now, safeID, parseDuration, durationToText, splitFirst, stripOuterQuotes, escapeRegExp, takeFlag, takeFlagValue, takeAllFlagValues, parsePositiveInt, parseNonNegativeInt, parseCompactEvery, parseLoopArgs } from "./core/args.js"
-import { jobLabel, matchJob, actionKind, decoratePrompt, isGoalJob, goalStatusText } from "./core/jobs.js"
-import { stateDir, ensureDir, pathExists, readState, writeState, removeState } from "./core/state.js"
+import { now, safeID, parseDuration, splitFirst, stripOuterQuotes, escapeRegExp, takeFlag, takeFlagValue, takeAllFlagValues, parsePositiveInt, parseNonNegativeInt, parseCompactEvery, parseLoopArgs } from "./core/args.js"
+import { jobLabel, matchJob, actionKind, decoratePrompt, isGoalJob } from "./core/jobs.js"
+import { stateDir, ensureDir, pathExists, readState, writeState } from "./core/state.js"
 import { appendLoopLog, readSmallTextFile, runProcess, runShellCommand, notifyJob } from "./core/process.js"
 import { sdkErrorMessage, sdkCall } from "./opencode/sdk.js"
 import { normalizedModelRef, updateSessionExecutionContext, getSessionExecutionContext, setSessionExecutionContext } from "./opencode/session-context.js"
@@ -13,12 +13,12 @@ import { guardLoopOwnedUserMessage, loopOwnedUserMessageGuardActive, say, clearL
 import { clearCommandLifecycle } from "./opencode/commands.js"
 import { createCommandRouter } from "./opencode/command-router.js"
 import { createGoalCommandHandlers } from "./opencode/goal-commands.js"
+import { createLoopCommandHandlers } from "./opencode/loop-commands.js"
 import { activeToolCalls, sessionParents, sessionStatuses, sessionStatusSeenAt, hasActiveToolCalls, markToolCallActive, markToolCallFinished, updateSessionRelationshipFromEvent, isDescendantSession, hasBusyDescendant, refreshSessionRelationships, updateToolActivityFromEvent, clearSessionActivity } from "./runtime/session-activity.js"
 import { createSchedulerRuntime } from "./runtime/scheduler.js"
 import { buildGoalPrompt, writeGoalReport, setGoalComplete, setGoalBlocked, setGoalProgress } from "./runtime/goal-runtime.js"
 import { createGoalExecutionPolicy } from "./runtime/goal-policy.js"
 
-const SERVICE = "opencode-loop"
 const DEFAULT_ACTIVE_GUARD_MS = 45_000
 const STALE_ACTIVE_RECOVERY_MS = 45_000
 const BUSY_RETRY_MS = 5_000
@@ -32,39 +32,6 @@ const { runGoalChecks, applyGoalNoProgressGuard } = createGoalExecutionPolicy({ 
 const activeRuns = new Map()
 const runLocks = new Map()
 const loopCompactionRequests = new Map()
-
-const DEFAULT_PROGRESS_MD = `# Progress
-
-## Current Goal
-Describe the current project goal here.
-
-## Agent Rules
-- Do not ask questions unless truly blocked.
-- Make reasonable assumptions and continue.
-- Work on unfinished TODOs in order.
-- Mark completed TODOs with [x].
-- Add new bugs, ideas, and follow-up work as TODOs.
-- Run tests, lint, or build when available.
-- Do not run destructive commands, force pushes, production deploys, or database resets.
-
-## Active TODO
-- [ ] Review the project structure and pick the next safe improvement.
-
-## Completed
-- [x] Created progress.md.
-
-## Backlog Ideas
-- [ ] Add more project-specific tasks here.
-
-## Blocked
-- None.
-`
-
-
-
-
-
-
 
 const schedulerRuntime = createSchedulerRuntime({
   busyRetryMs: BUSY_RETRY_MS,
@@ -91,6 +58,27 @@ const {
   scheduleIdleWork,
   toast,
   say,
+})
+
+const {
+  stopLoop,
+  updateJobState,
+  statusLoop,
+  logsLoop,
+  helpLoop,
+  runNow,
+  doctorLoop,
+  initLoop,
+  exportLoop,
+} = createLoopCommandHandlers({
+  clearActiveRun,
+  cancelDueWork,
+  stopWatchdog,
+  scheduleDueWork,
+  maybeRunDueJobs,
+  toast,
+  say,
+  now,
 })
 
 const handleCommand = createCommandRouter({
@@ -918,110 +906,6 @@ async function addLoop(directory, client, sessionID, args, defaults = {}) {
   if (parsed.job.immediate) scheduleIdleWork(directory, client, sessionID)
   await toast(client, `${replaced ? "Loop replaced" : "Loop added"}: ${jobLabel(parsed.job)}`, "success")
   await appendLoopLog(directory, replaced ? "replace" : "add", { sessionID, job: parsed.job.name || parsed.job.id, label: jobLabel(parsed.job) })
-}
-
-async function stopLoop(directory, client, sessionID, args) {
-  const target = String(args || "").trim()
-  if (!target || target.toLowerCase() === "all") {
-    await removeState(directory, sessionID)
-    clearActiveRun(sessionID)
-    cancelDueWork(sessionID)
-    stopWatchdog(sessionID)
-    await toast(client, "All loops stopped for this session.", "success")
-    return
-  }
-  const state = await readState(directory, sessionID)
-  const before = state.jobs.length
-  state.jobs = state.jobs.filter((job, index) => !matchJob(job, target, index))
-  await writeState(directory, sessionID, state)
-  await scheduleDueWork(directory, client, sessionID)
-  await toast(client, `Stopped ${before - state.jobs.length} loop(s).`, "success")
-}
-
-async function updateJobState(directory, client, sessionID, args, updater, message) {
-  const target = String(args || "").trim() || "all"
-  const state = await readState(directory, sessionID)
-  let count = 0
-  state.jobs = (state.jobs || []).map((job, index) => matchJob(job, target, index) ? (count++, updater(job)) : job)
-  await writeState(directory, sessionID, state)
-  await scheduleDueWork(directory, client, sessionID)
-  await toast(client, `${message}: ${count} loop(s).`, count ? "success" : "warning")
-}
-
-async function statusLoop(directory, client, sessionID) {
-  const state = await readState(directory, sessionID)
-  const jobs = state.jobs || []
-  const lines = jobs.length ? jobs.map((job, index) => {
-    const dueIn = Math.max(0, job.intervalMs - (now() - (job.lastRunAt || 0)))
-    const flags = [isGoalJob(job) ? `goal:${goalStatusText(job)}` : undefined, job.paused ? "paused" : "active", job.safe ? "safe" : undefined, job.askNever ? "ask-never" : undefined, job.noOverlap ? "no-overlap" : undefined, job.checkpointOnly ? "checkpoint-only" : undefined, job.gitCheckpoint ? "git-checkpoint" : undefined].filter(Boolean).join(",")
-    return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${jobLabel(job)} | runs=${job.runCount || 0} | failures=${job.failureCount || 0} | due in ${durationToText(dueIn)} | ${flags}`
-  }) : ["No active loop jobs."]
-  await toast(client, jobs.length ? `${jobs.length} loop job(s).` : "No active loop jobs.", jobs.length ? "info" : "warning")
-  await say(client, sessionID, "OpenCode loop status:\n" + lines.join("\n"))
-}
-
-async function logsLoop(directory, client, sessionID) {
-  let text = "No loop log found."
-  try { text = (await fs.readFile(path.join(stateDir(directory), "loop.log"), "utf8")).trim().split(/\r?\n/).slice(-80).join("\n") || text } catch {}
-  await say(client, sessionID, "OpenCode loop logs:\n" + text)
-}
-
-async function helpLoop(client, sessionID) {
-  await say(client, sessionID, [
-    "OpenCode Loop help:",
-    "/loop 0s <prompt>                                Claude Code style auto-continue",
-    "/loop 5m --ask-never --safe <prompt>              interval autonomous prompt loop",
-    "/loop-command 200m /compact                       OpenCode slash-command loop, waits for idle",
-    "/loop-ask 1h did you run tests and tsc --noEmit?   scheduled question/check prompt",
-    "/loop-shell 10m npm test                           shell loop, waits for idle",
-    "/loop-goal finish the feature and keep tests green  experimental persistent goal mode",
-    "/loop-goal --check \"npm run build\" --check \"npm test\" --complete-when-checks-pass ship it",
-    "/loop-goal status | pause | resume | clear          manage experimental goals",
-    "/loop 200m --command /compact                     same as command loop",
-    "/loop 0s --verify \"npm test\" <prompt>            verify after each assistant turn",
-    "/loop 0s --prompt-file loop-prompt.md             load prompt from a file",
-    "/loop 0s --max-runtime 6h --max-failures 3 <task> stop safely after limits",
-    "/loop-doctor | /loop-init | /loop-export",
-  ].join("\n"))
-}
-
-async function runNow(directory, client, sessionID, args) {
-  const target = String(args || "").trim() || "all"
-  const state = await readState(directory, sessionID)
-  let count = 0
-  for (const [index, job] of (state.jobs || []).entries()) if (matchJob(job, target, index)) { job.lastRunAt = 0; job.paused = false; count++ }
-  await writeState(directory, sessionID, state)
-  await toast(client, `Marked ${count} loop job(s) due now.`, count ? "success" : "warning")
-  await maybeRunDueJobs(directory, client, sessionID, { force: true })
-}
-
-async function doctorLoop(directory, client, sessionID) {
-  const state = await readState(directory, sessionID)
-  await say(client, sessionID, [
-    "OpenCode Loop doctor:",
-    `- plugin: ${SERVICE}`,
-    `- project directory: ${directory}`,
-    `- state directory: ${stateDir(directory)}`,
-    `- active jobs: ${(state.jobs || []).length}`,
-    `- node: ${process.version}`,
-    `- platform: ${process.platform}`,
-    "- smoke test: /loop 0s --max-runs 1 --dry-run continue from progress.md",
-    "- experimental goal smoke test: /loop-goal --dry-run finish the current task and verify it",
-  ].join("\n"))
-}
-
-async function initLoop(directory, client, sessionID, args) {
-  const target = String(args || "").trim() || "progress.md"
-  const full = path.resolve(directory, target)
-  if (await pathExists(full)) { await toast(client, `${target} already exists.`, "warning"); return }
-  await fs.writeFile(full, DEFAULT_PROGRESS_MD, "utf8")
-  await toast(client, `Created ${target}.`, "success")
-  await appendLoopLog(directory, "init", { sessionID, file: target })
-}
-
-async function exportLoop(directory, client, sessionID) {
-  const state = await readState(directory, sessionID)
-  await say(client, sessionID, "OpenCode loop state export:\n```json\n" + JSON.stringify(state, null, 2) + "\n```")
 }
 
 function goalTools(defaultDirectory) {
