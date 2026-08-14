@@ -16,7 +16,8 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
     options.subscribe = subscribe
     options.sendPrompt = sendPrompt
     const host = createOpenCode2HostContract(options)
-    void host
+    const startHost = host.start.bind(host)
+    void startHost
     await ctx.command.transform(() => {})
   },
 }
