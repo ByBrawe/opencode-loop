@@ -41,17 +41,53 @@ jobs:
       - name: Show OpenCode 2 version
         run: opencode2 --version
 
-      - name: Run stable Loop real-host canary on OpenCode 2
+      - name: Prove stable Loop command hook on OpenCode 2
         shell: bash
-        env:
-          OPENCODE_HOST_API_MODE: "v2"
         run: |
-          v2="$(command -v opencode2)"
-          test -n "$v2"
-          rm -f "$GITHUB_WORKSPACE/node_modules/.bin/opencode"
-          ln -s "$v2" "$GITHUB_WORKSPACE/node_modules/.bin/opencode"
-          perl -0pi -e 's/path\.join\(env\.XDG_DATA_HOME, "opencode", "password"\)/path.join(home, ".local", "state", "opencode", "password")/' scripts/host-loop-canary.mjs
-          node scripts/host-loop-canary.mjs
+          set -euo pipefail
+          project="$RUNNER_TEMP/opencode2-loop-compat"
+          objective="V2 compatibility sentinel"
+          mkdir -p "$project/.opencode/plugins" "$project/.opencode/commands"
+          git init -q "$project"
+          plugin_url="$(node -e 'const {pathToFileURL}=require("node:url"); console.log(pathToFileURL(process.argv[1]).href)' "$GITHUB_WORKSPACE/src/index.js")"
+          printf 'export { default as OpenCodeLoopPlugin } from %s\n' "$(node -e 'console.log(JSON.stringify(process.argv[1]))' "$plugin_url")" > "$project/.opencode/plugins/opencode-loop.js"
+          cat > "$project/.opencode/commands/loop.md" <<'EOF'
+          ---
+          description: Start a Loop compatibility probe
+          ---
+
+          Loop compatibility probe.
+          EOF
+          printf '{}\n' > "$project/opencode.json"
+
+          opencode2 service stop >/dev/null 2>&1 || true
+          encoded="$(node -e 'console.log(encodeURIComponent(process.argv[1]))' "$project")"
+          query="directory=$encoded&location%5Bdirectory%5D=$encoded"
+          create_body="$(node -e 'console.log(JSON.stringify({location:{directory:process.argv[1]}}))' "$project")"
+          created="$(cd "$project" && opencode2 api post "/api/session?$query" --data "$create_body")"
+          printf '%s\n' "$created"
+          session_id="$(CREATED="$created" node -e 'const x=JSON.parse(process.env.CREATED); const id=x?.data?.id ?? x?.id; if(!id) process.exit(1); process.stdout.write(String(id))')"
+
+          command_body="$(node -e 'console.log(JSON.stringify({command:"loop",arguments:`10m --no-now ${process.argv[1]}`}))' "$objective")"
+          (cd "$project" && opencode2 api post "/session/$session_id/command?directory=$encoded" --data "$command_body" > "$RUNNER_TEMP/opencode2-loop-command.log" 2>&1) &
+          command_pid=$!
+
+          state="$project/.opencode/opencode-loop/$session_id.json"
+          found=0
+          for _ in $(seq 1 100); do
+            if [ -f "$state" ] && grep -Fq "$objective" "$state"; then found=1; break; fi
+            sleep 0.1
+          done
+          kill "$command_pid" >/dev/null 2>&1 || true
+          wait "$command_pid" >/dev/null 2>&1 || true
+          if [ "$found" -ne 1 ]; then
+            cat "$RUNNER_TEMP/opencode2-loop-command.log" || true
+            echo "Loop state was not created by the OpenCode 2 host" >&2
+            exit 1
+          fi
+          cat "$state"
+          STATE="$state" OBJECTIVE="$objective" node -e 'const fs=require("fs"); const x=JSON.parse(fs.readFileSync(process.env.STATE,"utf8")); const job=x.jobs?.find((j)=>j.action===process.env.OBJECTIVE); if(!job || job.paused) process.exit(1); console.log(`V2 stable Loop hook activated: ${job.id}`)'
+          opencode2 service stop >/dev/null 2>&1 || true
 
       - name: Install current V2 plugin SDK for native probe
         run: npm install --no-save --package-lock=false @opencode-ai/plugin@next
@@ -65,20 +101,10 @@ jobs:
         continue-on-error: true
         shell: bash
         run: |
-          project="$RUNNER_TEMP/opencode2-loop-sentinel"
+          project="$RUNNER_TEMP/opencode2-loop-native"
           mkdir -p "$project/.opencode/plugins"
           git init -q "$project"
           cp "$GITHUB_WORKSPACE/src/source/opencode2/experimental.js" "$project/.opencode/plugins/opencode-loop-v2.js"
-          cp "$GITHUB_WORKSPACE/src/source/opencode2/compat-v1-sentinel.js" "$project/.opencode/plugins/v1-compat-sentinel.js"
           ln -s "$GITHUB_WORKSPACE/node_modules" "$project/node_modules"
-          opencode2 service stop >/dev/null 2>&1 || true
           request="$(node -e 'const d=encodeURIComponent(process.argv[1]); console.log(`/api/plugin?directory=${d}&location%5Bdirectory%5D=${d}`)' "$project")"
-          output="$(opencode2 api get "$request")"
-          printf '%s\n' "$output"
-
-      - name: Show server log on failure
-        if: failure()
-        shell: bash
-        run: |
-          log="$HOME/.local/share/opencode/log/opencode.log"
-          if [ -f "$log" ]; then tail -n 240 "$log"; fi
+          opencode2 api get "$request"
