@@ -50,6 +50,7 @@ jobs:
           test -n "$v2"
           rm -f "$GITHUB_WORKSPACE/node_modules/.bin/opencode"
           ln -s "$v2" "$GITHUB_WORKSPACE/node_modules/.bin/opencode"
+          perl -0pi -e 's/path\.join\(env\.XDG_DATA_HOME, "opencode", "password"\)/path.join(home, ".local", "state", "opencode", "password")/' scripts/host-loop-canary.mjs
           node scripts/host-loop-canary.mjs
 
       - name: Install current V2 plugin SDK for native probe
