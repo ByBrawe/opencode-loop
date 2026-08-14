@@ -1,0 +1,25 @@
+name: Probe OpenCode V2 Server Log
+
+on:
+  push:
+    branches: [probe-opencode-v2-contract]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe-log:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - run: npm install -g @opencode-ai/cli@next
+      - run: opencode2 --version
+      - name: Trigger V2 project load
+        run: opencode2 api -H "x-opencode-directory:$(pwd)" get /api/plugin
+      - name: Show OpenCode server log
+        run: tail -n 250 "$HOME/.local/share/opencode/log/opencode.log"
