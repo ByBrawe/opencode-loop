@@ -1,0 +1,75 @@
+name: OpenCode 2 Real Adapter
+
+on:
+  pull_request:
+    paths:
+      - "src/source/opencode2/**"
+      - "scripts/fixtures/opencode2-real-adapter-probe.js"
+      - ".github/workflows/opencode2-real-adapter.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/source/opencode2/**"
+      - "scripts/fixtures/opencode2-real-adapter-probe.js"
+      - ".github/workflows/opencode2-real-adapter.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  adapter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Isolate OpenCode 2 paths
+        shell: bash
+        run: |
+          echo "HOME=$RUNNER_TEMP/opencode2-home" >> "$GITHUB_ENV"
+          echo "XDG_CONFIG_HOME=$RUNNER_TEMP/opencode2-home/.config" >> "$GITHUB_ENV"
+          echo "XDG_DATA_HOME=$RUNNER_TEMP/opencode2-home/.local/share" >> "$GITHUB_ENV"
+          echo "XDG_STATE_HOME=$RUNNER_TEMP/opencode2-home/.local/state" >> "$GITHUB_ENV"
+      - run: npm ci
+      - run: npm install -g --allow-scripts=@opencode-ai/cli @opencode-ai/cli@next
+      - run: npm install --no-save --package-lock=false @opencode-ai/plugin@next
+      - name: Prepare adapter project
+        shell: bash
+        run: |
+          project="$RUNNER_TEMP/opencode-loop-v2-real-adapter"
+          plugin_dir="$project/.opencode/plugins"
+          mkdir -p "$plugin_dir" "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
+          cp "$GITHUB_WORKSPACE/scripts/fixtures/opencode2-real-adapter-probe.js" "$plugin_dir/opencode-loop-v2-real.js"
+          git init --quiet "$project"
+          git -C "$project" config user.email "opencode-loop-ci@example.invalid"
+          git -C "$project" config user.name "OpenCode Loop CI"
+          git -C "$project" add .
+          git -C "$project" commit --quiet -m "init"
+          plugin_url="$(node --input-type=module -e 'import { pathToFileURL } from "node:url"; console.log(pathToFileURL(process.argv[1]).href)' "$GITHUB_WORKSPACE/src/source/opencode2/experimental.js")"
+          echo "OPENCODE_LOOP_V2_PLUGIN_URL=$plugin_url" >> "$GITHUB_ENV"
+          echo "OPENCODE_LOOP_V2_MARKER=$project/v2-real-adapter-marker.json" >> "$GITHUB_ENV"
+          echo "OPENCODE_LOOP_V2_PROJECT=$project" >> "$GITHUB_ENV"
+      - name: Activate real adapter
+        shell: bash
+        run: |
+          rm -f "$OPENCODE_LOOP_V2_MARKER"
+          opencode2 api get /api/command -H "x-opencode-directory: $OPENCODE_LOOP_V2_PROJECT" > "$RUNNER_TEMP/opencode2-real-command.json" 2>&1 || true
+          if [ ! -f "$OPENCODE_LOOP_V2_MARKER" ]; then
+            opencode2 api get /api/plugin -H "x-opencode-directory: $OPENCODE_LOOP_V2_PROJECT" > "$RUNNER_TEMP/opencode2-real-plugin.json" 2>&1 || true
+          fi
+          for attempt in $(seq 1 50); do
+            if [ -f "$OPENCODE_LOOP_V2_MARKER" ]; then
+              cat "$OPENCODE_LOOP_V2_MARKER"
+              node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(value.id!=="bybrawe.opencode-loop.v2.experimental" || value.activated!==true || value.commandTransform!==true || value.eventSubscribe!==true || value.sessionPrompt!==true) process.exit(1)' "$OPENCODE_LOOP_V2_MARKER"
+              exit 0
+            fi
+            sleep 0.2
+          done
+          cat "$RUNNER_TEMP/opencode2-real-command.json" >&2 || true
+          cat "$RUNNER_TEMP/opencode2-real-plugin.json" >&2 || true
+          exit 1
