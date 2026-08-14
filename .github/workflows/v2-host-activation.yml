@@ -3,7 +3,7 @@ name: V2 Host Activation
 on:
   workflow_dispatch:
   push:
-    branches: [v2-adapter-prototype]
+    branches: [v2-runtime-canary]
     paths:
       - ".github/workflows/v2-host-activation.yml"
       - "src/source/opencode2/**"
@@ -48,5 +48,5 @@ jobs:
       - name: Show OpenCode 2 version
         run: opencode2 --version
 
-      - name: Run real OpenCode 2 activation canary
+      - name: Run real OpenCode 2 activation and continuation canary
         run: node scripts/opencode2-host-canary.mjs
