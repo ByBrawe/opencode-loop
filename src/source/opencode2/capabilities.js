@@ -97,11 +97,25 @@ export function startOpenCode2CanaryRuntime(ctx, options = {}) {
   const sent = new Map()
   const seen = new Set()
   const dispatching = new Set()
+  const trace = process.env.OPENCODE_LOOP_V2_CANARY_TRACE === "1"
+  let traced = 0
 
   const done = (async () => {
     const events = await ctx.event.subscribe()
     for await (const raw of events) {
       const event = unwrapEvent(raw)
+      if (trace && traced < 80) {
+        traced += 1
+        console.error("[opencode-loop-v2-event]", JSON.stringify({
+          type: event?.type,
+          sessionID: eventField(event, "sessionID"),
+          assistantMessageID: eventField(event, "assistantMessageID"),
+          rawType: raw?.type,
+          rawDataType: raw?.data?.type,
+          rawKeys: raw && typeof raw === "object" ? Object.keys(raw) : [],
+          dataKeys: raw?.data && typeof raw.data === "object" ? Object.keys(raw.data) : [],
+        }))
+      }
       if (event?.type !== "session.next.step.ended") continue
 
       const sessionID = eventField(event, "sessionID")
@@ -117,6 +131,7 @@ export function startOpenCode2CanaryRuntime(ctx, options = {}) {
       const iteration = completed + 1
       dispatching.add(sessionID)
       try {
+        if (trace) console.error("[opencode-loop-v2-dispatch]", JSON.stringify({ sessionID, iteration, maxRuns }))
         await ctx.session.prompt({
           sessionID,
           text: continuationText(iteration, maxRuns, objective),
