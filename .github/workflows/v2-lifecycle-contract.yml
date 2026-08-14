@@ -39,6 +39,8 @@ jobs:
           node-version: "24"
           cache: npm
       - run: npm ci
+      - name: Install matching OpenCode 2 plugin API
+        run: npm install --no-save --package-lock=false @opencode-ai/plugin@next
       - run: node --check src/source/opencode2/event-bridge.js
       - run: node --check src/source/opencode2/experimental.js
       - run: node --check scripts/v2-event-bridge-test.mjs
