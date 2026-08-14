@@ -24,7 +24,7 @@ jobs:
       - name: Install V2 next packages
         run: npm install --no-save --package-lock=false @opencode-ai/cli@next @opencode-ai/plugin@next
       - name: Check sentinel module syntax
-        run: node --check .opencode/plugins/bybrawe-loop-v2-probe.mjs
+        run: node --check .opencode/plugins/bybrawe-loop-v2-probe.js
       - name: Show V2 CLI version
         run: ./node_modules/.bin/opencode2 --version
       - name: Verify discovered plugin is active in project location
