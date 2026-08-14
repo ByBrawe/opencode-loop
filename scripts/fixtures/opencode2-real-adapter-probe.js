@@ -13,12 +13,15 @@ export default {
     if (!plugin || typeof plugin.setup !== "function") throw new Error("experimental V2 plugin has no setup function")
     await plugin.setup(ctx)
 
+    const sessionPrompt = ctx?.session?.prompt
     await writeFile(marker, JSON.stringify({
       id: plugin.id,
       activated: true,
       commandTransform: typeof ctx?.command?.transform === "function",
       eventSubscribe: typeof ctx?.event?.subscribe === "function",
-      sessionPrompt: typeof ctx?.session?.prompt === "function",
+      sessionPrompt: typeof sessionPrompt === "function",
+      sessionPromptLength: typeof sessionPrompt === "function" ? sessionPrompt.length : undefined,
+      sessionPromptSource: typeof sessionPrompt === "function" ? String(sessionPrompt).slice(0, 2000) : undefined,
       toolTransform: typeof ctx?.tool?.transform === "function",
     }, null, 2), "utf8")
   },
