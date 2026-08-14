@@ -57,7 +57,7 @@ await assert.rejects(host.command({ sessionID: "", id: "review" }), /session ID/
 await assert.rejects(host.command({ sessionID: "ses_a", id: "" }), /requires an ID/)
 
 const promptOnly = createOpenCode2HostContract({
-  subscribe: async () => ({ unsubscribe: async () => {} }),
+  subscribe: async (_callback) => ({ unsubscribe: async () => {} }),
   sendPrompt: async () => ({ accepted: true }),
 })
 await promptOnly.start()
