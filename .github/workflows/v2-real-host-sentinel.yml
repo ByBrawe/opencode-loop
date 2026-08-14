@@ -30,6 +30,6 @@ jobs:
       - name: List active plugins in standalone project host
         working-directory: scripts/fixtures/v2-project
         run: ../../../node_modules/.bin/opencode2 api --standalone get /api/plugin | tee active-plugins.txt
-      - name: Assert Loop V2 sentinel is active
+      - name: Assert auto-discovered Loop V2 plugin is active
         working-directory: scripts/fixtures/v2-project
-        run: grep -F "bybrawe.opencode-loop.v2.experimental" active-plugins.txt
+        run: grep -F "opencode-loop-v2.js" active-plugins.txt
