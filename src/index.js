@@ -1230,6 +1230,390 @@ function createCommandRouter(options = {}) {
   };
 }
 
+// src/source/runtime/goal-runtime.js
+import { promises as fs3 } from "fs";
+import path3 from "path";
+var GOAL_REPORT_DIR = "goals";
+var GOAL_PROMPT_PREFIX = "EXPERIMENTAL OPENCODE GOAL MODE ITERATION";
+async function buildGoalPrompt(directory, job) {
+  const sections = [];
+  sections.push(`Working directory:
+${path3.resolve(directory)}
+Keep every file operation inside this directory. Prefer workspace-relative paths such as "src/index.js"; never turn a relative path into a root path such as "/src/index.js".`);
+  const objective = String(job.action || "").trim();
+  if (objective)
+    sections.push(`Goal objective:
+${objective}`);
+  if (job.goalFile) {
+    const text = await readSmallTextFile(path3.resolve(directory, job.goalFile), 120000);
+    if (text.trim())
+      sections.push(`Goal file ${job.goalFile}:
+${text.trim()}`);
+    else
+      sections.push(`Goal file ${job.goalFile} was requested but could not be read. Continue from the inline goal objective.`);
+  }
+  if (job.promptFile) {
+    const text = await readSmallTextFile(path3.resolve(directory, job.promptFile), 120000);
+    if (text.trim())
+      sections.push(`Extra goal instructions from ${job.promptFile}:
+${text.trim()}`);
+  }
+  if (job.goalAcceptance?.length)
+    sections.push(`Acceptance criteria:
+` + job.goalAcceptance.map((item, index) => `${index + 1}. ${item}`).join(`
+`));
+  if (job.goalChecks?.length)
+    sections.push(`Verification commands that define useful evidence:
+` + job.goalChecks.map((item, index) => `${index + 1}. ${item}`).join(`
+`));
+  if (job.verifyCommand)
+    sections.push(`Post-turn verify command configured by the loop: ${job.verifyCommand}`);
+  if (job.lastGoalChecks?.length)
+    sections.push(`Latest goal check results:
+` + job.lastGoalChecks.map((item) => `- ${item.command}: exit ${item.code}`).join(`
+`));
+  if (job.lastVerifyFailure)
+    sections.push(`Previous verify/check failure summary:
+` + String(job.lastVerifyFailure).slice(0, 1600));
+  if (job.goalCompletionRejectedReason)
+    sections.push(`Previous completion attempt was rejected:
+${job.goalCompletionRejectedReason}`);
+  if ((job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0)
+    sections.push(`No-progress guard:
+${job.noProgressCount || 0}/${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS} recent turn(s) without recorded meaningful progress.`);
+  if (job.goalProgress?.length)
+    sections.push(`Recent goal progress:
+` + job.goalProgress.slice(-5).map((item) => `- ${item.time}: ${item.summary}`).join(`
+`));
+  for (const file of job.includeFiles || []) {
+    const text = await readSmallTextFile(path3.resolve(directory, file), 80000);
+    if (text.trim())
+      sections.push(`Context from ${file}:
+${text.trim().slice(0, 20000)}`);
+  }
+  return `${GOAL_PROMPT_PREFIX}.
+
+You are pursuing an experimental persistent goal for this OpenCode session. This is not a timer loop and not a one-shot prompt. Keep working toward the goal until it is completed, blocked, paused, cleared, or stopped by safety limits.
+
+Rules:
+- Work on the next smallest useful step toward the goal.
+- Prefer direct code changes, tests, typechecks, builds, and evidence over discussion.
+- Do not claim the goal is complete unless the acceptance criteria are satisfied and verification evidence supports it.
+- If verification commands are configured, do not call opencode_loop_goal_complete until the latest relevant checks have passed unless the user explicitly overrides the goal.
+- Completion evidence must be concrete: mention commands, files, checks, results, or code inspection details.
+- When the goal is complete, call the tool opencode_loop_goal_complete with a summary and evidence.
+- If you are truly blocked and need user input, call the tool opencode_loop_goal_blocked with the reason and what is needed.
+- If you made meaningful progress but the goal is not complete, call the tool opencode_loop_goal_progress with the summary and next step.
+- If you cannot make meaningful progress for this turn, call opencode_loop_goal_blocked instead of repeating the same attempt.
+- Do not call completion tools just to be polite; only call them when the state is real.
+- Do not ask the user questions unless blocked; make reasonable assumptions and continue.
+- Follow safety rules: no destructive commands, force pushes, production deploys, production database resets, or deleting user data.
+
+${sections.join(`
+
+---
+
+`)}`;
+}
+function goalReportPath(directory, sessionID, job) {
+  return path3.join(stateDir(directory), GOAL_REPORT_DIR, `${safeID(sessionID)}-${safeID(job.name || job.id)}.md`);
+}
+function goalReportText(job) {
+  const lines = [];
+  lines.push(`# OpenCode Loop Goal Report`);
+  lines.push("");
+  lines.push(`Status: ${goalStatusText(job) || "unknown"}`);
+  lines.push(`Goal: ${job.action || job.goalFile || ""}`);
+  lines.push(`Created: ${job.createdAt || ""}`);
+  if (job.goalCompletedAt)
+    lines.push(`Completed: ${new Date(job.goalCompletedAt).toISOString()}`);
+  if (job.goalBlockedAt)
+    lines.push(`Blocked: ${new Date(job.goalBlockedAt).toISOString()}`);
+  if (job.lastUserInterruptAt)
+    lines.push(`Paused by user message: ${new Date(job.lastUserInterruptAt).toISOString()}`);
+  if (job.goalNoProgressPausedAt)
+    lines.push(`Paused by no-progress guard: ${new Date(job.goalNoProgressPausedAt).toISOString()}`);
+  if (job.runCount)
+    lines.push(`Turns: ${job.runCount}`);
+  if ((job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0)
+    lines.push(`No-progress: ${job.noProgressCount || 0}/${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS}`);
+  lines.push("");
+  if (job.goalSummary)
+    lines.push("## Summary", "", String(job.goalSummary), "");
+  if (job.goalEvidence)
+    lines.push("## Evidence", "", String(job.goalEvidence), "");
+  if (job.goalBlockedReason)
+    lines.push("## Blocked reason", "", String(job.goalBlockedReason), "");
+  if (job.goalCompletionRejectedReason)
+    lines.push("## Last completion rejection", "", String(job.goalCompletionRejectedReason), "");
+  if (job.goalInterruptedReason)
+    lines.push("## Interrupt", "", String(job.goalInterruptedReason), "");
+  if (job.goalNoProgressReason)
+    lines.push("## No-progress guard", "", String(job.goalNoProgressReason), "");
+  if (job.goalAcceptance?.length)
+    lines.push("## Acceptance criteria", "", ...job.goalAcceptance.map((item) => `- ${item}`), "");
+  if (job.lastGoalChecks?.length) {
+    lines.push("## Latest checks", "");
+    for (const item of job.lastGoalChecks)
+      lines.push(`- ${item.command}: exit ${item.code}`);
+    lines.push("");
+  }
+  if (job.goalProgress?.length) {
+    lines.push("## Progress", "");
+    for (const item of job.goalProgress)
+      lines.push(`- ${item.time}: ${item.summary}${item.next ? ` Next: ${item.next}` : ""}`);
+    lines.push("");
+  }
+  return lines.join(`
+`);
+}
+async function writeGoalReport(directory, sessionID, job) {
+  if (!isGoalJob(job))
+    return;
+  const target = job.goalEvidenceFile ? path3.resolve(directory, job.goalEvidenceFile) : goalReportPath(directory, sessionID, job);
+  await ensureDir(path3.dirname(target));
+  await fs3.writeFile(target, goalReportText(job), "utf8");
+}
+function pickGoalJob(state, target = "") {
+  const goals = (state.jobs || []).filter(isGoalJob);
+  if (!goals.length)
+    return;
+  const text = String(target || "").trim();
+  if (!text || ["active", "current", "goal"].includes(text.toLowerCase()))
+    return goals.find((job) => job.goalStatus === "active" && job.enabled !== false) || goals[0];
+  return goals.find((job, index) => matchJob(job, text, index));
+}
+function parseGoalToolText(args, fields) {
+  const result = {};
+  for (const field of fields)
+    result[field] = String(args?.[field] || "").trim();
+  return result;
+}
+function hasConcreteGoalEvidence(value) {
+  const text = String(value || "").trim();
+  if (text.length < 24)
+    return false;
+  const normalized = text.toLowerCase().replace(/\s+/g, " ");
+  const weak = new Set(["done", "complete", "completed", "ok", "looks good", "n/a", "none", "no evidence", "no evidence provided", "goal completed", "marked complete"]);
+  if (weak.has(normalized) || normalized.startsWith("marked complete by /loop-goal-done"))
+    return false;
+  return /(\b(npm|pnpm|yarn|bun|node|pytest|cargo|dotnet|go test|tsc|typecheck|test|tests|lint|build|check|checks|exit\s*\d|passed|verified|changed|updated|created|fixed|file|files|diff|commit)\b|[`\\/][\w./:-]+)/i.test(text) || text.length >= 80;
+}
+function goalChecksPassed(job) {
+  return Array.isArray(job?.lastGoalChecks) && job.lastGoalChecks.length > 0 && job.lastGoalChecks.every((item) => Number(item?.code) === 0);
+}
+function goalRequiresPassingChecks(job) {
+  return job?.goalRequireChecksPass !== false && Array.isArray(job?.goalChecks) && job.goalChecks.length > 0;
+}
+function goalProgressSnapshot(job) {
+  return {
+    status: job?.goalStatus || "",
+    progressCount: Array.isArray(job?.goalProgress) ? job.goalProgress.length : 0,
+    evidence: String(job?.goalEvidence || ""),
+    checksPassedAt: Number(job?.goalChecksPassedAt || 0),
+    lastGoalCheckAt: Number(job?.lastGoalCheckAt || 0),
+    lastVerifyAt: Number(job?.lastVerifyAt || 0),
+    lastVerifyCode: Number.isFinite(Number(job?.lastVerifyCode)) ? Number(job.lastVerifyCode) : undefined
+  };
+}
+function goalMadeMeaningfulProgress(beforeJob, afterJob) {
+  const before = goalProgressSnapshot(beforeJob || {});
+  const after = goalProgressSnapshot(afterJob || {});
+  if (["completed", "blocked"].includes(after.status) && after.status !== before.status)
+    return true;
+  if (after.progressCount > before.progressCount)
+    return true;
+  if (after.evidence !== before.evidence && hasConcreteGoalEvidence(after.evidence))
+    return true;
+  if (after.checksPassedAt > before.checksPassedAt || goalChecksPassed(afterJob) && after.lastGoalCheckAt > before.lastGoalCheckAt)
+    return true;
+  if (after.lastVerifyAt > before.lastVerifyAt && after.lastVerifyCode === 0)
+    return true;
+  return false;
+}
+async function rejectGoalCompletion(directory, sessionID, state, job, reason) {
+  job.goalCompletionRejectedAt = now();
+  job.goalCompletionRejectedReason = reason;
+  job.goalCompletionRejectedCount = (job.goalCompletionRejectedCount || 0) + 1;
+  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
+  await writeState(directory, sessionID, state);
+  await writeGoalReport(directory, sessionID, job);
+  await appendLoopLog(directory, "goal-complete-rejected", { sessionID, job: job.name || job.id, reason });
+  return { ok: false, job, rejected: true, message: `Goal completion rejected: ${reason}` };
+}
+async function setGoalComplete(directory, sessionID, args = {}) {
+  const state = await readState(directory, sessionID);
+  const job = pickGoalJob(state, args.target);
+  if (!job)
+    return { ok: false, message: "No active experimental goal was found." };
+  const parsed = parseGoalToolText(args, ["summary", "evidence"]);
+  const manualOverride = args.manual === true || args.manualOverride === true;
+  const completionEvidence = parsed.evidence || job.goalEvidence || "";
+  const skipEvidenceGate = manualOverride || args.allowWeakEvidence === true || job.goalRequireEvidence === false;
+  const skipCheckGate = manualOverride || args.allowFailingChecks === true || job.goalRequireChecksPass === false;
+  if (!skipEvidenceGate && !hasConcreteGoalEvidence(completionEvidence)) {
+    return await rejectGoalCompletion(directory, sessionID, state, job, "concrete evidence is required before the goal tool can complete the goal");
+  }
+  if (!skipCheckGate && goalRequiresPassingChecks(job) && !goalChecksPassed(job)) {
+    return await rejectGoalCompletion(directory, sessionID, state, job, "configured goal checks have not passed yet");
+  }
+  job.goalStatus = "completed";
+  job.enabled = false;
+  job.paused = true;
+  job.goalCompletedAt = now();
+  job.goalSummary = parsed.summary || job.goalSummary || "Goal completed.";
+  job.goalEvidence = completionEvidence || "No evidence provided.";
+  job.noProgressCount = 0;
+  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
+  await writeState(directory, sessionID, state);
+  await writeGoalReport(directory, sessionID, job);
+  await appendLoopLog(directory, "goal-complete", { sessionID, job: job.name || job.id, summary: job.goalSummary });
+  return { ok: true, job, message: `Goal completed: ${job.goalSummary}` };
+}
+async function setGoalBlocked(directory, sessionID, args = {}) {
+  const state = await readState(directory, sessionID);
+  const job = pickGoalJob(state, args.target);
+  if (!job)
+    return { ok: false, message: "No active experimental goal was found." };
+  const parsed = parseGoalToolText(args, ["reason", "needed", "evidence"]);
+  job.goalStatus = "blocked";
+  job.enabled = false;
+  job.paused = true;
+  job.goalBlockedAt = now();
+  job.goalBlockedReason = [parsed.reason, parsed.needed ? `Needed: ${parsed.needed}` : ""].filter(Boolean).join(`
+`) || "Goal blocked.";
+  if (parsed.evidence)
+    job.goalEvidence = parsed.evidence;
+  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
+  await writeState(directory, sessionID, state);
+  await writeGoalReport(directory, sessionID, job);
+  await appendLoopLog(directory, "goal-blocked", { sessionID, job: job.name || job.id, reason: job.goalBlockedReason });
+  return { ok: true, job, message: `Goal blocked: ${job.goalBlockedReason}` };
+}
+async function setGoalProgress(directory, sessionID, args = {}) {
+  const state = await readState(directory, sessionID);
+  const job = pickGoalJob(state, args.target);
+  if (!job)
+    return { ok: false, message: "No active experimental goal was found." };
+  const parsed = parseGoalToolText(args, ["summary", "next", "evidence"]);
+  const item = { time: new Date().toISOString(), summary: parsed.summary || "Progress recorded.", next: parsed.next || "", evidence: parsed.evidence || "" };
+  job.goalProgress = [...job.goalProgress || [], item].slice(-30);
+  if (parsed.evidence)
+    job.goalEvidence = parsed.evidence;
+  job.noProgressCount = 0;
+  job.lastProgressAt = now();
+  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
+  await writeState(directory, sessionID, state);
+  await writeGoalReport(directory, sessionID, job);
+  await appendLoopLog(directory, "goal-progress", { sessionID, job: job.name || job.id, summary: item.summary });
+  return { ok: true, job, message: `Goal progress recorded: ${item.summary}` };
+}
+
+// src/source/opencode/goal-commands.js
+function requireFunction2(value, name) {
+  if (typeof value !== "function")
+    throw new TypeError(`createGoalCommandHandlers requires ${name}`);
+  return value;
+}
+function createGoalCommandHandlers(options = {}) {
+  const addLoop = requireFunction2(options.addLoop, "addLoop");
+  const scheduleDueWork = requireFunction2(options.scheduleDueWork, "scheduleDueWork");
+  const scheduleIdleWork = requireFunction2(options.scheduleIdleWork, "scheduleIdleWork");
+  const toast2 = requireFunction2(options.toast, "toast");
+  const say2 = requireFunction2(options.say, "say");
+  const readState2 = typeof options.readState === "function" ? options.readState : readState;
+  const writeState2 = typeof options.writeState === "function" ? options.writeState : writeState;
+  const setGoalComplete2 = typeof options.setGoalComplete === "function" ? options.setGoalComplete : setGoalComplete;
+  const setGoalBlocked2 = typeof options.setGoalBlocked === "function" ? options.setGoalBlocked : setGoalBlocked;
+  async function statusGoal(directory, client, sessionID) {
+    const state = await readState2(directory, sessionID);
+    const goals = (state.jobs || []).filter(isGoalJob);
+    const lines = goals.length ? goals.map((job, index) => {
+      const status = goalStatusText(job);
+      const checks = job.goalChecks?.length ? ` | checks=${job.goalChecks.length}` : "";
+      const acceptance = job.goalAcceptance?.length ? ` | acceptance=${job.goalAcceptance.length}` : "";
+      const progress = job.goalProgress?.length ? ` | progress=${job.goalProgress.length}` : "";
+      const noProgress = (job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0 ? ` | no-progress=${job.noProgressCount || 0}/${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS}` : "";
+      const rejected = job.goalCompletionRejectedReason ? " | completion-rejected" : "";
+      return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${status} | turns=${job.runCount || 0} | objective=${String(job.action || job.goalFile || "").slice(0, 220)}${checks}${acceptance}${progress}${noProgress}${rejected}`;
+    }) : ["No experimental goal jobs."];
+    await toast2(client, goals.length ? `${goals.length} experimental goal(s).` : "No experimental goal jobs.", goals.length ? "info" : "warning");
+    await say2(client, sessionID, `OpenCode Loop experimental goal status:
+` + lines.join(`
+`));
+  }
+  async function pauseGoal(directory, client, sessionID, args) {
+    const target = String(args || "").trim() || "goal";
+    const state = await readState2(directory, sessionID);
+    let count = 0;
+    state.jobs = (state.jobs || []).map((job, index) => isGoalJob(job) && matchJob(job, target, index) ? (count++, { ...job, paused: true }) : job);
+    await writeState2(directory, sessionID, state);
+    await scheduleDueWork(directory, client, sessionID);
+    await toast2(client, `Paused ${count} experimental goal(s).`, count ? "success" : "warning");
+  }
+  async function resumeGoal(directory, client, sessionID, args) {
+    const target = String(args || "").trim() || "goal";
+    const state = await readState2(directory, sessionID);
+    let count = 0;
+    state.jobs = (state.jobs || []).map((job, index) => {
+      if (!isGoalJob(job) || !matchJob(job, target, index))
+        return job;
+      count++;
+      return { ...job, paused: false, enabled: true, goalStatus: job.goalStatus === "blocked" ? "active" : job.goalStatus || "active", lastRunAt: 0, noProgressCount: 0, goalNoProgressReason: "", goalInterruptedReason: "" };
+    });
+    await writeState2(directory, sessionID, state);
+    await toast2(client, `Resumed ${count} experimental goal(s).`, count ? "success" : "warning");
+    if (count) {
+      await scheduleDueWork(directory, client, sessionID);
+      scheduleIdleWork(directory, client, sessionID);
+    }
+  }
+  async function clearGoal(directory, client, sessionID, args) {
+    const target = String(args || "").trim();
+    const state = await readState2(directory, sessionID);
+    const before = state.jobs.length;
+    state.jobs = (state.jobs || []).filter((job, index) => !isGoalJob(job) || target && !matchJob(job, target, index));
+    await writeState2(directory, sessionID, state);
+    await scheduleDueWork(directory, client, sessionID);
+    await toast2(client, `Cleared ${before - state.jobs.length} experimental goal(s).`, before !== state.jobs.length ? "success" : "warning");
+  }
+  async function completeGoalCommand(directory, client, sessionID, args) {
+    const result = await setGoalComplete2(directory, sessionID, { summary: String(args || "").trim() || "Goal manually marked complete.", evidence: "Marked complete by /loop-goal-done.", manual: true });
+    await toast2(client, result.message, result.ok ? "success" : "warning");
+  }
+  async function blockGoalCommand(directory, client, sessionID, args) {
+    const result = await setGoalBlocked2(directory, sessionID, { reason: String(args || "").trim() || "Goal manually marked blocked.", needed: "User input or manual intervention." });
+    await toast2(client, result.message, "warning");
+  }
+  async function addGoal(directory, client, sessionID, args) {
+    const text = String(args || "").trim();
+    const [maybeCommand, rest] = splitFirst(text);
+    const sub = maybeCommand.toLowerCase();
+    if (!text || sub === "status")
+      return await statusGoal(directory, client, sessionID);
+    if (sub === "pause")
+      return await pauseGoal(directory, client, sessionID, rest);
+    if (sub === "resume")
+      return await resumeGoal(directory, client, sessionID, rest);
+    if (["clear", "remove", "stop"].includes(sub))
+      return await clearGoal(directory, client, sessionID, rest);
+    if (["done", "complete", "completed"].includes(sub))
+      return await completeGoalCommand(directory, client, sessionID, rest);
+    if (["blocked", "block"].includes(sub))
+      return await blockGoalCommand(directory, client, sessionID, rest);
+    return await addLoop(directory, client, sessionID, text, { intervalMs: 0, kind: "goal", name: "goal", immediate: true, safe: true, askNever: true, noOverlap: true, goalStatus: "active" });
+  }
+  return {
+    addGoal,
+    statusGoal,
+    pauseGoal,
+    resumeGoal,
+    clearGoal,
+    completeGoalCommand,
+    blockGoalCommand
+  };
+}
+
 // src/source/runtime/session-activity.js
 var activeToolCalls = new Map;
 var sessionParents = new Map;
@@ -1543,295 +1927,16 @@ function createSchedulerRuntime(options = {}) {
   };
 }
 
-// src/source/runtime/goal-runtime.js
-import { promises as fs3 } from "fs";
-import path3 from "path";
-var GOAL_REPORT_DIR = "goals";
-var GOAL_PROMPT_PREFIX = "EXPERIMENTAL OPENCODE GOAL MODE ITERATION";
-async function buildGoalPrompt(directory, job) {
-  const sections = [];
-  sections.push(`Working directory:
-${path3.resolve(directory)}
-Keep every file operation inside this directory. Prefer workspace-relative paths such as "src/index.js"; never turn a relative path into a root path such as "/src/index.js".`);
-  const objective = String(job.action || "").trim();
-  if (objective)
-    sections.push(`Goal objective:
-${objective}`);
-  if (job.goalFile) {
-    const text = await readSmallTextFile(path3.resolve(directory, job.goalFile), 120000);
-    if (text.trim())
-      sections.push(`Goal file ${job.goalFile}:
-${text.trim()}`);
-    else
-      sections.push(`Goal file ${job.goalFile} was requested but could not be read. Continue from the inline goal objective.`);
-  }
-  if (job.promptFile) {
-    const text = await readSmallTextFile(path3.resolve(directory, job.promptFile), 120000);
-    if (text.trim())
-      sections.push(`Extra goal instructions from ${job.promptFile}:
-${text.trim()}`);
-  }
-  if (job.goalAcceptance?.length)
-    sections.push(`Acceptance criteria:
-` + job.goalAcceptance.map((item, index) => `${index + 1}. ${item}`).join(`
-`));
-  if (job.goalChecks?.length)
-    sections.push(`Verification commands that define useful evidence:
-` + job.goalChecks.map((item, index) => `${index + 1}. ${item}`).join(`
-`));
-  if (job.verifyCommand)
-    sections.push(`Post-turn verify command configured by the loop: ${job.verifyCommand}`);
-  if (job.lastGoalChecks?.length)
-    sections.push(`Latest goal check results:
-` + job.lastGoalChecks.map((item) => `- ${item.command}: exit ${item.code}`).join(`
-`));
-  if (job.lastVerifyFailure)
-    sections.push(`Previous verify/check failure summary:
-` + String(job.lastVerifyFailure).slice(0, 1600));
-  if (job.goalCompletionRejectedReason)
-    sections.push(`Previous completion attempt was rejected:
-${job.goalCompletionRejectedReason}`);
-  if ((job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0)
-    sections.push(`No-progress guard:
-${job.noProgressCount || 0}/${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS} recent turn(s) without recorded meaningful progress.`);
-  if (job.goalProgress?.length)
-    sections.push(`Recent goal progress:
-` + job.goalProgress.slice(-5).map((item) => `- ${item.time}: ${item.summary}`).join(`
-`));
-  for (const file of job.includeFiles || []) {
-    const text = await readSmallTextFile(path3.resolve(directory, file), 80000);
-    if (text.trim())
-      sections.push(`Context from ${file}:
-${text.trim().slice(0, 20000)}`);
-  }
-  return `${GOAL_PROMPT_PREFIX}.
-
-You are pursuing an experimental persistent goal for this OpenCode session. This is not a timer loop and not a one-shot prompt. Keep working toward the goal until it is completed, blocked, paused, cleared, or stopped by safety limits.
-
-Rules:
-- Work on the next smallest useful step toward the goal.
-- Prefer direct code changes, tests, typechecks, builds, and evidence over discussion.
-- Do not claim the goal is complete unless the acceptance criteria are satisfied and verification evidence supports it.
-- If verification commands are configured, do not call opencode_loop_goal_complete until the latest relevant checks have passed unless the user explicitly overrides the goal.
-- Completion evidence must be concrete: mention commands, files, checks, results, or code inspection details.
-- When the goal is complete, call the tool opencode_loop_goal_complete with a summary and evidence.
-- If you are truly blocked and need user input, call the tool opencode_loop_goal_blocked with the reason and what is needed.
-- If you made meaningful progress but the goal is not complete, call the tool opencode_loop_goal_progress with the summary and next step.
-- If you cannot make meaningful progress for this turn, call opencode_loop_goal_blocked instead of repeating the same attempt.
-- Do not call completion tools just to be polite; only call them when the state is real.
-- Do not ask the user questions unless blocked; make reasonable assumptions and continue.
-- Follow safety rules: no destructive commands, force pushes, production deploys, production database resets, or deleting user data.
-
-${sections.join(`
-
----
-
-`)}`;
-}
-function goalReportPath(directory, sessionID, job) {
-  return path3.join(stateDir(directory), GOAL_REPORT_DIR, `${safeID(sessionID)}-${safeID(job.name || job.id)}.md`);
-}
-function goalReportText(job) {
-  const lines = [];
-  lines.push(`# OpenCode Loop Goal Report`);
-  lines.push("");
-  lines.push(`Status: ${goalStatusText(job) || "unknown"}`);
-  lines.push(`Goal: ${job.action || job.goalFile || ""}`);
-  lines.push(`Created: ${job.createdAt || ""}`);
-  if (job.goalCompletedAt)
-    lines.push(`Completed: ${new Date(job.goalCompletedAt).toISOString()}`);
-  if (job.goalBlockedAt)
-    lines.push(`Blocked: ${new Date(job.goalBlockedAt).toISOString()}`);
-  if (job.lastUserInterruptAt)
-    lines.push(`Paused by user message: ${new Date(job.lastUserInterruptAt).toISOString()}`);
-  if (job.goalNoProgressPausedAt)
-    lines.push(`Paused by no-progress guard: ${new Date(job.goalNoProgressPausedAt).toISOString()}`);
-  if (job.runCount)
-    lines.push(`Turns: ${job.runCount}`);
-  if ((job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0)
-    lines.push(`No-progress: ${job.noProgressCount || 0}/${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS}`);
-  lines.push("");
-  if (job.goalSummary)
-    lines.push("## Summary", "", String(job.goalSummary), "");
-  if (job.goalEvidence)
-    lines.push("## Evidence", "", String(job.goalEvidence), "");
-  if (job.goalBlockedReason)
-    lines.push("## Blocked reason", "", String(job.goalBlockedReason), "");
-  if (job.goalCompletionRejectedReason)
-    lines.push("## Last completion rejection", "", String(job.goalCompletionRejectedReason), "");
-  if (job.goalInterruptedReason)
-    lines.push("## Interrupt", "", String(job.goalInterruptedReason), "");
-  if (job.goalNoProgressReason)
-    lines.push("## No-progress guard", "", String(job.goalNoProgressReason), "");
-  if (job.goalAcceptance?.length)
-    lines.push("## Acceptance criteria", "", ...job.goalAcceptance.map((item) => `- ${item}`), "");
-  if (job.lastGoalChecks?.length) {
-    lines.push("## Latest checks", "");
-    for (const item of job.lastGoalChecks)
-      lines.push(`- ${item.command}: exit ${item.code}`);
-    lines.push("");
-  }
-  if (job.goalProgress?.length) {
-    lines.push("## Progress", "");
-    for (const item of job.goalProgress)
-      lines.push(`- ${item.time}: ${item.summary}${item.next ? ` Next: ${item.next}` : ""}`);
-    lines.push("");
-  }
-  return lines.join(`
-`);
-}
-async function writeGoalReport(directory, sessionID, job) {
-  if (!isGoalJob(job))
-    return;
-  const target = job.goalEvidenceFile ? path3.resolve(directory, job.goalEvidenceFile) : goalReportPath(directory, sessionID, job);
-  await ensureDir(path3.dirname(target));
-  await fs3.writeFile(target, goalReportText(job), "utf8");
-}
-function pickGoalJob(state, target = "") {
-  const goals = (state.jobs || []).filter(isGoalJob);
-  if (!goals.length)
-    return;
-  const text = String(target || "").trim();
-  if (!text || ["active", "current", "goal"].includes(text.toLowerCase()))
-    return goals.find((job) => job.goalStatus === "active" && job.enabled !== false) || goals[0];
-  return goals.find((job, index) => matchJob(job, text, index));
-}
-function parseGoalToolText(args, fields) {
-  const result = {};
-  for (const field of fields)
-    result[field] = String(args?.[field] || "").trim();
-  return result;
-}
-function hasConcreteGoalEvidence(value) {
-  const text = String(value || "").trim();
-  if (text.length < 24)
-    return false;
-  const normalized = text.toLowerCase().replace(/\s+/g, " ");
-  const weak = new Set(["done", "complete", "completed", "ok", "looks good", "n/a", "none", "no evidence", "no evidence provided", "goal completed", "marked complete"]);
-  if (weak.has(normalized) || normalized.startsWith("marked complete by /loop-goal-done"))
-    return false;
-  return /(\b(npm|pnpm|yarn|bun|node|pytest|cargo|dotnet|go test|tsc|typecheck|test|tests|lint|build|check|checks|exit\s*\d|passed|verified|changed|updated|created|fixed|file|files|diff|commit)\b|[`\\/][\w./:-]+)/i.test(text) || text.length >= 80;
-}
-function goalChecksPassed(job) {
-  return Array.isArray(job?.lastGoalChecks) && job.lastGoalChecks.length > 0 && job.lastGoalChecks.every((item) => Number(item?.code) === 0);
-}
-function goalRequiresPassingChecks(job) {
-  return job?.goalRequireChecksPass !== false && Array.isArray(job?.goalChecks) && job.goalChecks.length > 0;
-}
-function goalProgressSnapshot(job) {
-  return {
-    status: job?.goalStatus || "",
-    progressCount: Array.isArray(job?.goalProgress) ? job.goalProgress.length : 0,
-    evidence: String(job?.goalEvidence || ""),
-    checksPassedAt: Number(job?.goalChecksPassedAt || 0),
-    lastGoalCheckAt: Number(job?.lastGoalCheckAt || 0),
-    lastVerifyAt: Number(job?.lastVerifyAt || 0),
-    lastVerifyCode: Number.isFinite(Number(job?.lastVerifyCode)) ? Number(job.lastVerifyCode) : undefined
-  };
-}
-function goalMadeMeaningfulProgress(beforeJob, afterJob) {
-  const before = goalProgressSnapshot(beforeJob || {});
-  const after = goalProgressSnapshot(afterJob || {});
-  if (["completed", "blocked"].includes(after.status) && after.status !== before.status)
-    return true;
-  if (after.progressCount > before.progressCount)
-    return true;
-  if (after.evidence !== before.evidence && hasConcreteGoalEvidence(after.evidence))
-    return true;
-  if (after.checksPassedAt > before.checksPassedAt || goalChecksPassed(afterJob) && after.lastGoalCheckAt > before.lastGoalCheckAt)
-    return true;
-  if (after.lastVerifyAt > before.lastVerifyAt && after.lastVerifyCode === 0)
-    return true;
-  return false;
-}
-async function rejectGoalCompletion(directory, sessionID, state, job, reason) {
-  job.goalCompletionRejectedAt = now();
-  job.goalCompletionRejectedReason = reason;
-  job.goalCompletionRejectedCount = (job.goalCompletionRejectedCount || 0) + 1;
-  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-  await writeState(directory, sessionID, state);
-  await writeGoalReport(directory, sessionID, job);
-  await appendLoopLog(directory, "goal-complete-rejected", { sessionID, job: job.name || job.id, reason });
-  return { ok: false, job, rejected: true, message: `Goal completion rejected: ${reason}` };
-}
-async function setGoalComplete(directory, sessionID, args = {}) {
-  const state = await readState(directory, sessionID);
-  const job = pickGoalJob(state, args.target);
-  if (!job)
-    return { ok: false, message: "No active experimental goal was found." };
-  const parsed = parseGoalToolText(args, ["summary", "evidence"]);
-  const manualOverride = args.manual === true || args.manualOverride === true;
-  const completionEvidence = parsed.evidence || job.goalEvidence || "";
-  const skipEvidenceGate = manualOverride || args.allowWeakEvidence === true || job.goalRequireEvidence === false;
-  const skipCheckGate = manualOverride || args.allowFailingChecks === true || job.goalRequireChecksPass === false;
-  if (!skipEvidenceGate && !hasConcreteGoalEvidence(completionEvidence)) {
-    return await rejectGoalCompletion(directory, sessionID, state, job, "concrete evidence is required before the goal tool can complete the goal");
-  }
-  if (!skipCheckGate && goalRequiresPassingChecks(job) && !goalChecksPassed(job)) {
-    return await rejectGoalCompletion(directory, sessionID, state, job, "configured goal checks have not passed yet");
-  }
-  job.goalStatus = "completed";
-  job.enabled = false;
-  job.paused = true;
-  job.goalCompletedAt = now();
-  job.goalSummary = parsed.summary || job.goalSummary || "Goal completed.";
-  job.goalEvidence = completionEvidence || "No evidence provided.";
-  job.noProgressCount = 0;
-  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-  await writeState(directory, sessionID, state);
-  await writeGoalReport(directory, sessionID, job);
-  await appendLoopLog(directory, "goal-complete", { sessionID, job: job.name || job.id, summary: job.goalSummary });
-  return { ok: true, job, message: `Goal completed: ${job.goalSummary}` };
-}
-async function setGoalBlocked(directory, sessionID, args = {}) {
-  const state = await readState(directory, sessionID);
-  const job = pickGoalJob(state, args.target);
-  if (!job)
-    return { ok: false, message: "No active experimental goal was found." };
-  const parsed = parseGoalToolText(args, ["reason", "needed", "evidence"]);
-  job.goalStatus = "blocked";
-  job.enabled = false;
-  job.paused = true;
-  job.goalBlockedAt = now();
-  job.goalBlockedReason = [parsed.reason, parsed.needed ? `Needed: ${parsed.needed}` : ""].filter(Boolean).join(`
-`) || "Goal blocked.";
-  if (parsed.evidence)
-    job.goalEvidence = parsed.evidence;
-  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-  await writeState(directory, sessionID, state);
-  await writeGoalReport(directory, sessionID, job);
-  await appendLoopLog(directory, "goal-blocked", { sessionID, job: job.name || job.id, reason: job.goalBlockedReason });
-  return { ok: true, job, message: `Goal blocked: ${job.goalBlockedReason}` };
-}
-async function setGoalProgress(directory, sessionID, args = {}) {
-  const state = await readState(directory, sessionID);
-  const job = pickGoalJob(state, args.target);
-  if (!job)
-    return { ok: false, message: "No active experimental goal was found." };
-  const parsed = parseGoalToolText(args, ["summary", "next", "evidence"]);
-  const item = { time: new Date().toISOString(), summary: parsed.summary || "Progress recorded.", next: parsed.next || "", evidence: parsed.evidence || "" };
-  job.goalProgress = [...job.goalProgress || [], item].slice(-30);
-  if (parsed.evidence)
-    job.goalEvidence = parsed.evidence;
-  job.noProgressCount = 0;
-  job.lastProgressAt = now();
-  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-  await writeState(directory, sessionID, state);
-  await writeGoalReport(directory, sessionID, job);
-  await appendLoopLog(directory, "goal-progress", { sessionID, job: job.name || job.id, summary: item.summary });
-  return { ok: true, job, message: `Goal progress recorded: ${item.summary}` };
-}
-
 // src/source/runtime/goal-policy.js
-function requireFunction2(value, name) {
+function requireFunction3(value, name) {
   if (typeof value !== "function")
     throw new TypeError(`createGoalExecutionPolicy requires ${name}`);
   return value;
 }
 function createGoalExecutionPolicy(options = {}) {
-  const runShellCommand2 = requireFunction2(options.runShellCommand, "runShellCommand");
-  const dangerousShell = requireFunction2(options.dangerousShell, "dangerousShell");
-  const toast2 = requireFunction2(options.toast, "toast");
+  const runShellCommand2 = requireFunction3(options.runShellCommand, "runShellCommand");
+  const dangerousShell = requireFunction3(options.dangerousShell, "dangerousShell");
+  const toast2 = requireFunction3(options.toast, "toast");
   const now2 = typeof options.now === "function" ? options.now : now;
   const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
   async function applyGoalNoProgressGuard(directory, client, sessionID, job, beforeJob) {
@@ -1951,6 +2056,21 @@ var schedulerRuntime = createSchedulerRuntime({
   errorMessage: sdkErrorMessage
 });
 var { rememberSession, scheduleIdleWork, scheduleDueWork, stopWatchdog, cancelDueWork } = schedulerRuntime;
+var {
+  addGoal,
+  statusGoal,
+  pauseGoal,
+  resumeGoal,
+  clearGoal,
+  completeGoalCommand,
+  blockGoalCommand
+} = createGoalCommandHandlers({
+  addLoop,
+  scheduleDueWork,
+  scheduleIdleWork,
+  toast,
+  say
+});
 var handleCommand = createCommandRouter({
   rememberSession,
   handlers: {
@@ -2823,84 +2943,6 @@ async function updateJobState(directory, client, sessionID, args, updater, messa
   await writeState(directory, sessionID, state);
   await scheduleDueWork(directory, client, sessionID);
   await toast(client, `${message}: ${count} loop(s).`, count ? "success" : "warning");
-}
-async function statusGoal(directory, client, sessionID) {
-  const state = await readState(directory, sessionID);
-  const goals = (state.jobs || []).filter(isGoalJob);
-  const lines = goals.length ? goals.map((job, index) => {
-    const status = goalStatusText(job);
-    const checks = job.goalChecks?.length ? ` | checks=${job.goalChecks.length}` : "";
-    const acceptance = job.goalAcceptance?.length ? ` | acceptance=${job.goalAcceptance.length}` : "";
-    const progress = job.goalProgress?.length ? ` | progress=${job.goalProgress.length}` : "";
-    const noProgress = (job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0 ? ` | no-progress=${job.noProgressCount || 0}/${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS}` : "";
-    const rejected = job.goalCompletionRejectedReason ? " | completion-rejected" : "";
-    return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${status} | turns=${job.runCount || 0} | objective=${String(job.action || job.goalFile || "").slice(0, 220)}${checks}${acceptance}${progress}${noProgress}${rejected}`;
-  }) : ["No experimental goal jobs."];
-  await toast(client, goals.length ? `${goals.length} experimental goal(s).` : "No experimental goal jobs.", goals.length ? "info" : "warning");
-  await say(client, sessionID, `OpenCode Loop experimental goal status:
-` + lines.join(`
-`));
-}
-async function pauseGoal(directory, client, sessionID, args) {
-  const target = String(args || "").trim() || "goal";
-  const state = await readState(directory, sessionID);
-  let count = 0;
-  state.jobs = (state.jobs || []).map((job, index) => isGoalJob(job) && matchJob(job, target, index) ? (count++, { ...job, paused: true }) : job);
-  await writeState(directory, sessionID, state);
-  await scheduleDueWork(directory, client, sessionID);
-  await toast(client, `Paused ${count} experimental goal(s).`, count ? "success" : "warning");
-}
-async function resumeGoal(directory, client, sessionID, args) {
-  const target = String(args || "").trim() || "goal";
-  const state = await readState(directory, sessionID);
-  let count = 0;
-  state.jobs = (state.jobs || []).map((job, index) => {
-    if (!isGoalJob(job) || !matchJob(job, target, index))
-      return job;
-    count++;
-    return { ...job, paused: false, enabled: true, goalStatus: job.goalStatus === "blocked" ? "active" : job.goalStatus || "active", lastRunAt: 0, noProgressCount: 0, goalNoProgressReason: "", goalInterruptedReason: "" };
-  });
-  await writeState(directory, sessionID, state);
-  await toast(client, `Resumed ${count} experimental goal(s).`, count ? "success" : "warning");
-  if (count) {
-    await scheduleDueWork(directory, client, sessionID);
-    scheduleIdleWork(directory, client, sessionID);
-  }
-}
-async function clearGoal(directory, client, sessionID, args) {
-  const target = String(args || "").trim();
-  const state = await readState(directory, sessionID);
-  const before = state.jobs.length;
-  state.jobs = (state.jobs || []).filter((job, index) => !isGoalJob(job) || target && !matchJob(job, target, index));
-  await writeState(directory, sessionID, state);
-  await scheduleDueWork(directory, client, sessionID);
-  await toast(client, `Cleared ${before - state.jobs.length} experimental goal(s).`, before !== state.jobs.length ? "success" : "warning");
-}
-async function completeGoalCommand(directory, client, sessionID, args) {
-  const result = await setGoalComplete(directory, sessionID, { summary: String(args || "").trim() || "Goal manually marked complete.", evidence: "Marked complete by /loop-goal-done.", manual: true });
-  await toast(client, result.message, result.ok ? "success" : "warning");
-}
-async function blockGoalCommand(directory, client, sessionID, args) {
-  const result = await setGoalBlocked(directory, sessionID, { reason: String(args || "").trim() || "Goal manually marked blocked.", needed: "User input or manual intervention." });
-  await toast(client, result.message, result.ok ? "warning" : "warning");
-}
-async function addGoal(directory, client, sessionID, args) {
-  const text = String(args || "").trim();
-  const [maybeCommand, rest] = splitFirst(text);
-  const sub = maybeCommand.toLowerCase();
-  if (!text || sub === "status")
-    return await statusGoal(directory, client, sessionID);
-  if (sub === "pause")
-    return await pauseGoal(directory, client, sessionID, rest);
-  if (sub === "resume")
-    return await resumeGoal(directory, client, sessionID, rest);
-  if (["clear", "remove", "stop"].includes(sub))
-    return await clearGoal(directory, client, sessionID, rest);
-  if (["done", "complete", "completed"].includes(sub))
-    return await completeGoalCommand(directory, client, sessionID, rest);
-  if (["blocked", "block"].includes(sub))
-    return await blockGoalCommand(directory, client, sessionID, rest);
-  return await addLoop(directory, client, sessionID, text, { intervalMs: 0, kind: "goal", name: "goal", immediate: true, safe: true, askNever: true, noOverlap: true, goalStatus: "active" });
 }
 async function statusLoop(directory, client, sessionID) {
   const state = await readState(directory, sessionID);
