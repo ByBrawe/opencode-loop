@@ -23,7 +23,7 @@ jobs:
       - run: npm ci
       - run: npm install --no-save --package-lock=false @opencode-ai/plugin@next
       - run: npm install --global @opencode-ai/cli@next
-      - name: Inspect V2 tool OpenAPI operations
+      - name: Inspect V2 command transport operations
         shell: bash
         run: |
           project="$RUNNER_TEMP/opencode2-discovery"
@@ -46,5 +46,5 @@ jobs:
           opencode2 api post "/api/session?$query" --data "$body"
           spec_file="$RUNNER_TEMP/opencode2-openapi.json"
           opencode2 api get /openapi.json > "$spec_file"
-          node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); for (const [p,ops] of Object.entries(s.paths||{})) for (const [m,op] of Object.entries(ops||{})) if (String(op?.operationId||"").toLowerCase().includes("tool") || p.toLowerCase().includes("tool")) console.log(JSON.stringify({path:p,method:m,operationId:op?.operationId}))' "$spec_file"
+          node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); for (const [p,ops] of Object.entries(s.paths||{})) for (const [m,op] of Object.entries(ops||{})) { const text=(p+" "+String(op?.operationId||"")+" "+String(op?.summary||"")).toLowerCase(); if (text.includes("command") || text.includes("prompt") || text.includes("input")) console.log(JSON.stringify({path:p,method:m,operationId:op?.operationId,summary:op?.summary})) }' "$spec_file"
           opencode2 service stop >/dev/null 2>&1 || true
