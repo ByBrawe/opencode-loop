@@ -1,0 +1,65 @@
+name: OpenCode 2 Activation
+
+on:
+  pull_request:
+    paths:
+      - "src/source/opencode2/**"
+      - ".github/workflows/opencode2-activation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  activation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Isolate OpenCode 2 paths
+        shell: bash
+        run: |
+          echo "HOME=$RUNNER_TEMP/opencode2-home" >> "$GITHUB_ENV"
+          echo "XDG_CONFIG_HOME=$RUNNER_TEMP/opencode2-home/.config" >> "$GITHUB_ENV"
+          echo "XDG_DATA_HOME=$RUNNER_TEMP/opencode2-home/.local/share" >> "$GITHUB_ENV"
+          echo "XDG_STATE_HOME=$RUNNER_TEMP/opencode2-home/.local/state" >> "$GITHUB_ENV"
+      - run: npm ci
+      - name: Install current V2 beta packages
+        run: npm install --no-save --package-lock=false @opencode-ai/cli@next @opencode-ai/plugin@next
+      - name: Show tested versions and V2 package export
+        shell: bash
+        run: |
+          node -p "require('./node_modules/@opencode-ai/plugin/package.json').version"
+          "$GITHUB_WORKSPACE/node_modules/.bin/opencode2" --version
+          node -p "JSON.stringify(require('./node_modules/@opencode-ai/plugin/package.json').exports, null, 2)"
+          find "$GITHUB_WORKSPACE/node_modules/@opencode-ai/plugin/dist/v2" -maxdepth 4 -type f -print 2>/dev/null | sort || true
+      - name: Record V2 Promise package import status
+        shell: bash
+        continue-on-error: true
+        run: node --input-type=module -e 'await import("@opencode-ai/plugin/v2/promise"); console.log("V2 Promise package import passed")'
+      - name: Prepare dependency-free project plugin
+        shell: bash
+        run: |
+          project="$RUNNER_TEMP/opencode-loop-v2-local"
+          mkdir -p "$project/.opencode/plugins"
+          git init --quiet "$project"
+          printf '%s\n' 'export default { id: "bybrawe.opencode-loop.v2.activation-probe", async setup() {} }' > "$project/.opencode/plugins/opencode-loop-v2-probe.js"
+      - name: Verify project-local plugin discovery
+        shell: bash
+        run: |
+          project="$RUNNER_TEMP/opencode-loop-v2-local"
+          cd "$project"
+          plugins="$("$GITHUB_WORKSPACE/node_modules/.bin/opencode2" api get /api/plugin)"
+          printf '%s\n' "$plugins"
+          printf '%s\n' "$plugins" | grep -F "bybrawe.opencode-loop.v2.activation-probe"
+      - name: Dump OpenCode 2 logs on failure
+        if: failure()
+        shell: bash
+        run: |
+          find "$XDG_DATA_HOME" -maxdepth 6 -type f -print -exec sh -c 'echo "--- $1"; tail -n 250 "$1"' _ {} \;
