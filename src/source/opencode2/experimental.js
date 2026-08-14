@@ -20,8 +20,7 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
 
     let promptRuntime
     const onRuntimeEvent = async (event) => promptRuntime?.onEvent(event)
-    void onRuntimeEvent
-    const runtime = createOpenCode2RuntimeAdapter(ctx)
+    const runtime = createOpenCode2RuntimeAdapter(ctx, { onEvent: onRuntimeEvent })
     try {
       await runtime.start()
     } catch (error) {
