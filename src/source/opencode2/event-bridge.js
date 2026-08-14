@@ -42,6 +42,10 @@ export function createOpenCode2EventBridge({
   let managerDisposed = false
   let queue = Promise.resolve()
 
+  function report(error) {
+    try { onError(error) } catch {}
+  }
+
   function disposeManager(reason) {
     if (managerDisposed) return false
     managerDisposed = true
@@ -84,6 +88,12 @@ export function createOpenCode2EventBridge({
     return result
   }
 
+  function callback(raw) {
+    const pending = dispatch(raw)
+    pending.catch(report)
+    return pending.catch(() => undefined)
+  }
+
   async function consume(stream) {
     const current = stream[Symbol.asyncIterator]()
     iterator = current
@@ -95,9 +105,7 @@ export function createOpenCode2EventBridge({
         await dispatch(next?.value)
       }
     } catch (error) {
-      if (!stopped) {
-        try { onError(error) } catch {}
-      }
+      if (!stopped) report(error)
     } finally {
       if (stopped && !iteratorClosed) await closeIterator().catch(() => undefined)
       if (iterator === current) iterator = undefined
@@ -108,6 +116,12 @@ export function createOpenCode2EventBridge({
     if (disposed) throw new Error("OpenCode 2 event bridge is disposed")
     if (attached) throw new Error("OpenCode 2 event bridge is already attached")
     if (typeof subscribe !== "function") throw new TypeError("OpenCode 2 event bridge requires an event subscribe function")
+
+    if (subscribe.length > 0) {
+      registration = await subscribe(callback)
+      attached = true
+      return registration
+    }
 
     registration = await subscribe()
     const stream = eventStream(registration)
