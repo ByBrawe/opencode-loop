@@ -29,6 +29,10 @@ jobs:
           printf 'export default async function(){ return {"command.execute.before": async()=>{}} }\n' > "$project/.opencode/plugins/sentinel.js"
           printf '%s\n' '---' 'description: discovery sentinel' '---' '' 'sentinel' > "$project/.opencode/commands/discovery-sentinel.md"
           printf '{}\n' > "$project/opencode.json"
+          git -C "$project" config user.email "canary@example.invalid"
+          git -C "$project" config user.name "OpenCode Canary"
+          git -C "$project" add .
+          git -C "$project" commit -qm init
           opencode2 service stop >/dev/null 2>&1 || true
           encoded="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$project")"
           query="directory=$encoded&location%5Bdirectory%5D=$encoded"
