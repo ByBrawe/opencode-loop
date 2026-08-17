@@ -339,23 +339,31 @@ async function main() {
 
     let registryResponse
     for (const prefix of ["/api", ""]) {
-      let candidate
-      try {
-        candidate = await request(`${prefix}/command`, { method: "GET" }, { timeoutMs: 20_000, allowHttpError: true })
-      } catch (error) {
-        serverLog = appendLog(serverLog, `\ncommand registry probe ${prefix || "/"} failed: ${String(error)}\n`)
-        continue
-      }
-      if (candidate.ok) {
-        apiPrefix = prefix
-        registryResponse = candidate
-        break
-      }
-      if (candidate.status !== 404) {
+      const deadline = Date.now() + 30_000
+      while (Date.now() < deadline && apiPrefix === null) {
+        let candidate
+        try {
+          candidate = await request(`${prefix}/command`, { method: "GET" }, { timeoutMs: 5_000, allowHttpError: true })
+        } catch (error) {
+          serverLog = appendLog(serverLog, `\ncommand registry probe ${prefix || "/"} failed: ${String(error)}\n`)
+          await new Promise((resolve) => setTimeout(resolve, 250))
+          continue
+        }
+        if (candidate.ok) {
+          apiPrefix = prefix
+          registryResponse = candidate
+          break
+        }
+        if (candidate.status === 503) {
+          await new Promise((resolve) => setTimeout(resolve, 250))
+          continue
+        }
+        if (candidate.status === 404) break
         throw new Error(`command registry probe failed with HTTP ${candidate.status}: ${candidate.text}\n${await diagnostics()}`)
       }
+      if (apiPrefix !== null) break
     }
-    assert.notEqual(apiPrefix, null, `OpenCode 2 exposed neither /api/command nor /command\n${await diagnostics()}`)
+    assert.notEqual(apiPrefix, null, `OpenCode 2 exposed neither /api/command nor /command after readiness wait\n${await diagnostics()}`)
 
     commandNames = collectCommandNames(registryResponse.body)
     assert.ok(commandNames.has("loop"), `OpenCode 2 did not register the project loop command: ${registryResponse.text}\n${await diagnostics()}`)
