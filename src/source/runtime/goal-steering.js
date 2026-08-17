@@ -5,6 +5,7 @@ import { appendLoopLog as defaultAppendLoopLog } from "../core/process.js"
 import { fireSdk as defaultFireSdk } from "../opencode/host.js"
 
 const DEFAULT_STEERING_SUPPRESSION_MS = 5 * 60_000
+const DEFAULT_SEEN_USER_MESSAGE_MS = 10 * 60_000
 
 function requireFunction(value, label) {
   if (typeof value !== "function") throw new TypeError(`createGoalSteeringRuntime requires ${label}`)
@@ -57,8 +58,12 @@ export function createGoalSteeringRuntime(options = {}) {
   const suppressionMs = Number.isFinite(Number(options.suppressionMs)) && Number(options.suppressionMs) > 0
     ? Number(options.suppressionMs)
     : DEFAULT_STEERING_SUPPRESSION_MS
+  const seenUserMessageMs = Number.isFinite(Number(options.seenUserMessageMs)) && Number(options.seenUserMessageMs) > 0
+    ? Number(options.seenUserMessageMs)
+    : DEFAULT_SEEN_USER_MESSAGE_MS
 
   const pendingSteering = new Map()
+  const seenUserMessages = new Map()
 
   function pendingForSession(sessionID) {
     const entry = pendingSteering.get(sessionID)
@@ -74,6 +79,32 @@ export function createGoalSteeringRuntime(options = {}) {
     return Boolean(pendingForSession(sessionID))
   }
 
+  function seenKey(sessionID, messageID) {
+    return messageID ? `${sessionID}\u0000${messageID}` : ""
+  }
+
+  function alreadyHandled(sessionID, messageID) {
+    const key = seenKey(sessionID, messageID)
+    if (!key) return false
+    const expiresAt = seenUserMessages.get(key)
+    if (!expiresAt) return false
+    if (expiresAt <= now()) {
+      seenUserMessages.delete(key)
+      return false
+    }
+    return true
+  }
+
+  function rememberHandled(sessionID, messageID) {
+    const key = seenKey(sessionID, messageID)
+    if (!key) return
+    const current = now()
+    seenUserMessages.set(key, current + seenUserMessageMs)
+    for (const [candidate, expiresAt] of seenUserMessages.entries()) {
+      if (expiresAt <= current) seenUserMessages.delete(candidate)
+    }
+  }
+
   function observeAssistantMessage(event) {
     const assistant = assistantMessageFromEvent(event)
     if (!assistant) return false
@@ -86,27 +117,30 @@ export function createGoalSteeringRuntime(options = {}) {
     return true
   }
 
-  async function handleEvent(directory, client, event) {
-    observeAssistantMessage(event)
-    const user = userMessageFromEvent(event)
-    if (!user) return undefined
-    if (isLoopOwnedUserMessage(user.sessionID, user.messageID)) {
-      return { handled: false, loopOwned: true, ...user }
+  async function handleUserMessage(directory, client, user) {
+    const sessionID = typeof user?.sessionID === "string" ? user.sessionID : ""
+    const messageID = typeof user?.messageID === "string" ? user.messageID : ""
+    if (!sessionID) return undefined
+    if (alreadyHandled(sessionID, messageID)) return { handled: false, duplicate: true, sessionID, messageID }
+    rememberHandled(sessionID, messageID)
+
+    if (isLoopOwnedUserMessage(sessionID, messageID)) {
+      return { handled: false, loopOwned: true, sessionID, messageID }
     }
 
-    const state = await readState(directory, user.sessionID)
+    const state = await readState(directory, sessionID)
     const goals = activeGoalJobs(state)
-    if (!goals.length) return { handled: false, ...user }
+    if (!goals.length) return { handled: false, sessionID, messageID }
 
-    const active = getActiveRun(user.sessionID)
+    const active = getActiveRun(sessionID)
     const activeGoalIDs = new Set(goals.map((goal) => goal.id))
     const canPreempt = active && activeGoalIDs.has(active.jobId) && isGoalJob(active.job) && typeof client?.session?.abort === "function"
     let preempted = false
     let abortError = ""
 
     if (canPreempt) {
-      pendingSteering.set(user.sessionID, {
-        messageID: user.messageID,
+      pendingSteering.set(sessionID, {
+        messageID,
         goalID: active.jobId,
         armedAt: now(),
         expiresAt: now() + suppressionMs,
@@ -116,34 +150,44 @@ export function createGoalSteeringRuntime(options = {}) {
           client,
           "session.abort",
           client.session.abort.bind(client.session),
-          { path: { id: user.sessionID }, body: {} },
-          { path: { sessionID: user.sessionID }, body: {} },
-          { sessionID: user.sessionID },
+          { path: { id: sessionID }, body: {} },
+          { path: { sessionID }, body: {} },
+          { sessionID },
         )
-        clearActiveRun(user.sessionID)
+        clearActiveRun(sessionID)
         preempted = true
       } catch (error) {
-        pendingSteering.delete(user.sessionID)
+        pendingSteering.delete(sessionID)
         abortError = error instanceof Error ? error.message : String(error)
       }
     }
 
     await appendLoopLog(directory, "goal-user-steering", {
-      sessionID: user.sessionID,
-      messageID: user.messageID,
+      sessionID,
+      messageID,
       goals: goals.length,
       preempted,
       ...(abortError ? { abortError } : {}),
     })
 
-    return { handled: true, preempted, ...user }
+    return { handled: true, preempted, sessionID, messageID }
+  }
+
+  async function handleEvent(directory, client, event) {
+    observeAssistantMessage(event)
+    const user = userMessageFromEvent(event)
+    if (!user) return undefined
+    return await handleUserMessage(directory, client, user)
   }
 
   function clearSession(sessionID) {
     pendingSteering.delete(sessionID)
+    const prefix = `${sessionID}\u0000`
+    for (const key of seenUserMessages.keys()) if (key.startsWith(prefix)) seenUserMessages.delete(key)
   }
 
   return {
+    handleUserMessage,
     handleEvent,
     observeAssistantMessage,
     shouldSuppressIdle,
