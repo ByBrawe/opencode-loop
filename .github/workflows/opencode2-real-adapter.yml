@@ -75,5 +75,6 @@ jobs:
           cat "$RUNNER_TEMP/opencode2-real-command.json" >&2 || true
           cat "$RUNNER_TEMP/opencode2-real-plugin.json" >&2 || true
           exit 1
+      # Keep the multi-turn host gate separate from the capability probe above.
       - name: Run real two-turn V2 Loop canary
         run: node scripts/opencode2-loop-canary.mjs
