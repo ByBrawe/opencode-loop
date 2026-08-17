@@ -909,9 +909,10 @@ function loopOwnedUserMessageGuardActive(sessionID, messageID) {
   if (id && entry.messageIDs.has(id))
     return true;
   if ((entry.pending || 0) > 0 && (entry.until || 0) >= now()) {
+    if (!id)
+      return true;
     entry.pending -= 1;
-    if (id)
-      entry.messageIDs.set(id, now() + LOOP_OWNED_USER_MESSAGE_RETENTION_MS);
+    entry.messageIDs.set(id, now() + LOOP_OWNED_USER_MESSAGE_RETENTION_MS);
     loopOwnedUserMessageGuards.set(sessionID, entry);
     return true;
   }
