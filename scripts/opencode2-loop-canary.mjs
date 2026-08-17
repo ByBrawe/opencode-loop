@@ -11,6 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const LOOP_OBJECTIVE = "real OpenCode 2 loop canary"
 const EXPECTED_TURNS = 2
+const EXPECTED_COMMANDS = ["loop", "loop-pause", "loop-resume", "loop-stop", "loop-remove", "loop-clear"]
 const SERVER_USERNAME = "opencode"
 const SERVER_PASSWORD = "opencode-loop-v2-canary"
 
@@ -56,20 +57,13 @@ async function stopProcess(child, timeoutMs = 5_000) {
   })
 }
 
-function collectCommandNames(value, names = new Set()) {
-  if (Array.isArray(value)) {
-    for (const item of value) collectCommandNames(item, names)
-    return names
+async function waitFor(predicate, description, diagnostics, timeoutMs = 60_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await predicate()) return
+    await new Promise((resolve) => setTimeout(resolve, 100))
   }
-  if (!value || typeof value !== "object") return names
-  for (const [key, item] of Object.entries(value)) {
-    if (key === "name" || key === "command" || key === "id") {
-      if (typeof item === "string") names.add(item)
-    } else if (item && typeof item === "object") {
-      collectCommandNames(item, names)
-    }
-  }
-  return names
+  throw new Error(`timed out waiting for ${description}\n${await diagnostics()}`)
 }
 
 function contentText(content) {
@@ -162,47 +156,15 @@ function startProvider() {
   }
 }
 
-async function waitFor(predicate, description, diagnostics, timeoutMs = 60_000) {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (await predicate()) return
-    await new Promise((resolve) => setTimeout(resolve, 50))
-  }
-  throw new Error(`timed out waiting for ${description}\n${await diagnostics()}`)
-}
-
-async function readOpenCodeLogTail(env) {
-  const candidates = [
-    path.join(env.XDG_DATA_HOME, "opencode", "log", "opencode.log"),
-    path.join(env.XDG_STATE_HOME, "opencode", "log", "opencode.log"),
-  ]
-  for (const file of candidates) {
-    try { return (await readFile(file, "utf8")).slice(-30_000) } catch {}
-  }
-  return ""
-}
-
 function bridgePluginSource() {
   return `import { writeFile } from "node:fs/promises"
 
 export default {
   id: "bybrawe.opencode-loop.v2.loop-canary-bridge",
   async setup(ctx) {
-    const pluginURL = process.env.OPENCODE_LOOP_V2_PLUGIN_URL
-    const marker = process.env.OPENCODE_LOOP_V2_MARKER
-    if (!pluginURL) throw new Error("OPENCODE_LOOP_V2_PLUGIN_URL is required")
-    if (!marker) throw new Error("OPENCODE_LOOP_V2_MARKER is required")
-    const module = await import(pluginURL)
-    const plugin = module.default
-    if (!plugin || typeof plugin.setup !== "function") throw new Error("experimental V2 plugin has no setup function")
-    const cleanup = await plugin.setup(ctx)
-    await writeFile(marker, JSON.stringify({
-      activated: true,
-      commandTransform: typeof ctx?.command?.transform === "function",
-      eventSubscribe: typeof ctx?.event?.subscribe === "function",
-      sessionPrompt: typeof ctx?.session?.prompt === "function",
-      sessionCommand: typeof ctx?.session?.command === "function"
-    }, null, 2), "utf8")
+    const module = await import(process.env.OPENCODE_LOOP_V2_PLUGIN_URL)
+    const cleanup = await module.default.setup(ctx)
+    await writeFile(process.env.OPENCODE_LOOP_V2_MARKER, JSON.stringify({ activated: true }, null, 2), "utf8")
     return async () => {
       if (typeof cleanup === "function") await cleanup()
     }
@@ -211,35 +173,35 @@ export default {
 `
 }
 
+function commandNames(payload) {
+  const data = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload) ? payload : []
+  return new Set(data.map((item) => item?.name).filter((name) => typeof name === "string"))
+}
+
 async function main() {
-  assert.equal(process.platform, "linux", "the first real OpenCode 2 loop canary is intentionally Ubuntu-only")
+  assert.equal(process.platform, "linux", "the real OpenCode 2 Loop canary is intentionally Ubuntu-only")
 
   const workspace = await mkdtemp(path.join(os.tmpdir(), "opencode-loop-v2-e2e-"))
   const home = path.join(workspace, ".home")
   const pluginDir = path.join(workspace, ".opencode", "plugins")
-  const commandDir = path.join(workspace, ".opencode", "commands")
-  const agentDir = path.join(workspace, ".opencode", "agents")
   const marker = path.join(workspace, "v2-real-adapter-marker.json")
   const provider = startProvider()
   const providerPort = await provider.listen()
   let server
   let serverLog = ""
-  let commandResult = null
   let apiPrefix = null
-  let commandNames = new Set()
+  let latestCommands = new Set()
+  let sessionID = ""
+  let commandError = null
 
   await Promise.all([
     mkdir(pluginDir, { recursive: true }),
-    mkdir(commandDir, { recursive: true }),
-    mkdir(agentDir, { recursive: true }),
     mkdir(path.join(home, ".config"), { recursive: true }),
     mkdir(path.join(home, ".local", "share"), { recursive: true }),
     mkdir(path.join(home, ".local", "state"), { recursive: true }),
   ])
 
   await writeFile(path.join(pluginDir, "opencode-loop-v2-real.js"), bridgePluginSource(), "utf8")
-  await writeFile(path.join(commandDir, "loop.md"), await readFile(path.join(repoRoot, "commands", "loop.md"), "utf8"))
-  await writeFile(path.join(agentDir, "opencode-loop-local.md"), await readFile(path.join(repoRoot, "agents", "opencode-loop-local.md"), "utf8"))
   await writeFile(path.join(workspace, "opencode.json"), `${JSON.stringify({
     $schema: "https://opencode.ai/config.json",
     model: "canary/canary",
@@ -258,11 +220,12 @@ async function main() {
       },
     },
   }, null, 2)}\n`)
+
   execFileSync("git", ["init", "--quiet", workspace], { stdio: "ignore" })
   execFileSync("git", ["-C", workspace, "config", "user.email", "opencode-loop-ci@example.invalid"], { stdio: "ignore" })
-execFileSync("git", ["-C", workspace, "config", "user.name", "OpenCode Loop CI"], { stdio: "ignore" })
-execFileSync("git", ["-C", workspace, "add", "."], { stdio: "ignore" })
-execFileSync("git", ["-C", workspace, "commit", "--quiet", "-m", "init"], { stdio: "ignore" })
+  execFileSync("git", ["-C", workspace, "config", "user.name", "OpenCode Loop CI"], { stdio: "ignore" })
+  execFileSync("git", ["-C", workspace, "add", "."], { stdio: "ignore" })
+  execFileSync("git", ["-C", workspace, "commit", "--quiet", "-m", "init"], { stdio: "ignore" })
 
   const env = {
     ...process.env,
@@ -283,24 +246,18 @@ execFileSync("git", ["-C", workspace, "commit", "--quiet", "-m", "init"], { stdi
 
   const diagnostics = async () => {
     let state = "missing"
-    let stateFile = "unknown"
-    try {
-      if (commandResult?.sessionID) {
-        stateFile = path.join(workspace, ".opencode", "opencode-loop", `${commandResult.sessionID}.json`)
-        state = await readFile(stateFile, "utf8")
-      }
-    } catch {}
-    const diskLog = await readOpenCodeLogTail(env)
+    if (sessionID) {
+      try { state = await readFile(path.join(workspace, ".opencode", "opencode-loop", `${sessionID}.json`), "utf8") } catch {}
+    }
     return [
       `apiPrefix=${String(apiPrefix)}`,
-      `commands=${JSON.stringify([...commandNames])}`,
+      `commands=${JSON.stringify([...latestCommands])}`,
       `provider=${JSON.stringify(provider.stats)}`,
-      `command=${commandResult?.error ? String(commandResult.error) : JSON.stringify(commandResult)}`,
-      `stateFile=${stateFile}`,
+      `sessionID=${sessionID || "none"}`,
+      `commandError=${String(commandError ?? "none")}`,
       `state=${state}`,
       `serverExit=${server?.exitCode}`,
       `serverLog=${serverLog}`,
-      `diskLog=${diskLog}`,
     ].join("\n")
   }
 
@@ -317,7 +274,7 @@ execFileSync("git", ["-C", workspace, "commit", "--quiet", "-m", "init"], { stdi
 
     const baseURL = `http://127.0.0.1:${port}`
     const authorization = `Basic ${Buffer.from(`${SERVER_USERNAME}:${SERVER_PASSWORD}`).toString("base64")}`
-    const request = async (pathname, init = {}, { timeoutMs = 30_000, allowHttpError = false } = {}) => {
+    const request = async (pathname, init = {}, timeoutMs = 30_000) => {
       const response = await fetch(`${baseURL}${pathname}`, {
         ...init,
         headers: {
@@ -329,105 +286,81 @@ execFileSync("git", ["-C", workspace, "commit", "--quiet", "-m", "init"], { stdi
         signal: init.signal ?? AbortSignal.timeout(timeoutMs),
       })
       const text = await response.text()
-      let body = text
+      let body = null
       if (text) {
-        try { body = JSON.parse(text) } catch {}
-      } else {
-        body = null
-      }
-      if (!response.ok && !allowHttpError) {
-        throw new Error(`HTTP ${response.status} ${pathname}: ${text}\n${await diagnostics()}`)
+        try { body = JSON.parse(text) } catch { body = text }
       }
       return { ok: response.ok, status: response.status, body, text }
     }
 
-    let registryResponse
     for (const prefix of ["/api", ""]) {
       const deadline = Date.now() + 30_000
-      while (Date.now() < deadline && apiPrefix === null) {
-        let candidate
-        try {
-          candidate = await request(`${prefix}/command`, { method: "GET" }, { timeoutMs: 5_000, allowHttpError: true })
-        } catch (error) {
-          serverLog = appendLog(serverLog, `\ncommand registry probe ${prefix || "/"} failed: ${String(error)}\n`)
-          await new Promise((resolve) => setTimeout(resolve, 250))
-          continue
-        }
-        if (candidate.ok) {
+      while (Date.now() < deadline) {
+        let response
+        try { response = await request(`${prefix}/command`, { method: "GET" }, 5_000) } catch {}
+        if (response?.ok) {
           apiPrefix = prefix
-          registryResponse = candidate
           break
         }
-        if (candidate.status === 503) {
-          await new Promise((resolve) => setTimeout(resolve, 250))
-          continue
+        if (response && ![404, 503].includes(response.status)) {
+          throw new Error(`command registry probe failed with HTTP ${response.status}: ${response.text}\n${await diagnostics()}`)
         }
-        if (candidate.status === 404) break
-        throw new Error(`command registry probe failed with HTTP ${candidate.status}: ${candidate.text}\n${await diagnostics()}`)
+        if (response?.status === 404) break
+        await new Promise((resolve) => setTimeout(resolve, 250))
       }
       if (apiPrefix !== null) break
     }
-    assert.notEqual(apiPrefix, null, `OpenCode 2 exposed neither /api/command nor /command after readiness wait\n${await diagnostics()}`)
-
-    commandNames = collectCommandNames(registryResponse.body)
-    assert.ok(commandNames.has("loop"), `OpenCode 2 did not register the project loop command: ${registryResponse.text}\n${await diagnostics()}`)
+    assert.notEqual(apiPrefix, null, `OpenCode 2 command API never became ready\n${await diagnostics()}`)
 
     await waitFor(async () => {
       try { return Boolean(JSON.parse(await readFile(marker, "utf8"))?.activated) } catch { return false }
-    }, "real V2 adapter activation on the explicit serve process", diagnostics, 30_000)
+    }, "experimental V2 plugin activation", diagnostics, 30_000)
 
-    const createBody = {
-      title: "OpenCode 2 Loop canary",
-      model: { providerID: "canary", id: "canary" },
-    }
+    await waitFor(async () => {
+      const response = await request(`${apiPrefix}/command`, { method: "GET" }, 5_000)
+      if (!response.ok) return false
+      latestCommands = commandNames(response.body)
+      return EXPECTED_COMMANDS.every((name) => latestCommands.has(name))
+    }, "plugin-registered Loop commands to enter the real V2 registry", diagnostics, 30_000)
+
     const createdResponse = await request(`${apiPrefix}/session`, {
       method: "POST",
-      body: JSON.stringify(createBody),
-    }, { timeoutMs: 30_000 })
-    const created = createdResponse.body?.data ?? createdResponse.body
-    const sessionID = String(created?.id ?? "")
+      body: JSON.stringify({ title: "OpenCode 2 Loop canary" }),
+    })
+    if (!createdResponse.ok) throw new Error(`session create failed: HTTP ${createdResponse.status} ${createdResponse.text}\n${await diagnostics()}`)
+    const session = createdResponse.body?.data ?? createdResponse.body
+    sessionID = String(session?.id ?? "")
     assert.ok(sessionID, `OpenCode 2 did not create a session: ${createdResponse.text}\n${await diagnostics()}`)
 
-    commandResult = { sessionID, pending: true }
-    const commandBody = {
-      command: "loop",
-      arguments: `0s --max-runs ${EXPECTED_TURNS} ${LOOP_OBJECTIVE}`,
-    }
     const commandPromise = request(`${apiPrefix}/session/${encodeURIComponent(sessionID)}/command`, {
       method: "POST",
-      body: JSON.stringify(commandBody),
-    }, { timeoutMs: 120_000 })
-      .then((response) => {
-        commandResult = { sessionID, response: response.body }
-        return response
-      })
-      .catch((error) => {
-        commandResult = { sessionID, error }
-        return null
-      })
+      body: JSON.stringify({ command: "loop", arguments: `0s --max-runs ${EXPECTED_TURNS} ${LOOP_OBJECTIVE}` }),
+    }, 120_000).catch((error) => {
+      commandError = error
+      return null
+    })
 
-    const stateFile = path.join(workspace, ".opencode", "opencode-loop", `${sessionID}.json`)
     await waitFor(() => provider.stats.loopRequests >= EXPECTED_TURNS, `${EXPECTED_TURNS} autonomous OpenCode 2 Loop turns`, diagnostics, 90_000)
     await new Promise((resolve) => setTimeout(resolve, 1_000))
-    assert.equal(provider.stats.loopRequests, EXPECTED_TURNS, `V2 Loop must stop at --max-runs ${EXPECTED_TURNS}\n${await diagnostics()}`)
+    assert.equal(provider.stats.loopRequests, EXPECTED_TURNS, `V2 Loop exceeded --max-runs ${EXPECTED_TURNS}\n${await diagnostics()}`)
 
+    const stateFile = path.join(workspace, ".opencode", "opencode-loop", `${sessionID}.json`)
     const persisted = JSON.parse(await readFile(stateFile, "utf8"))
     const loop = persisted.jobs?.find((job) => job.name === "default")
     assert.ok(loop, `persisted V2 Loop job was missing\n${await diagnostics()}`)
     assert.equal(loop.runCount, EXPECTED_TURNS)
     assert.equal(loop.enabled, false)
 
-    const finalCommand = await commandPromise
-    if (commandResult?.error) throw commandResult.error
-    assert.ok(finalCommand?.ok, `OpenCode 2 command request did not complete successfully\n${await diagnostics()}`)
+    const commandResponse = await commandPromise
+    if (commandError) throw commandError
+    assert.ok(commandResponse?.ok, `Loop command request failed: ${commandResponse?.status} ${commandResponse?.text}\n${await diagnostics()}`)
     assert.equal(server.exitCode, null, `OpenCode 2 server exited during canary\n${await diagnostics()}`)
 
     console.log(JSON.stringify({
       ok: true,
-      opencode2: true,
       apiPrefix,
       sessionID,
-      registeredCommands: [...commandNames],
+      registeredCommands: [...latestCommands],
       loopRequests: provider.stats.loopRequests,
       chatRequests: provider.stats.chatRequests,
       runCount: loop.runCount,
