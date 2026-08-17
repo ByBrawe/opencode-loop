@@ -5,12 +5,14 @@ on:
     paths:
       - "src/source/opencode2/**"
       - "scripts/fixtures/opencode2-real-adapter-probe.js"
+      - "scripts/opencode2-loop-canary.mjs"
       - ".github/workflows/opencode2-real-adapter.yml"
   push:
     branches: [main]
     paths:
       - "src/source/opencode2/**"
       - "scripts/fixtures/opencode2-real-adapter-probe.js"
+      - "scripts/opencode2-loop-canary.mjs"
       - ".github/workflows/opencode2-real-adapter.yml"
 
 permissions:
@@ -19,7 +21,7 @@ permissions:
 jobs:
   adapter:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
@@ -73,3 +75,5 @@ jobs:
           cat "$RUNNER_TEMP/opencode2-real-command.json" >&2 || true
           cat "$RUNNER_TEMP/opencode2-real-plugin.json" >&2 || true
           exit 1
+      - name: Run real two-turn V2 Loop canary
+        run: node scripts/opencode2-loop-canary.mjs
