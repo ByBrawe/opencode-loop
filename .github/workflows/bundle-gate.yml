@@ -44,10 +44,9 @@ jobs:
       - name: Build a single-file stable plugin from source
         run: npm run build:plugin
 
-      - name: Verify generated entry syntax and tests
+      - name: Verify generated entry syntax and import
         run: |
           node --check src/index.js
-          npm test
           bun -e "await import('./src/index.js')"
 
       - name: Install current OpenCode CLI
@@ -56,8 +55,14 @@ jobs:
       - name: Show OpenCode version
         run: npx --no-install opencode --version
 
-      - name: Verify real-host Loop and QUEUED Goal steering against generated bundle
+      - name: Verify real-host Loop and QUEUED Goal steering against clean generated bundle
         run: npm run canary:host
         env:
           OPENCODE_PRINT_LOGS: "1"
           OPENCODE_LOG_LEVEL: DEBUG
+
+      - name: Restore locked test dependencies
+        run: npm ci
+
+      - name: Run generated-bundle regression suite
+        run: npm test
