@@ -20,6 +20,15 @@ export default {
         .sort()
         .map((key) => [key, typeof ctx.session[key]]),
     )
+    const eventMethods = Object.fromEntries(
+      Object.keys(ctx?.event || {})
+        .sort()
+        .map((key) => [key, typeof ctx.event[key]]),
+    )
+    const eventSubscribeLength = typeof ctx?.event?.subscribe === "function" ? ctx.event.subscribe.length : null
+    const eventSubscribeSource = typeof ctx?.event?.subscribe === "function"
+      ? String(ctx.event.subscribe).slice(0, 500)
+      : null
 
     let commandFieldProbe = { matched: false, error: "session command probe did not run" }
     if (typeof ctx?.session?.create === "function" && typeof ctx?.session?.command === "function") {
@@ -55,6 +64,9 @@ export default {
       activated: true,
       commandTransform: typeof ctx?.command?.transform === "function",
       eventSubscribe: typeof ctx?.event?.subscribe === "function",
+      eventSubscribeLength,
+      eventSubscribeSource,
+      eventMethods,
       sessionPrompt: typeof ctx?.session?.prompt === "function",
       sessionCommand: typeof ctx?.session?.command === "function",
       sessionShell: typeof ctx?.session?.shell === "function",
