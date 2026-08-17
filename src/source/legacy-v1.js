@@ -25,6 +25,7 @@ const { snapshotPaths } = workspaceRuntime
 const goalPolicy = createGoalExecutionPolicy({ runShellCommand, dangerousShell, toast, appendLoopLog, now })
 
 let schedulerRuntime
+let goalSteeringRuntime
 const schedulerBridge = {
   rememberSession: (...args) => schedulerRuntime.rememberSession(...args),
   scheduleDueWork: (...args) => schedulerRuntime.scheduleDueWork(...args),
@@ -42,12 +43,17 @@ const executorRuntime = createLoopExecutor({
 const {
   clearActiveRun,
   finalizeActiveRun,
-  maybeRunDueJobs,
+  maybeRunDueJobs: runDueJobs,
   sessionIsIdle,
   updateSessionStatusFromEvent,
   noteLoopCompactionStarted,
   noteLoopCompactionCompleted,
 } = executorRuntime
+
+async function maybeRunDueJobs(directory, client, sessionID, runOptions) {
+  if (goalSteeringRuntime?.shouldSuppressIdle(sessionID)) return
+  return await runDueJobs(directory, client, sessionID, runOptions)
+}
 
 schedulerRuntime = createSchedulerRuntime({
   sessionIsIdle,
@@ -59,7 +65,7 @@ schedulerRuntime = createSchedulerRuntime({
 })
 const { rememberSession, scheduleIdleWork, scheduleDueWork, stopWatchdog, cancelDueWork } = schedulerRuntime
 
-const goalSteeringRuntime = createGoalSteeringRuntime({
+goalSteeringRuntime = createGoalSteeringRuntime({
   getActiveRun: executorRuntime.getActiveRun,
   clearActiveRun,
   isLoopOwnedUserMessage: loopOwnedUserMessageGuardActive,
