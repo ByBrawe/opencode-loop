@@ -1,8 +1,10 @@
 import { inspectOpenCode2Context } from "./capabilities.js"
+import { OPENCODE_LOOP_V2_COMMANDS, registerOpenCode2LoopCommands } from "./commands.js"
 import { createOpenCode2PromptRuntime } from "./prompt-runtime.js"
 import { createOpenCode2RuntimeAdapter } from "./runtime-adapter.js"
 
 export const OPENCODE_LOOP_V2_PLUGIN_ID = "bybrawe.opencode-loop.v2.experimental"
+export { OPENCODE_LOOP_V2_COMMANDS }
 
 export const OpenCodeLoopV2ExperimentalPlugin = {
   id: OPENCODE_LOOP_V2_PLUGIN_ID,
@@ -12,7 +14,7 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
       throw new Error("OpenCode 2 command.transform capability is unavailable")
     }
 
-    const commandRegistration = await ctx.command.transform(() => {})
+    const commandRegistration = await ctx.command.transform(registerOpenCode2LoopCommands)
     if (!capabilities.eventSubscribe || !capabilities.sessionPrompt) {
       await commandRegistration?.dispose?.()
       return undefined

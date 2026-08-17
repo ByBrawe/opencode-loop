@@ -18,7 +18,7 @@ export const OPENCODE_LOOP_V2_RUNTIME_REQUIREMENTS = Object.freeze([
   "runtime.adapter",
 ])
 
-export const OPENCODE_LOOP_V2_COMMAND_SOURCE = "file-definitions"
+export const OPENCODE_LOOP_V2_COMMAND_SOURCE = "plugin-transform"
 
 export function inspectOpenCode2Context(ctx) {
   const command = ctx?.command

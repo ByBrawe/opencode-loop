@@ -1,5 +1,6 @@
 import { normalizeOpenCodeEvent } from "../runtime/events.js"
 import { createSessionRuntimeManager } from "../runtime/session-manager.js"
+import { normalizeOpenCode2NativeEvent } from "./events.js"
 
 function cleanupRegistration(registration) {
   if (typeof registration === "function") return registration
@@ -41,6 +42,7 @@ export function createOpenCode2EventBridge({
   let disposed = false
   let managerDisposed = false
   let queue = Promise.resolve()
+  const sessionDirectories = new Map()
 
   function report(error) {
     try { onError(error) } catch {}
@@ -61,20 +63,35 @@ export function createOpenCode2EventBridge({
     return Boolean(current)
   }
 
+  function normalize(raw) {
+    const current = normalizeOpenCode2NativeEvent(raw) || normalizeOpenCodeEvent(raw)
+    if (!current) return undefined
+    const sessionID = current.sessionID
+    const rememberedDirectory = sessionID ? sessionDirectories.get(sessionID) : undefined
+    const eventDirectory = current.directory || rememberedDirectory || directory
+    const event = eventDirectory === current.directory
+      ? current
+      : Object.freeze({ ...current, directory: eventDirectory })
+    if (sessionID && event.directory) sessionDirectories.set(sessionID, event.directory)
+    return event
+  }
+
   async function process(raw) {
     if (stopped) return undefined
-    const event = normalizeOpenCodeEvent(raw)
+    const event = normalize(raw)
     if (!event || !sameDirectory(directory, event.directory)) return undefined
 
     const runtime = event.sessionID ? runtimeManager.observeExternal(event.sessionID) : undefined
     await onEvent(event, runtime)
 
     if (event.kind === "session" && event.action === "deleted") {
+      sessionDirectories.delete(event.sessionID)
       runtimeManager.remove(event.sessionID, { expectedRuntime: runtime, reason: "session-deleted" })
     }
 
     if (event.kind === "server" && event.action === "disposed") {
       stopped = true
+      sessionDirectories.clear()
       disposeManager("server-disposed")
     }
 
@@ -141,6 +158,7 @@ export function createOpenCode2EventBridge({
     const cleanup = cleanupRegistration(registration)
     registration = undefined
     if (cleanup) await cleanup()
+    sessionDirectories.clear()
     disposeManager(reason)
     return true
   }

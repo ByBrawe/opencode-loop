@@ -8,6 +8,7 @@ on:
       - "scripts/v2-event-bridge-test.mjs"
       - "scripts/v2-event-stream-contract-test.mjs"
       - "scripts/v2-host-contract-test.mjs"
+      - "scripts/v2-runtime-adapter-test.mjs"
       - "scripts/v2-plugin-sentinel-test.mjs"
       - "scripts/v2-prompt-runtime-test.mjs"
       - "scripts/v2-prompt-interval-test.mjs"
@@ -22,6 +23,7 @@ on:
       - "scripts/v2-event-bridge-test.mjs"
       - "scripts/v2-event-stream-contract-test.mjs"
       - "scripts/v2-host-contract-test.mjs"
+      - "scripts/v2-runtime-adapter-test.mjs"
       - "scripts/v2-plugin-sentinel-test.mjs"
       - "scripts/v2-prompt-runtime-test.mjs"
       - "scripts/v2-prompt-interval-test.mjs"
@@ -49,6 +51,8 @@ jobs:
           node-version: "24"
           cache: npm
       - run: npm ci
+      - run: node --check src/source/opencode2/commands.js
+      - run: node --check src/source/opencode2/events.js
       - run: node --check src/source/opencode2/event-bridge.js
       - run: node --check src/source/opencode2/host-contract.js
       - run: node --check src/source/opencode2/runtime-adapter.js
@@ -57,6 +61,7 @@ jobs:
       - run: node --check scripts/v2-event-bridge-test.mjs
       - run: node --check scripts/v2-event-stream-contract-test.mjs
       - run: node --check scripts/v2-host-contract-test.mjs
+      - run: node --check scripts/v2-runtime-adapter-test.mjs
       - run: node --check scripts/v2-prompt-runtime-test.mjs
       - run: node --check scripts/v2-prompt-interval-test.mjs
       - run: node --check scripts/v2-command-runtime-test.mjs
@@ -64,6 +69,7 @@ jobs:
       - run: node scripts/v2-event-bridge-test.mjs
       - run: node scripts/v2-event-stream-contract-test.mjs
       - run: node scripts/v2-host-contract-test.mjs
+      - run: node scripts/v2-runtime-adapter-test.mjs
       - run: node scripts/v2-prompt-runtime-test.mjs
       - run: node scripts/v2-prompt-interval-test.mjs
       - run: node scripts/v2-command-runtime-test.mjs

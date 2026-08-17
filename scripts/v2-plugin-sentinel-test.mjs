@@ -1,5 +1,8 @@
 import assert from "node:assert/strict"
-import plugin, { OPENCODE_LOOP_V2_PLUGIN_ID } from "../src/source/opencode2/experimental.js"
+import plugin, {
+  OPENCODE_LOOP_V2_COMMANDS,
+  OPENCODE_LOOP_V2_PLUGIN_ID,
+} from "../src/source/opencode2/experimental.js"
 import {
   OPENCODE_LOOP_V2_COMMAND_SOURCE,
   OPENCODE_LOOP_V2_HOST_REQUIREMENTS,
@@ -13,10 +16,18 @@ import {
 assert.equal(plugin.id, OPENCODE_LOOP_V2_PLUGIN_ID)
 assert.equal(plugin.id, "bybrawe.opencode-loop.v2.experimental")
 assert.equal(typeof plugin.setup, "function")
-assert.equal(OPENCODE_LOOP_V2_COMMAND_SOURCE, "file-definitions")
+assert.equal(OPENCODE_LOOP_V2_COMMAND_SOURCE, "plugin-transform")
 assert.equal(OPENCODE_LOOP_V2_RUNTIME_IMPLEMENTED, false)
 assert.deepEqual(OPENCODE_LOOP_V2_HOST_REQUIREMENTS, ["event.subscribe", "session.prompt"])
 assert.deepEqual(OPENCODE_LOOP_V2_RUNTIME_REQUIREMENTS, ["event.subscribe", "session.prompt", "runtime.adapter"])
+assert.deepEqual(Object.keys(OPENCODE_LOOP_V2_COMMANDS), [
+  "loop",
+  "loop-pause",
+  "loop-resume",
+  "loop-stop",
+  "loop-remove",
+  "loop-clear",
+])
 
 let transforms = 0
 let registered
@@ -33,13 +44,35 @@ assert.equal(setupResult, undefined)
 assert.equal(transforms, 1)
 assert.equal(typeof registered, "function")
 
+const commands = new Map()
 const currentDraft = {
-  list: () => [],
-  get: () => undefined,
-  update: () => {},
-  remove: () => {},
+  list: () => [...commands.values()],
+  get: (name) => commands.get(name),
+  update: (name, update) => {
+    const command = commands.get(name) ?? { name, template: "" }
+    update(command)
+    command.name = name
+    commands.set(name, command)
+  },
+  remove: (name) => commands.delete(name),
 }
 await registered(currentDraft)
+
+assert.deepEqual([...commands.keys()], Object.keys(OPENCODE_LOOP_V2_COMMANDS))
+for (const [name, definition] of Object.entries(OPENCODE_LOOP_V2_COMMANDS)) {
+  const command = commands.get(name)
+  assert.equal(command?.name, name)
+  assert.equal(command?.template, definition.template)
+  assert.equal(command?.description, definition.description)
+}
+
+let missingDraftUpdateFailed = false
+try {
+  await registered({})
+} catch (error) {
+  missingDraftUpdateFailed = /command draft\.update capability is unavailable/.test(String(error))
+}
+assert.equal(missingDraftUpdateFailed, true)
 
 assert.deepEqual(inspectOpenCode2Context(currentContext), {
   commandTransform: true,
@@ -64,7 +97,7 @@ assert.deepEqual(currentStatus.blockers, ["event.subscribe", "session.prompt", "
 assert.equal(currentStatus.hostReady, false)
 assert.equal(currentStatus.implementationReady, false)
 assert.equal(currentStatus.ready, false)
-assert.equal(currentStatus.commandSource, "file-definitions")
+assert.equal(currentStatus.commandSource, "plugin-transform")
 
 const futureContext = {
   command: { transform: async () => {} },
@@ -83,6 +116,7 @@ assert.deepEqual(futureStatus.blockers, ["runtime.adapter"])
 assert.equal(futureStatus.hostReady, true)
 assert.equal(futureStatus.implementationReady, false)
 assert.equal(futureStatus.ready, false)
+assert.equal(futureStatus.commandSource, "plugin-transform")
 
 let missingCapabilityFailed = false
 try {

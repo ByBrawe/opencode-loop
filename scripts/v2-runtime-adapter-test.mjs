@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
-import OpenCodeLoopV2ExperimentalPlugin from "../src/source/opencode2/experimental.js"
+import OpenCodeLoopV2ExperimentalPlugin, { OPENCODE_LOOP_V2_COMMANDS } from "../src/source/opencode2/experimental.js"
 import { createOpenCode2RuntimeAdapter } from "../src/source/opencode2/runtime-adapter.js"
 
 function controllableStream() {
@@ -50,6 +50,73 @@ async function waitFor(predicate, description, timeoutMs = 2_000) {
   throw new Error(`timed out waiting for ${description}`)
 }
 
+function runtimeContext(events, prompts) {
+  return {
+    command: { transform: async () => ({ dispose: async () => {} }) },
+    event: { subscribe: () => events.stream },
+    session: {
+      prompt: async (input) => {
+        prompts.push(structuredClone(input))
+        return { accepted: true }
+      },
+    },
+  }
+}
+
+async function verifyTwoTurnLoop({ directory, sessionID, events, prompts, native }) {
+  const stateFile = path.join(directory, ".opencode", "opencode-loop", `${sessionID}.json`)
+  const readState = async () => JSON.parse(await readFile(stateFile, "utf8"))
+
+  if (native) {
+    events.push({
+      id: "evt_inbox",
+      type: "session.inbox.enqueued",
+      location: { directory },
+      data: {
+        sessionID,
+        item: {
+          type: "user",
+          payload: {
+            text: `${OPENCODE_LOOP_V2_COMMANDS.loop.template}\n\n0s --max-runs 2 continue the native wiring test`,
+          },
+        },
+      },
+    })
+  } else {
+    events.push({
+      directory,
+      payload: {
+        type: "command.executed",
+        properties: { sessionID, name: "loop", arguments: "0s --max-runs 2 continue the legacy wiring test" },
+      },
+    })
+  }
+
+  await waitFor(async () => {
+    try { return (await readState()).jobs?.length === 1 } catch { return false }
+  }, `${native ? "native" : "legacy"} V2 loop state creation`)
+
+  const idle = () => native
+    ? events.push({ id: `evt_idle_${prompts.length}`, type: "session.execution.succeeded", data: { sessionID } })
+    : events.push({ directory, payload: { type: "session.idle", properties: { sessionID } } })
+
+  idle()
+  await waitFor(() => prompts.length === 1, `first ${native ? "native" : "legacy"} V2 prompt dispatch`)
+  assert.equal(prompts[0].sessionID, sessionID)
+  assert.ok(prompts[0].text.includes("AUTONOMOUS OPENCODE LOOP ITERATION"))
+  assert.ok(prompts[0].text.includes(native ? "continue the native wiring test" : "continue the legacy wiring test"))
+
+  idle()
+  await waitFor(() => prompts.length === 2, `second ${native ? "native" : "legacy"} V2 prompt dispatch`)
+  const state = await readState()
+  assert.equal(state.jobs[0].runCount, 2)
+  assert.equal(state.jobs[0].enabled, false)
+
+  idle()
+  await new Promise((resolve) => setTimeout(resolve, 25))
+  assert.equal(prompts.length, 2, "max-runs must stop a third V2 prompt")
+}
+
 {
   const events = controllableStream()
   const prompts = []
@@ -91,6 +158,36 @@ async function waitFor(predicate, description, timeoutMs = 2_000) {
 }
 
 {
+  let callback
+  let subscriptions = 0
+  let disposals = 0
+  const ctx = {
+    event: {
+      subscribe(handler) {
+        subscriptions += 1
+        callback = handler
+        return { dispose: async () => { disposals += 1 } }
+      },
+    },
+    session: { prompt: async () => ({ accepted: true }) },
+  }
+
+  const adapter = createOpenCode2RuntimeAdapter(ctx)
+  assert.equal(await adapter.start(), true)
+  assert.equal(subscriptions, 1)
+  assert.equal(typeof callback, "function", "callback-style V2 subscribe must receive the bridge callback")
+
+  await callback({
+    directory: "/callback-project",
+    payload: { type: "session.created", properties: { info: { id: "ses_v2_callback", directory: "/callback-project" } } },
+  })
+  assert.ok(adapter.runtimeManager.peek("ses_v2_callback"), "callback-style V2 event subscription must reach the runtime manager")
+
+  assert.equal(await adapter.dispose("callback-test-complete"), true)
+  assert.equal(disposals, 1, "callback-style V2 subscription must dispose its registration")
+}
+
+{
   const events = controllableStream()
   let commandTransforms = 0
   let commandDisposals = 0
@@ -121,51 +218,48 @@ async function waitFor(predicate, description, timeoutMs = 2_000) {
 }
 
 {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "opencode-loop-v2-wiring-"))
-  const sessionID = "ses_v2_wiring"
+  const directory = await mkdtemp(path.join(os.tmpdir(), "opencode-loop-v2-wiring-legacy-"))
+  const sessionID = "ses_v2_wiring_legacy"
   const events = controllableStream()
   const prompts = []
-  const ctx = {
-    command: { transform: async () => ({ dispose: async () => {} }) },
-    event: { subscribe: () => events.stream },
-    session: {
-      prompt: async (input) => {
-        prompts.push(structuredClone(input))
-        return { accepted: true }
-      },
-    },
+  const cleanup = await OpenCodeLoopV2ExperimentalPlugin.setup(runtimeContext(events, prompts))
+  try {
+    await verifyTwoTurnLoop({ directory, sessionID, events, prompts, native: false })
+  } finally {
+    await cleanup?.()
+    await rm(directory, { recursive: true, force: true })
   }
+}
 
-  const stateFile = path.join(directory, ".opencode", "opencode-loop", `${sessionID}.json`)
-  const readState = async () => JSON.parse(await readFile(stateFile, "utf8"))
-  const cleanup = await OpenCodeLoopV2ExperimentalPlugin.setup(ctx)
+{
+  const directory = await mkdtemp(path.join(os.tmpdir(), "opencode-loop-v2-wiring-native-"))
+  const sessionID = "ses_v2_wiring_native"
+  const events = controllableStream()
+  const prompts = []
+  const cleanup = await OpenCodeLoopV2ExperimentalPlugin.setup(runtimeContext(events, prompts))
+  try {
+    await verifyTwoTurnLoop({ directory, sessionID, events, prompts, native: true })
+  } finally {
+    await cleanup?.()
+    await rm(directory, { recursive: true, force: true })
+  }
+}
+
+{
+  const directory = await mkdtemp(path.join(os.tmpdir(), "opencode-loop-v2-inbox-ignore-"))
+  const sessionID = "ses_v2_inbox_ignore"
+  const events = controllableStream()
+  const prompts = []
+  const cleanup = await OpenCodeLoopV2ExperimentalPlugin.setup(runtimeContext(events, prompts))
   try {
     events.push({
-      directory,
-      payload: {
-        type: "command.executed",
-        properties: { sessionID, name: "loop", arguments: "0s --max-runs 2 continue the wiring test" },
-      },
+      type: "session.inbox.enqueued",
+      location: { directory },
+      data: { sessionID, item: { type: "user", payload: { text: "ordinary user message" } } },
     })
-    await waitFor(async () => {
-      try { return (await readState()).jobs?.length === 1 } catch { return false }
-    }, "V2 loop state creation")
-
-    events.push({ directory, payload: { type: "session.idle", properties: { sessionID } } })
-    await waitFor(() => prompts.length === 1, "first V2 prompt dispatch")
-    assert.equal(prompts[0].sessionID, sessionID)
-    assert.ok(prompts[0].text.includes("AUTONOMOUS OPENCODE LOOP ITERATION"))
-    assert.ok(prompts[0].text.includes("continue the wiring test"))
-
-    events.push({ directory, payload: { type: "session.idle", properties: { sessionID } } })
-    await waitFor(() => prompts.length === 2, "second V2 prompt dispatch")
-    const state = await readState()
-    assert.equal(state.jobs[0].runCount, 2)
-    assert.equal(state.jobs[0].enabled, false)
-
-    events.push({ directory, payload: { type: "session.idle", properties: { sessionID } } })
     await new Promise((resolve) => setTimeout(resolve, 25))
-    assert.equal(prompts.length, 2, "max-runs must stop a third V2 prompt")
+    await assert.rejects(readFile(path.join(directory, ".opencode", "opencode-loop", `${sessionID}.json`), "utf8"), /ENOENT/)
+    assert.equal(prompts.length, 0, "ordinary V2 inbox messages must not be interpreted as Loop commands")
   } finally {
     await cleanup?.()
     await rm(directory, { recursive: true, force: true })
