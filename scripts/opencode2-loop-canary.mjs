@@ -259,6 +259,10 @@ async function main() {
     },
   }, null, 2)}\n`)
   execFileSync("git", ["init", "--quiet", workspace], { stdio: "ignore" })
+  execFileSync("git", ["-C", workspace, "config", "user.email", "opencode-loop-ci@example.invalid"], { stdio: "ignore" })
+execFileSync("git", ["-C", workspace, "config", "user.name", "OpenCode Loop CI"], { stdio: "ignore" })
+execFileSync("git", ["-C", workspace, "add", "."], { stdio: "ignore" })
+execFileSync("git", ["-C", workspace, "commit", "--quiet", "-m", "init"], { stdio: "ignore" })
 
   const env = {
     ...process.env,
