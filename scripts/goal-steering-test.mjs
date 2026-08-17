@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { createGoalSteeringRuntime } from "../src/source/runtime/goal-steering.js"
+import { guardLoopOwnedUserMessage, loopOwnedUserMessageGuardActive, clearLoopOwnedUserMessageGuard } from "../src/source/opencode/messages.js"
 
 function goal(id = "goal-1") {
   return {
@@ -49,17 +50,22 @@ function assistantEvent(sessionID = "ses-steering", parentID = "user-steering") 
     now: () => 1000,
   })
 
-  const result = await runtime.handleEvent("/workspace", client, userEvent())
+  const result = await runtime.handleUserMessage("/workspace", client, { sessionID: "ses-steering", messageID: "user-steering" })
   assert.equal(result.handled, true)
   assert.equal(result.preempted, true)
-  assert.equal(aborts, 1, "queued user steering should abort only the active Goal turn")
+  assert.equal(aborts, 1, "chat.message steering should abort only the active Goal turn before the new prompt dispatches")
   assert.equal(clears, 1, "the aborted Goal run must no longer be finalized as a completed loop run")
   assert.equal(runtime.shouldSuppressIdle("ses-steering"), true, "abort-generated idle must be suppressed while steering is queued")
   assert.deepEqual(state.jobs[0], originalGoal, "normal steering must not pause or rewrite the Goal contract")
   assert.equal(logs.at(-1)?.type, "goal-user-steering")
   assert.equal(logs.at(-1)?.detail?.preempted, true)
 
-  runtime.handleEvent("/workspace", client, assistantEvent())
+  const duplicate = await runtime.handleEvent("/workspace", client, userEvent())
+  assert.equal(duplicate.duplicate, true, "message.updated must not abort a steering message already handled by chat.message")
+  assert.equal(aborts, 1)
+  assert.equal(clears, 1)
+
+  await runtime.handleEvent("/workspace", client, assistantEvent())
   assert.equal(runtime.shouldSuppressIdle("ses-steering"), false, "matching steering assistant turn should release idle suppression")
 }
 
@@ -75,7 +81,7 @@ function assistantEvent(sessionID = "ses-steering", parentID = "user-steering") 
     isLoopOwnedUserMessage: () => false,
     now: () => 2000,
   })
-  const result = await runtime.handleEvent("/workspace", { session: { abort: async () => {} } }, userEvent("ses-idle", "user-idle"))
+  const result = await runtime.handleUserMessage("/workspace", { session: { abort: async () => {} } }, { sessionID: "ses-idle", messageID: "user-idle" })
   assert.equal(result.handled, true)
   assert.equal(result.preempted, false)
   assert.equal(aborts, 0, "an idle Goal should let the foreground user turn start normally")
@@ -95,7 +101,7 @@ function assistantEvent(sessionID = "ses-steering", parentID = "user-steering") 
     isLoopOwnedUserMessage: () => false,
     now: () => 3000,
   })
-  const result = await runtime.handleEvent("/workspace", { session: { abort: async () => {} } }, userEvent("ses-ordinary", "user-ordinary"))
+  const result = await runtime.handleUserMessage("/workspace", { session: { abort: async () => {} } }, { sessionID: "ses-ordinary", messageID: "user-ordinary" })
   assert.equal(result.handled, true)
   assert.equal(result.preempted, false)
   assert.equal(aborts, 0)
@@ -110,7 +116,7 @@ function assistantEvent(sessionID = "ses-steering", parentID = "user-steering") 
     appendLoopLog: async () => {},
     isLoopOwnedUserMessage: () => true,
   })
-  const result = await runtime.handleEvent("/workspace", { session: {} }, userEvent("ses-owned", "owned-message"))
+  const result = await runtime.handleUserMessage("/workspace", { session: {} }, { sessionID: "ses-owned", messageID: "owned-message" })
   assert.equal(result.loopOwned, true)
   assert.equal(reads, 0, "Loop-owned synthetic user messages must not be mistaken for human steering")
 }
@@ -128,10 +134,20 @@ function assistantEvent(sessionID = "ses-steering", parentID = "user-steering") 
     now: () => clock,
     suppressionMs: 100,
   })
-  await runtime.handleEvent("/workspace", { session: { abort: async () => {} } }, userEvent("ses-expire", "user-expire"))
+  await runtime.handleUserMessage("/workspace", { session: { abort: async () => {} } }, { sessionID: "ses-expire", messageID: "user-expire" })
   assert.equal(runtime.shouldSuppressIdle("ses-expire"), true)
   clock += 101
   assert.equal(runtime.shouldSuppressIdle("ses-expire"), false, "lost steering must not suppress autonomous continuation forever")
+}
+
+{
+  const sessionID = "ses-loop-owned-two-stage"
+  guardLoopOwnedUserMessage(sessionID)
+  assert.equal(loopOwnedUserMessageGuardActive(sessionID), true, "chat.message should recognize a pending synthetic prompt before OpenCode assigns its ID")
+  assert.equal(loopOwnedUserMessageGuardActive(sessionID, "synthetic-user-1"), true, "message.updated should consume the pending guard and bind the real synthetic message ID")
+  assert.equal(loopOwnedUserMessageGuardActive(sessionID, "synthetic-user-1"), true, "the bound synthetic message ID should remain Loop-owned for later duplicate events")
+  clearLoopOwnedUserMessageGuard(sessionID)
+  assert.equal(loopOwnedUserMessageGuardActive(sessionID, "synthetic-user-1"), false)
 }
 
 console.log("Goal steering runtime tests passed")

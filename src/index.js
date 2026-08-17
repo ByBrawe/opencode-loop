@@ -909,9 +909,10 @@ function loopOwnedUserMessageGuardActive(sessionID, messageID) {
   if (id && entry.messageIDs.has(id))
     return true;
   if ((entry.pending || 0) > 0 && (entry.until || 0) >= now()) {
+    if (!id)
+      return true;
     entry.pending -= 1;
-    if (id)
-      entry.messageIDs.set(id, now() + LOOP_OWNED_USER_MESSAGE_RETENTION_MS);
+    entry.messageIDs.set(id, now() + LOOP_OWNED_USER_MESSAGE_RETENTION_MS);
     loopOwnedUserMessageGuards.set(sessionID, entry);
     return true;
   }
@@ -3228,6 +3229,7 @@ exit=` + preflight.code + `
 
 // src/source/runtime/goal-steering.js
 var DEFAULT_STEERING_SUPPRESSION_MS = 5 * 60000;
+var DEFAULT_SEEN_USER_MESSAGE_MS = 10 * 60000;
 function requireFunction8(value, label) {
   if (typeof value !== "function")
     throw new TypeError(`createGoalSteeringRuntime requires ${label}`);
@@ -3280,7 +3282,9 @@ function createGoalSteeringRuntime(options = {}) {
   const fireSdk2 = typeof options.fireSdk === "function" ? options.fireSdk : fireSdk;
   const now2 = typeof options.now === "function" ? options.now : now;
   const suppressionMs = Number.isFinite(Number(options.suppressionMs)) && Number(options.suppressionMs) > 0 ? Number(options.suppressionMs) : DEFAULT_STEERING_SUPPRESSION_MS;
+  const seenUserMessageMs = Number.isFinite(Number(options.seenUserMessageMs)) && Number(options.seenUserMessageMs) > 0 ? Number(options.seenUserMessageMs) : DEFAULT_SEEN_USER_MESSAGE_MS;
   const pendingSteering = new Map;
+  const seenUserMessages = new Map;
   function pendingForSession(sessionID) {
     const entry = pendingSteering.get(sessionID);
     if (!entry)
@@ -3293,6 +3297,33 @@ function createGoalSteeringRuntime(options = {}) {
   }
   function shouldSuppressIdle(sessionID) {
     return Boolean(pendingForSession(sessionID));
+  }
+  function seenKey(sessionID, messageID) {
+    return messageID ? `${sessionID}\x00${messageID}` : "";
+  }
+  function alreadyHandled(sessionID, messageID) {
+    const key = seenKey(sessionID, messageID);
+    if (!key)
+      return false;
+    const expiresAt = seenUserMessages.get(key);
+    if (!expiresAt)
+      return false;
+    if (expiresAt <= now2()) {
+      seenUserMessages.delete(key);
+      return false;
+    }
+    return true;
+  }
+  function rememberHandled(sessionID, messageID) {
+    const key = seenKey(sessionID, messageID);
+    if (!key)
+      return;
+    const current = now2();
+    seenUserMessages.set(key, current + seenUserMessageMs);
+    for (const [candidate, expiresAt] of seenUserMessages.entries()) {
+      if (expiresAt <= current)
+        seenUserMessages.delete(candidate);
+    }
   }
   function observeAssistantMessage(event) {
     const assistant = assistantMessageFromEvent(event);
@@ -3308,52 +3339,67 @@ function createGoalSteeringRuntime(options = {}) {
     pendingSteering.delete(assistant.sessionID);
     return true;
   }
-  async function handleEvent(directory, client, event) {
-    observeAssistantMessage(event);
-    const user = userMessageFromEvent(event);
-    if (!user)
+  async function handleUserMessage(directory, client, user) {
+    const sessionID = typeof user?.sessionID === "string" ? user.sessionID : "";
+    const messageID = typeof user?.messageID === "string" ? user.messageID : "";
+    if (!sessionID)
       return;
-    if (isLoopOwnedUserMessage(user.sessionID, user.messageID)) {
-      return { handled: false, loopOwned: true, ...user };
+    if (alreadyHandled(sessionID, messageID))
+      return { handled: false, duplicate: true, sessionID, messageID };
+    rememberHandled(sessionID, messageID);
+    if (isLoopOwnedUserMessage(sessionID, messageID)) {
+      return { handled: false, loopOwned: true, sessionID, messageID };
     }
-    const state = await readState2(directory, user.sessionID);
+    const state = await readState2(directory, sessionID);
     const goals = activeGoalJobs(state);
     if (!goals.length)
-      return { handled: false, ...user };
-    const active = getActiveRun(user.sessionID);
+      return { handled: false, sessionID, messageID };
+    const active = getActiveRun(sessionID);
     const activeGoalIDs = new Set(goals.map((goal) => goal.id));
     const canPreempt = active && activeGoalIDs.has(active.jobId) && isGoalJob(active.job) && typeof client?.session?.abort === "function";
     let preempted = false;
     let abortError = "";
     if (canPreempt) {
-      pendingSteering.set(user.sessionID, {
-        messageID: user.messageID,
+      pendingSteering.set(sessionID, {
+        messageID,
         goalID: active.jobId,
         armedAt: now2(),
         expiresAt: now2() + suppressionMs
       });
       try {
-        await fireSdk2(client, "session.abort", client.session.abort.bind(client.session), { path: { id: user.sessionID }, body: {} }, { path: { sessionID: user.sessionID }, body: {} }, { sessionID: user.sessionID });
-        clearActiveRun(user.sessionID);
+        await fireSdk2(client, "session.abort", client.session.abort.bind(client.session), { path: { id: sessionID }, body: {} }, { path: { sessionID }, body: {} }, { sessionID });
+        clearActiveRun(sessionID);
         preempted = true;
       } catch (error) {
-        pendingSteering.delete(user.sessionID);
+        pendingSteering.delete(sessionID);
         abortError = error instanceof Error ? error.message : String(error);
       }
     }
     await appendLoopLog2(directory, "goal-user-steering", {
-      sessionID: user.sessionID,
-      messageID: user.messageID,
+      sessionID,
+      messageID,
       goals: goals.length,
       preempted,
       ...abortError ? { abortError } : {}
     });
-    return { handled: true, preempted, ...user };
+    return { handled: true, preempted, sessionID, messageID };
+  }
+  async function handleEvent(directory, client, event) {
+    observeAssistantMessage(event);
+    const user = userMessageFromEvent(event);
+    if (!user)
+      return;
+    return await handleUserMessage(directory, client, user);
   }
   function clearSession(sessionID) {
     pendingSteering.delete(sessionID);
+    const prefix = `${sessionID}\x00`;
+    for (const key of seenUserMessages.keys())
+      if (key.startsWith(prefix))
+        seenUserMessages.delete(key);
   }
   return {
+    handleUserMessage,
     handleEvent,
     observeAssistantMessage,
     shouldSuppressIdle,
@@ -3369,6 +3415,7 @@ var workspaceRuntime = createJobWorkspaceRuntime({ toast });
 var { snapshotPaths } = workspaceRuntime;
 var goalPolicy = createGoalExecutionPolicy({ runShellCommand, dangerousShell, toast, appendLoopLog, now });
 var schedulerRuntime;
+var goalSteeringRuntime;
 var schedulerBridge = {
   rememberSession: (...args) => schedulerRuntime.rememberSession(...args),
   scheduleDueWork: (...args) => schedulerRuntime.scheduleDueWork(...args)
@@ -3386,12 +3433,17 @@ var executorRuntime = createLoopExecutor({
 var {
   clearActiveRun,
   finalizeActiveRun,
-  maybeRunDueJobs,
+  maybeRunDueJobs: runDueJobs,
   sessionIsIdle,
   updateSessionStatusFromEvent,
   noteLoopCompactionStarted,
   noteLoopCompactionCompleted
 } = executorRuntime;
+async function maybeRunDueJobs(directory, client, sessionID, runOptions) {
+  if (goalSteeringRuntime?.shouldSuppressIdle(sessionID))
+    return;
+  return await runDueJobs(directory, client, sessionID, runOptions);
+}
 schedulerRuntime = createSchedulerRuntime({
   sessionIsIdle,
   finalizeActiveRun,
@@ -3401,7 +3453,7 @@ schedulerRuntime = createSchedulerRuntime({
   errorMessage: sdkErrorMessage
 });
 var { rememberSession, scheduleIdleWork, scheduleDueWork, stopWatchdog, cancelDueWork } = schedulerRuntime;
-var goalSteeringRuntime = createGoalSteeringRuntime({
+goalSteeringRuntime = createGoalSteeringRuntime({
   getActiveRun: executorRuntime.getActiveRun,
   clearActiveRun,
   isLoopOwnedUserMessage: loopOwnedUserMessageGuardActive,
@@ -3551,6 +3603,14 @@ var OpenCodeLoopPlugin = async ({ client, directory }) => {
     tool: goalTools(directory),
     "command.execute.before": async (input, output) => {
       await handleCommand(directory, client, input, undefined, undefined, output);
+    },
+    "chat.message": async (input) => {
+      const steering = await goalSteeringRuntime.handleUserMessage(directory, client, {
+        sessionID: input?.sessionID,
+        messageID: input?.messageID
+      });
+      if (steering?.handled && steering.sessionID)
+        rememberSession(directory, client, steering.sessionID);
     },
     "tool.execute.before": async (input) => {
       markToolCallActive(input);

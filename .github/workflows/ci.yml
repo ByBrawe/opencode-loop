@@ -160,8 +160,8 @@ jobs:
       - name: Show OpenCode version
         run: npx --no-install opencode --version
 
-      - name: Run real-host Loop canary
-        run: node scripts/host-loop-canary.mjs
+      - name: Run real-host Loop and queued Goal steering canaries
+        run: npm run canary:host
         env:
           OPENCODE_PRINT_LOGS: "1"
           OPENCODE_LOG_LEVEL: DEBUG
