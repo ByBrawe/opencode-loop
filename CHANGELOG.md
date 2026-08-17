@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.28
+
+- Preserve experimental `/loop-goal` across ordinary queued user steering: preempt only the in-flight Goal turn, run the foreground user turn first, keep the Goal active/unpaused, then resume autonomous Goal work. Gate heartbeat, due, and watchdog dispatch while steering is pending, reject stale Goal lifecycle mutations, and cover the behavior with real OpenCode host canaries on Ubuntu and Windows for both source and freshly rebuilt bundles.
+- Complete the planned V1 modularization by extracting command routing/handlers, Loop registration, session activity/status, scheduling, Goal runtime/policy/steering, job workspace, compaction, and executor responsibilities into focused testable modules while keeping `legacy-v1.js` as the composition root.
+- Expand the experimental OpenCode 2 runtime with idle-safe interval prompt loops, Loop control commands, ordinary slash-command transport, lifecycle cleanup, and real-host adapter/activation contracts. Correct V2 command transport to use the host `command` field rather than the optional message `id` field. Stable package compatibility remains `@opencode-ai/plugin >=1.4.0 <2`; this release does not claim stable OpenCode 2 parity.
+- Harden the Goal steering host canary cold bootstrap from 45 seconds to a bounded 90 seconds and include the OpenCode server log when bootstrap still fails, without weakening the steering assertions.
+
 ## 0.5.27
 
 - Rebase stale Loop state snapshots against the latest persisted job state before writing, preventing scheduler bookkeeping from erasing unrelated user pause/resume or other state changes.
