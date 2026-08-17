@@ -53,3 +53,5 @@ jobs:
           git add scripts/opencode2-loop-canary.mjs
           git commit -m "test: wait for V2 command registration"
           git push origin HEAD:test/v2-real-loop-canary-current
+
+# trigger existing workflow after initial definition
