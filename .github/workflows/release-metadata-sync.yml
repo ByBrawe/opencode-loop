@@ -1,0 +1,68 @@
+name: One-shot 0.5.28 metadata sync
+
+on:
+  push:
+    branches:
+      - release/0.5.28-metadata
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: release/0.5.28-metadata
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Sync release metadata
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+
+          const version = '0.5.28'
+
+          const readmePath = 'README.md'
+          let readme = fs.readFileSync(readmePath, 'utf8')
+          readme = readme.replace(/Current release: `0\.5\.27`/, `Current release: \`${version}\``)
+          fs.writeFileSync(readmePath, readme)
+
+          const lockPath = 'package-lock.json'
+          const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'))
+          lock.version = version
+          if (lock.packages?.['']) lock.packages[''].version = version
+          fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\n')
+
+          const changelogPath = 'CHANGELOG.md'
+          let changelog = fs.readFileSync(changelogPath, 'utf8')
+          if (!changelog.includes(`## ${version}`)) {
+            const notes = `## ${version}\n\n` +
+              `- Preserve experimental \`/loop-goal\` across ordinary queued user steering: preempt only the in-flight Goal turn, run the foreground user turn first, keep the Goal active/unpaused, then resume autonomous Goal work. Gate heartbeat, due, and watchdog dispatch while steering is pending, reject stale Goal lifecycle mutations, and cover the behavior with real OpenCode host canaries on Ubuntu and Windows for both source and freshly rebuilt bundles.\n` +
+              `- Complete the planned V1 modularization by extracting command routing/handlers, Loop registration, session activity/status, scheduling, Goal runtime/policy/steering, job workspace, compaction, and executor responsibilities into focused testable modules while keeping \`legacy-v1.js\` as the composition root.\n` +
+              `- Expand the experimental OpenCode 2 runtime with idle-safe interval prompt loops, Loop control commands, ordinary slash-command transport, lifecycle cleanup, and real-host adapter/activation contracts. Correct V2 command transport to use the host \`command\` field rather than the optional message \`id\` field. Stable package compatibility remains \`@opencode-ai/plugin >=1.4.0 <2\`; this release does not claim stable OpenCode 2 parity.\n` +
+              `- Harden the Goal steering host canary cold bootstrap from 45 seconds to a bounded 90 seconds and include the OpenCode server log when bootstrap still fails, without weakening the steering assertions.\n\n`
+            changelog = changelog.replace('# Changelog\n\n', `# Changelog\n\n${notes}`)
+            fs.writeFileSync(changelogPath, changelog)
+          }
+          NODE
+
+          git rm .github/workflows/release-metadata-sync.yml
+          git add README.md CHANGELOG.md package-lock.json
+
+          if git diff --cached --quiet; then
+            echo 'No metadata changes required.'
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'chore: finalize 0.5.28 release metadata'
+          git push origin HEAD:release/0.5.28-metadata
