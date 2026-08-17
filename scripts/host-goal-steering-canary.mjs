@@ -12,6 +12,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const isWindows = process.platform === "win32"
 const GOAL_OBJECTIVE = "queued steering real host goal objective"
 const USER_STEERING = "queued user steering must run before goal continuation"
+const SESSION_BOOTSTRAP_TIMEOUT_MS = 90_000
 
 function resolveOpenCodeBinary() {
   if (!isWindows) return path.join(repoRoot, "node_modules", ".bin", "opencode")
@@ -331,7 +332,13 @@ async function main() {
       try { return JSON.parse(text) } catch { return text }
     }
 
-    const sessionsPayload = await api("/session", { method: "GET", signal: AbortSignal.timeout(45_000) })
+    let sessionsPayload
+    try {
+      sessionsPayload = await api("/session", { method: "GET", signal: AbortSignal.timeout(SESSION_BOOTSTRAP_TIMEOUT_MS) })
+    } catch (error) {
+      const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+      throw new Error(`OpenCode session bootstrap failed after ${SESSION_BOOTSTRAP_TIMEOUT_MS}ms: ${message}\nserver log:\n${serverLog}`)
+    }
     assert.ok(Array.isArray(sessionsPayload?.data ?? sessionsPayload), "GET /session bootstrap did not return an array")
     const createdPayload = await api("/session", { method: "POST", body: JSON.stringify({ title: "opencode-loop Goal steering canary" }) })
     const session = createdPayload?.data ?? createdPayload
