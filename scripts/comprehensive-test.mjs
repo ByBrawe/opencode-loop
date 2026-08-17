@@ -612,7 +612,7 @@ async function testLoopOwnedGoalMessageUpdatesDoNotSelfInterrupt() {
       properties: { info: { id: "msg_real_user", sessionID: h.sessionID, role: "user" } },
     } })
     state = await h.readState()
-    assert.equal(state.jobs[0].paused, true, "a distinct real user message must still pause an active goal")
+    assert.equal(state.jobs[0].paused, false, "a distinct real user message must steer an active goal without pausing it")
   } finally {
     Date.now = originalDateNow
     await h.cleanup()
