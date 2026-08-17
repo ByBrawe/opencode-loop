@@ -1,47 +1,10 @@
 import { inspectOpenCode2Context } from "./capabilities.js"
+import { OPENCODE_LOOP_V2_COMMANDS, registerOpenCode2LoopCommands } from "./commands.js"
 import { createOpenCode2PromptRuntime } from "./prompt-runtime.js"
 import { createOpenCode2RuntimeAdapter } from "./runtime-adapter.js"
 
 export const OPENCODE_LOOP_V2_PLUGIN_ID = "bybrawe.opencode-loop.v2.experimental"
-
-export const OPENCODE_LOOP_V2_COMMANDS = Object.freeze({
-  loop: Object.freeze({
-    description: "Start an OpenCode auto-continue loop. Usage: /loop 5m <task>",
-    template: "OpenCode Loop local command handled. Reply exactly: OK.",
-  }),
-  "loop-pause": Object.freeze({
-    description: "Pause OpenCode Loop jobs.",
-    template: "OpenCode Loop pause command handled locally. Reply exactly: OK.",
-  }),
-  "loop-resume": Object.freeze({
-    description: "Resume OpenCode Loop jobs.",
-    template: "OpenCode Loop resume command handled locally. Reply exactly: OK.",
-  }),
-  "loop-stop": Object.freeze({
-    description: "Stop OpenCode Loop jobs.",
-    template: "OpenCode Loop stop command handled locally. Reply exactly: OK.",
-  }),
-  "loop-remove": Object.freeze({
-    description: "Remove OpenCode Loop jobs.",
-    template: "OpenCode Loop remove command handled locally. Reply exactly: OK.",
-  }),
-  "loop-clear": Object.freeze({
-    description: "Clear all OpenCode Loop jobs.",
-    template: "OpenCode Loop clear command handled locally. Reply exactly: OK.",
-  }),
-})
-
-function registerCommands(draft) {
-  if (!draft || typeof draft.update !== "function") {
-    throw new Error("OpenCode 2 command draft.update capability is unavailable")
-  }
-  for (const [name, definition] of Object.entries(OPENCODE_LOOP_V2_COMMANDS)) {
-    draft.update(name, (command) => {
-      command.template = definition.template
-      command.description = definition.description
-    })
-  }
-}
+export { OPENCODE_LOOP_V2_COMMANDS }
 
 export const OpenCodeLoopV2ExperimentalPlugin = {
   id: OPENCODE_LOOP_V2_PLUGIN_ID,
@@ -51,7 +14,7 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
       throw new Error("OpenCode 2 command.transform capability is unavailable")
     }
 
-    const commandRegistration = await ctx.command.transform(registerCommands)
+    const commandRegistration = await ctx.command.transform(registerOpenCode2LoopCommands)
     if (!capabilities.eventSubscribe || !capabilities.sessionPrompt) {
       await commandRegistration?.dispose?.()
       return undefined
