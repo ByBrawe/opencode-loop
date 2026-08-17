@@ -24,7 +24,7 @@ const host = createOpenCode2HostContract({
 })
 
 await assert.rejects(host.prompt({ sessionID: "ses_a", text: "early" }), /not started/)
-await assert.rejects(host.command({ sessionID: "ses_a", id: "review" }), /not started/)
+await assert.rejects(host.command({ sessionID: "ses_a", command: "review" }), /not started/)
 assert.equal(await host.start(), true)
 assert.equal(await host.start(), false)
 assert.equal(typeof listener, "function")
@@ -43,25 +43,27 @@ assert.equal(prompts[0].sessionID, "ses_a")
 assert.equal(prompts[0].text, "continue")
 assert.equal(prompts[0].runtime, runtime)
 
-const commandResult = await host.command({ sessionID: "ses_a", id: "/review", arguments: "--quick" })
+const commandResult = await host.command({ sessionID: "ses_a", command: "/review", arguments: "--quick" })
 assert.deepEqual(commandResult, { accepted: true, kind: "command" })
 assert.equal(commands.length, 1)
 assert.equal(commands[0].sessionID, "ses_a")
-assert.equal(commands[0].id, "review")
+assert.equal(commands[0].command, "review")
+assert.equal(Object.prototype.hasOwnProperty.call(commands[0], "id"), false)
 assert.equal(commands[0].arguments, "--quick")
 assert.equal(commands[0].runtime, runtime)
 
 await assert.rejects(host.prompt({ sessionID: "", text: "missing" }), /session ID/)
 await assert.rejects(host.prompt({ sessionID: "ses_a", text: "   " }), /requires text/)
-await assert.rejects(host.command({ sessionID: "", id: "review" }), /session ID/)
-await assert.rejects(host.command({ sessionID: "ses_a", id: "" }), /requires an ID/)
+await assert.rejects(host.command({ sessionID: "", command: "review" }), /session ID/)
+await assert.rejects(host.command({ sessionID: "ses_a", command: "" }), /requires a command name/)
+await assert.rejects(host.command({ sessionID: "ses_a", id: "review" }), /requires a command name/)
 
 const promptOnly = createOpenCode2HostContract({
   subscribe: async (_callback) => ({ unsubscribe: async () => {} }),
   sendPrompt: async () => ({ accepted: true }),
 })
 await promptOnly.start()
-await assert.rejects(promptOnly.command({ sessionID: "ses_a", id: "review" }), /session\.command capability is unavailable/)
+await assert.rejects(promptOnly.command({ sessionID: "ses_a", command: "review" }), /session\.command capability is unavailable/)
 await promptOnly.dispose()
 
 await listener({
@@ -72,7 +74,7 @@ assert.equal(host.isHostDisposed(), true)
 assert.deepEqual(host.runtimeManager.entries(), [])
 assert.ok(events.some(({ event }) => event.kind === "server" && event.action === "disposed"))
 await assert.rejects(host.prompt({ sessionID: "ses_a", text: "late" }), /unavailable/)
-await assert.rejects(host.command({ sessionID: "ses_a", id: "review" }), /unavailable/)
+await assert.rejects(host.command({ sessionID: "ses_a", command: "review" }), /unavailable/)
 
 assert.equal(await host.dispose(), true)
 assert.equal(await host.dispose(), false)

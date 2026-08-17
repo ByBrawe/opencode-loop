@@ -158,10 +158,10 @@ export function createOpenCode2PromptRuntime(options = {}) {
   async function dispatchJob(scope, job) {
     const kind = actionKind(job?.action, job)
     if (kind === "command") {
-      const [id, argumentsText] = commandParts(job.action)
+      const [command, argumentsText] = commandParts(job.action)
       const request = {
         sessionID: scope.sessionID,
-        id,
+        command,
         arguments: argumentsText || undefined,
       }
       await options.command(request)

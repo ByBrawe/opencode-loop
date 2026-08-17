@@ -54,12 +54,10 @@ async function waitFor(predicate, description, timeoutMs = 2_000) {
   }
   const adapter = createOpenCode2RuntimeAdapter(ctx)
   await adapter.start()
-  const result = await adapter.command({ sessionID: "ses_adapter", id: "/review", arguments: "--quick" })
+  const result = await adapter.command({ sessionID: "ses_adapter", command: "/review", arguments: "--quick" })
   assert.deepEqual(result, { accepted: true })
-  assert.equal(commands.length, 1)
-  assert.equal(commands[0].sessionID, "ses_adapter")
-  assert.equal(commands[0].id, "review")
-  assert.equal(commands[0].arguments, "--quick")
+  assert.deepEqual(commands, [{ sessionID: "ses_adapter", command: "review", arguments: "--quick" }])
+  assert.equal(Object.prototype.hasOwnProperty.call(commands[0], "id"), false)
   await adapter.dispose()
 }
 
@@ -70,7 +68,7 @@ async function waitFor(predicate, description, timeoutMs = 2_000) {
     session: { prompt: async () => ({ accepted: true }) },
   })
   await adapter.start()
-  await assert.rejects(adapter.command({ sessionID: "ses_adapter", id: "review" }), /session\.command capability is unavailable/)
+  await assert.rejects(adapter.command({ sessionID: "ses_adapter", command: "review" }), /session\.command capability is unavailable/)
   await adapter.dispose()
 }
 
@@ -105,7 +103,7 @@ async function waitFor(predicate, description, timeoutMs = 2_000) {
     })
     events.push({ directory, payload: { type: "session.idle", properties: { sessionID } } })
     await waitFor(() => commands.length === 1, "V2 command dispatch")
-    assert.deepEqual(commands[0], { sessionID, id: "review", arguments: "--quick" })
+    assert.deepEqual(commands[0], { sessionID, command: "review", arguments: "--quick" })
   } finally {
     await cleanup?.()
     await rm(directory, { recursive: true, force: true })
