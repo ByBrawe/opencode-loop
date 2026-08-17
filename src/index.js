@@ -3369,6 +3369,7 @@ var workspaceRuntime = createJobWorkspaceRuntime({ toast });
 var { snapshotPaths } = workspaceRuntime;
 var goalPolicy = createGoalExecutionPolicy({ runShellCommand, dangerousShell, toast, appendLoopLog, now });
 var schedulerRuntime;
+var goalSteeringRuntime;
 var schedulerBridge = {
   rememberSession: (...args) => schedulerRuntime.rememberSession(...args),
   scheduleDueWork: (...args) => schedulerRuntime.scheduleDueWork(...args)
@@ -3386,12 +3387,17 @@ var executorRuntime = createLoopExecutor({
 var {
   clearActiveRun,
   finalizeActiveRun,
-  maybeRunDueJobs,
+  maybeRunDueJobs: runDueJobs,
   sessionIsIdle,
   updateSessionStatusFromEvent,
   noteLoopCompactionStarted,
   noteLoopCompactionCompleted
 } = executorRuntime;
+async function maybeRunDueJobs(directory, client, sessionID, runOptions) {
+  if (goalSteeringRuntime?.shouldSuppressIdle(sessionID))
+    return;
+  return await runDueJobs(directory, client, sessionID, runOptions);
+}
 schedulerRuntime = createSchedulerRuntime({
   sessionIsIdle,
   finalizeActiveRun,
@@ -3401,7 +3407,7 @@ schedulerRuntime = createSchedulerRuntime({
   errorMessage: sdkErrorMessage
 });
 var { rememberSession, scheduleIdleWork, scheduleDueWork, stopWatchdog, cancelDueWork } = schedulerRuntime;
-var goalSteeringRuntime = createGoalSteeringRuntime({
+goalSteeringRuntime = createGoalSteeringRuntime({
   getActiveRun: executorRuntime.getActiveRun,
   clearActiveRun,
   isLoopOwnedUserMessage: loopOwnedUserMessageGuardActive,
