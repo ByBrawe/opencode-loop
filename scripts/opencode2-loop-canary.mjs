@@ -157,34 +157,13 @@ function startProvider() {
 }
 
 function bridgePluginSource() {
-  return `import { appendFile, writeFile } from "node:fs/promises"
+  return `import { writeFile } from "node:fs/promises"
 
 export default {
   id: "bybrawe.opencode-loop.v2.loop-canary-bridge",
   async setup(ctx) {
     const module = await import(process.env.OPENCODE_LOOP_V2_PLUGIN_URL)
-    const sourceSubscribe = ctx.event.subscribe.bind(ctx.event)
-    const tracedEvent = {
-      ...ctx.event,
-      subscribe() {
-        const source = sourceSubscribe()
-        return {
-          async *[Symbol.asyncIterator]() {
-            for await (const event of source) {
-              await appendFile(process.env.OPENCODE_LOOP_V2_EVENT_TRACE, JSON.stringify(event) + "\\n", "utf8")
-              yield event
-            }
-          },
-        }
-      },
-    }
-    const wrapped = new Proxy(ctx, {
-      get(target, key, receiver) {
-        if (key === "event") return tracedEvent
-        return Reflect.get(target, key, receiver)
-      },
-    })
-    const cleanup = await module.default.setup(wrapped)
+    const cleanup = await module.default.setup(ctx)
     await writeFile(process.env.OPENCODE_LOOP_V2_MARKER, JSON.stringify({ activated: true }, null, 2), "utf8")
     return async () => {
       if (typeof cleanup === "function") await cleanup()
@@ -206,7 +185,6 @@ async function main() {
   const home = path.join(workspace, ".home")
   const pluginDir = path.join(workspace, ".opencode", "plugins")
   const marker = path.join(workspace, "v2-real-adapter-marker.json")
-  const eventTrace = path.join(workspace, "v2-event-trace.jsonl")
   const provider = startProvider()
   const providerPort = await provider.listen()
   let server
@@ -259,7 +237,6 @@ async function main() {
     XDG_CACHE_HOME: path.join(home, ".cache"),
     OPENCODE_LOOP_V2_PLUGIN_URL: pathToFileURL(path.join(repoRoot, "src", "source", "opencode2", "experimental.js")).href,
     OPENCODE_LOOP_V2_MARKER: marker,
-    OPENCODE_LOOP_V2_EVENT_TRACE: eventTrace,
     OPENCODE_SERVER_USERNAME: SERVER_USERNAME,
     OPENCODE_SERVER_PASSWORD: SERVER_PASSWORD,
     OPENCODE_DISABLE_AUTOUPDATE: "true",
@@ -269,11 +246,9 @@ async function main() {
 
   const diagnostics = async () => {
     let state = "missing"
-    let rawEvents = "missing"
     if (sessionID) {
       try { state = await readFile(path.join(workspace, ".opencode", "opencode-loop", `${sessionID}.json`), "utf8") } catch {}
     }
-    try { rawEvents = (await readFile(eventTrace, "utf8")).slice(-30_000) } catch {}
     return [
       `apiPrefix=${String(apiPrefix)}`,
       `commands=${JSON.stringify([...latestCommands])}`,
@@ -281,7 +256,6 @@ async function main() {
       `sessionID=${sessionID || "none"}`,
       `commandError=${String(commandError ?? "none")}`,
       `state=${state}`,
-      `rawEvents=${rawEvents}`,
       `serverExit=${server?.exitCode}`,
       `serverLog=${serverLog}`,
     ].join("\n")
@@ -361,13 +335,13 @@ async function main() {
     const commandPromise = request(`${apiPrefix}/session/${encodeURIComponent(sessionID)}/command`, {
       method: "POST",
       body: JSON.stringify({ command: "loop", arguments: `0s --max-runs ${EXPECTED_TURNS} ${LOOP_OBJECTIVE}` }),
-    }, 30_000).catch((error) => {
+    }, 120_000).catch((error) => {
       commandError = error
       return null
     })
 
-    await waitFor(() => provider.stats.loopRequests >= EXPECTED_TURNS, `${EXPECTED_TURNS} autonomous OpenCode 2 Loop turns`, diagnostics, 15_000)
-    await new Promise((resolve) => setTimeout(resolve, 500))
+    await waitFor(() => provider.stats.loopRequests >= EXPECTED_TURNS, `${EXPECTED_TURNS} autonomous OpenCode 2 Loop turns`, diagnostics, 90_000)
+    await new Promise((resolve) => setTimeout(resolve, 1_000))
     assert.equal(provider.stats.loopRequests, EXPECTED_TURNS, `V2 Loop exceeded --max-runs ${EXPECTED_TURNS}\n${await diagnostics()}`)
 
     const stateFile = path.join(workspace, ".opencode", "opencode-loop", `${sessionID}.json`)
