@@ -72,8 +72,12 @@ function contentText(content) {
   return content.map((part) => typeof part?.text === "string" ? part.text : typeof part?.content === "string" ? part.content : "").join("\n")
 }
 
-function allMessageText(body) {
-  return (body.messages ?? []).map((message) => contentText(message?.content)).join("\n")
+function lastUserText(body) {
+  const messages = Array.isArray(body.messages) ? body.messages : []
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") return contentText(messages[index]?.content)
+  }
+  return ""
 }
 
 function streamHeaders(res) {
@@ -130,8 +134,8 @@ function startProvider() {
     for await (const chunk of req) raw += String(chunk)
     const body = raw ? JSON.parse(raw) : {}
     stats.chatRequests += 1
-    const text = allMessageText(body)
-    if (text.includes("AUTONOMOUS OPENCODE LOOP ITERATION") && text.includes(LOOP_OBJECTIVE)) {
+    const text = lastUserText(body)
+    if (text.includes("AUTONOMOUS OPENCODE LOOP ITERATION")) {
       stats.loopRequests += 1
       streamText(res, `V2_LOOP_TURN_${stats.loopRequests}`, stats.chatRequests)
       return
