@@ -110,3 +110,5 @@ jobs:
           git add scripts/opencode2-loop-canary.mjs
           git commit -m "test: cover real V2 Loop control lifecycle"
           git push origin HEAD:test/v2-real-control-lifecycle
+
+# trigger existing one-shot workflow
