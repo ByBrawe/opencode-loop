@@ -28,7 +28,7 @@ export function createOpenCode2RuntimeAdapter(ctx, options = {}) {
 
   const host = createOpenCode2HostContract({
     directory: options.directory,
-    subscribe: () => ctx.event.subscribe(),
+    subscribe: ctx.event.subscribe.bind(ctx.event),
     sendPrompt: (request) => ctx.session.prompt(promptRequest(request)),
     sendCommand: capabilities.sessionCommand ? (request) => ctx.session.command(commandRequest(request)) : undefined,
     onEvent: options.onEvent,
