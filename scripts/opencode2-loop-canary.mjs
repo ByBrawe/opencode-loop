@@ -72,8 +72,12 @@ function contentText(content) {
   return content.map((part) => typeof part?.text === "string" ? part.text : typeof part?.content === "string" ? part.content : "").join("\n")
 }
 
-function allMessageText(body) {
-  return (body.messages ?? []).map((message) => contentText(message?.content)).join("\n")
+function lastUserText(body) {
+  const messages = Array.isArray(body.messages) ? body.messages : []
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") return contentText(messages[index]?.content)
+  }
+  return ""
 }
 
 function streamHeaders(res) {
@@ -130,8 +134,8 @@ function startProvider() {
     for await (const chunk of req) raw += String(chunk)
     const body = raw ? JSON.parse(raw) : {}
     stats.chatRequests += 1
-    const text = allMessageText(body)
-    if (text.includes("AUTONOMOUS OPENCODE LOOP ITERATION") && text.includes(LOOP_OBJECTIVE)) {
+    const text = lastUserText(body)
+    if (text.includes("AUTONOMOUS OPENCODE LOOP ITERATION")) {
       stats.loopRequests += 1
       streamText(res, `V2_LOOP_TURN_${stats.loopRequests}`, stats.chatRequests)
       return
@@ -356,6 +360,55 @@ async function main() {
     assert.ok(commandResponse?.ok, `Loop command request failed: ${commandResponse?.status} ${commandResponse?.text}\n${await diagnostics()}`)
     assert.equal(server.exitCode, null, `OpenCode 2 server exited during canary\n${await diagnostics()}`)
 
+    const readPersisted = async () => {
+      try { return JSON.parse(await readFile(stateFile, "utf8")) }
+      catch (error) {
+        if (error?.code === "ENOENT") return { jobs: [] }
+        throw error
+      }
+    }
+    const jobNamed = async (name) => (await readPersisted()).jobs?.find((job) => String(job?.name || "default") === name)
+    const sendControl = async (command, argumentsText = "") => {
+      const response = await request(`${apiPrefix}/session/${encodeURIComponent(sessionID)}/command`, {
+        method: "POST",
+        body: JSON.stringify({ command, arguments: argumentsText }),
+      }, 120_000)
+      if (!response.ok) throw new Error(`${command} failed: HTTP ${response.status} ${response.text}\n${await diagnostics()}`)
+      return response
+    }
+
+    await sendControl("loop-pause", "default")
+    await waitFor(async () => (await jobNamed("default"))?.paused === true, "real V2 loop-pause state mutation", diagnostics, 30_000)
+
+    await sendControl("loop-resume", "default")
+    await waitFor(async () => {
+      const job = await jobNamed("default")
+      return job?.paused === false && job?.lastRunAt === 0
+    }, "real V2 loop-resume state mutation", diagnostics, 30_000)
+
+    await sendControl("loop-stop", "default")
+    await waitFor(async () => !(await jobNamed("default")), "real V2 loop-stop removal", diagnostics, 30_000)
+
+    const beforeRemoveTurn = provider.stats.loopRequests
+    await sendControl("loop", "0s --max-runs 1 --name removable removable control lifecycle task")
+    await waitFor(() => provider.stats.loopRequests === beforeRemoveTurn + 1, "real V2 removable Loop turn", diagnostics, 60_000)
+    await waitFor(async () => {
+      const job = await jobNamed("removable")
+      return job?.runCount === 1 && job?.enabled === false
+    }, "real V2 removable Loop persisted completion", diagnostics, 30_000)
+    await sendControl("loop-remove", "removable")
+    await waitFor(async () => !(await jobNamed("removable")), "real V2 loop-remove removal", diagnostics, 30_000)
+
+    const beforeClearTurn = provider.stats.loopRequests
+    await sendControl("loop", "0s --max-runs 1 --name clearable clearable control lifecycle task")
+    await waitFor(() => provider.stats.loopRequests === beforeClearTurn + 1, "real V2 clearable Loop turn", diagnostics, 60_000)
+    await waitFor(async () => Boolean(await jobNamed("clearable")), "real V2 clearable Loop persistence", diagnostics, 30_000)
+    await sendControl("loop-clear")
+    await waitFor(async () => (await readPersisted()).jobs?.length === 0, "real V2 loop-clear state removal", diagnostics, 30_000)
+
+    assert.equal(provider.stats.loopRequests, EXPECTED_TURNS + 2, `control lifecycle should add exactly two autonomous Loop turns\n${await diagnostics()}`)
+    assert.equal(server.exitCode, null, `OpenCode 2 server exited during control lifecycle canary\n${await diagnostics()}`)
+
     console.log(JSON.stringify({
       ok: true,
       apiPrefix,
@@ -363,8 +416,9 @@ async function main() {
       registeredCommands: [...latestCommands],
       loopRequests: provider.stats.loopRequests,
       chatRequests: provider.stats.chatRequests,
-      runCount: loop.runCount,
-      enabled: loop.enabled,
+      initialRunCount: loop.runCount,
+      initialEnabled: loop.enabled,
+      controlsVerified: ["loop-pause", "loop-resume", "loop-stop", "loop-remove", "loop-clear"],
     }, null, 2))
   } finally {
     await stopProcess(server)
