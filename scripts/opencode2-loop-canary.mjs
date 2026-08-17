@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { createServer } from "node:http"
 import net from "node:net"
-import { spawn } from "node:child_process"
+import { execFileSync, spawn } from "node:child_process"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -258,6 +258,7 @@ async function main() {
       },
     },
   }, null, 2)}\n`)
+  execFileSync("git", ["init", "--quiet", workspace], { stdio: "ignore" })
 
   const env = {
     ...process.env,
