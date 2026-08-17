@@ -374,110 +374,10 @@ function parseLoopArgs(raw, defaults = {}) {
   return { ok: true, job };
 }
 
-// src/source/core/jobs.js
-function presetDefaults(name) {
-  if (name === "loop-compact")
-    return { intervalMs: parseDuration("200m"), action: "/compact", kind: "compact", name: "compact", immediate: false };
-  if (name === "loop-command" || name === "loop-cmd")
-    return { intervalMs: 0, kind: "command", name: "command", immediate: false };
-  if (name === "loop-prompt")
-    return { intervalMs: 0, kind: "prompt", name: "prompt", immediate: true };
-  if (name === "loop-ask")
-    return { intervalMs: 0, kind: "prompt", name: "ask", immediate: false };
-  if (name === "loop-shell")
-    return { intervalMs: 0, kind: "shell", name: "shell", immediate: false };
-  if (name === "loop-testfix")
-    return { intervalMs: 0, name: "testfix", safe: true, askNever: true, verifyCommand: "npm test", testfixPreset: true, action: "Run the project tests. Fix failures. Re-run the tests. Test command hint: npm test" };
-  if (name === "loop-progress")
-    return { intervalMs: 0, name: "progress", safe: true, askNever: true, progressFile: "progress.md", action: "Read progress.md and continue the next unfinished TODO. Mark completed TODOs with [x]. Add useful TODOs when you discover them." };
-  if (name === "loop-safe-dev")
-    return { intervalMs: 0, name: "safe-dev", safe: true, askNever: true, noOverlap: true, checkpointOnly: true, batch: 5, progressFile: "progress.md", action: "Develop the project from progress.md. Work in small safe batches. Mark completed TODOs with [x]. Add new ideas to progress.md. Run tests/lint/build if available." };
-  return { intervalMs: 0, name: "dev", askNever: true, progressFile: "progress.md", action: "Continue developing the project from progress.md. Mark completed TODOs with [x]. Add new ideas to progress.md. Run tests/lint/build if available." };
-}
-function jobLabel(job) {
-  const title = job.name ? `${job.name}: ` : "";
-  const kind = job.kind ? ` [${job.kind}]` : "";
-  const limit = job.maxRuns > 0 ? `, max ${job.maxRuns}` : "";
-  const runtime = job.maxRuntimeMs > 0 ? `, runtime ${durationToText(job.maxRuntimeMs)}` : "";
-  const timeout = job.timeoutMs > 0 ? `, timeout ${durationToText(job.timeoutMs)}` : "";
-  const compact = job.compactEveryRuns > 0 ? `, compact every ${job.compactEveryRuns} runs` : job.compactEveryMs > 0 ? `, compact every ${durationToText(job.compactEveryMs)}` : "";
-  const verify = job.verifyCommand ? ", verify" : "";
-  const preflight = job.preflightCommand ? ", preflight" : "";
-  const failures = job.maxFailures > 0 ? `, max failures ${job.maxFailures}` : "";
-  const noProgress = isGoalJob(job) && (job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0 ? `, max no-progress ${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS}` : "";
-  const stopFile = job.stopFile ? ", stop-file" : "";
-  const watch = job.watchPaths?.length ? `, watch ${job.watchPaths.join(",")}` : "";
-  const paused = job.paused ? ", paused" : "";
-  return `${title}${durationToText(job.intervalMs)}${kind} -> ${job.action || `[prompt-file: ${job.promptFile}]`}${limit}${runtime}${timeout}${compact}${verify}${preflight}${failures}${noProgress}${stopFile}${watch}${paused}`;
-}
-function matchJob(job, target, index) {
-  const text = String(target || "").trim();
-  if (!text || text.toLowerCase() === "all")
-    return true;
-  return job.id === text || job.name === text || String(index + 1) === text;
-}
-function actionKind(action, job = {}) {
-  const text = String(action || "").trim();
-  const forced = String(job.kind || "").trim().toLowerCase();
-  if (forced === "compact")
-    return "compact";
-  if (forced === "goal")
-    return "goal";
-  if (text === "/compact" || text === "/summarize")
-    return "compact";
-  if (forced === "prompt" || forced === "ask")
-    return "prompt";
-  if (forced === "command" || forced === "cmd" || forced === "slash")
-    return "command";
-  if (forced === "shell")
-    return "shell";
-  if (text.startsWith("/"))
-    return "command";
-  if (text.startsWith("!") || text.startsWith("$"))
-    return "shell";
-  return "prompt";
-}
-function decoratePrompt(job) {
-  const additions = [];
-  if (job.progressFile)
-    additions.push(`Use ${job.progressFile} as the main progress/TODO state file. Read it before choosing the next task and update it after work.`);
-  if (job.lastVerifyFailure)
-    additions.push("Previous verify command failed. Fix this before moving on. Failure summary: " + String(job.lastVerifyFailure).slice(0, 1200));
-  if (job.askNever)
-    additions.push("Do not ask the user questions. Make reasonable assumptions and continue. Only write a short BLOCKED note if truly blocked.");
-  if (job.safe)
-    additions.push("Safety rules: do not run destructive commands such as git reset, git clean, rm -rf, del /s, rmdir /s, force push, production deploys, production migrations, terraform destroy, or deleting user data. If such an action seems needed, write a BLOCKED note instead.");
-  if (job.batch > 0)
-    additions.push(`Batch rule: in this run, work on at most ${job.batch} unfinished TODO item(s). Mark completed items with [x].`);
-  if (job.quiet)
-    additions.push("Keep replies short. Summarize only what changed, tests run, and next step.");
-  if (job.testCommand)
-    additions.push(`After making changes, run this test/check command if applicable: ${job.testCommand}. If it fails, fix the failure and try again.`);
-  if (job.checkpointOnly || job.gitCheckpoint)
-    additions.push("Keep changes incremental and easy to review because the loop will create a checkpoint after the run.");
-  if (!additions.length)
-    return job.action;
-  return `${job.action}
-
-OpenCode loop instructions:
-- ${additions.join(`
-- `)}`;
-}
-function isGoalJob(job) {
-  return String(job?.kind || "").toLowerCase() === "goal";
-}
-function goalStatusText(job) {
-  const status = job?.goalStatus || (isGoalJob(job) ? "active" : "");
-  if (!status)
-    return "";
-  if (status === "completed")
-    return "completed";
-  if (status === "blocked")
-    return "blocked";
-  if (job?.paused)
-    return "paused";
-  return status;
-}
+// src/source/core/process.js
+import { promises as fs2 } from "fs";
+import path2 from "path";
+import { spawn } from "child_process";
 
 // src/source/core/state.js
 import { promises as fs } from "fs";
@@ -697,9 +597,6 @@ async function removeState(directory, sessionID) {
 }
 
 // src/source/core/process.js
-import { promises as fs2 } from "fs";
-import path2 from "path";
-import { spawn } from "child_process";
 async function appendLoopLog(directory, line, extra = {}) {
   try {
     await ensureDir(stateDir(directory));
@@ -1121,6 +1018,111 @@ function commandArgsText(args) {
     }
   }
   return String(args);
+}
+
+// src/source/core/jobs.js
+function presetDefaults(name) {
+  if (name === "loop-compact")
+    return { intervalMs: parseDuration("200m"), action: "/compact", kind: "compact", name: "compact", immediate: false };
+  if (name === "loop-command" || name === "loop-cmd")
+    return { intervalMs: 0, kind: "command", name: "command", immediate: false };
+  if (name === "loop-prompt")
+    return { intervalMs: 0, kind: "prompt", name: "prompt", immediate: true };
+  if (name === "loop-ask")
+    return { intervalMs: 0, kind: "prompt", name: "ask", immediate: false };
+  if (name === "loop-shell")
+    return { intervalMs: 0, kind: "shell", name: "shell", immediate: false };
+  if (name === "loop-testfix")
+    return { intervalMs: 0, name: "testfix", safe: true, askNever: true, verifyCommand: "npm test", testfixPreset: true, action: "Run the project tests. Fix failures. Re-run the tests. Test command hint: npm test" };
+  if (name === "loop-progress")
+    return { intervalMs: 0, name: "progress", safe: true, askNever: true, progressFile: "progress.md", action: "Read progress.md and continue the next unfinished TODO. Mark completed TODOs with [x]. Add useful TODOs when you discover them." };
+  if (name === "loop-safe-dev")
+    return { intervalMs: 0, name: "safe-dev", safe: true, askNever: true, noOverlap: true, checkpointOnly: true, batch: 5, progressFile: "progress.md", action: "Develop the project from progress.md. Work in small safe batches. Mark completed TODOs with [x]. Add new ideas to progress.md. Run tests/lint/build if available." };
+  return { intervalMs: 0, name: "dev", askNever: true, progressFile: "progress.md", action: "Continue developing the project from progress.md. Mark completed TODOs with [x]. Add new ideas to progress.md. Run tests/lint/build if available." };
+}
+function jobLabel(job) {
+  const title = job.name ? `${job.name}: ` : "";
+  const kind = job.kind ? ` [${job.kind}]` : "";
+  const limit = job.maxRuns > 0 ? `, max ${job.maxRuns}` : "";
+  const runtime = job.maxRuntimeMs > 0 ? `, runtime ${durationToText(job.maxRuntimeMs)}` : "";
+  const timeout = job.timeoutMs > 0 ? `, timeout ${durationToText(job.timeoutMs)}` : "";
+  const compact = job.compactEveryRuns > 0 ? `, compact every ${job.compactEveryRuns} runs` : job.compactEveryMs > 0 ? `, compact every ${durationToText(job.compactEveryMs)}` : "";
+  const verify = job.verifyCommand ? ", verify" : "";
+  const preflight = job.preflightCommand ? ", preflight" : "";
+  const failures = job.maxFailures > 0 ? `, max failures ${job.maxFailures}` : "";
+  const noProgress = isGoalJob(job) && (job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0 ? `, max no-progress ${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS}` : "";
+  const stopFile = job.stopFile ? ", stop-file" : "";
+  const watch = job.watchPaths?.length ? `, watch ${job.watchPaths.join(",")}` : "";
+  const paused = job.paused ? ", paused" : "";
+  return `${title}${durationToText(job.intervalMs)}${kind} -> ${job.action || `[prompt-file: ${job.promptFile}]`}${limit}${runtime}${timeout}${compact}${verify}${preflight}${failures}${noProgress}${stopFile}${watch}${paused}`;
+}
+function matchJob(job, target, index) {
+  const text = String(target || "").trim();
+  if (!text || text.toLowerCase() === "all")
+    return true;
+  return job.id === text || job.name === text || String(index + 1) === text;
+}
+function actionKind(action, job = {}) {
+  const text = String(action || "").trim();
+  const forced = String(job.kind || "").trim().toLowerCase();
+  if (forced === "compact")
+    return "compact";
+  if (forced === "goal")
+    return "goal";
+  if (text === "/compact" || text === "/summarize")
+    return "compact";
+  if (forced === "prompt" || forced === "ask")
+    return "prompt";
+  if (forced === "command" || forced === "cmd" || forced === "slash")
+    return "command";
+  if (forced === "shell")
+    return "shell";
+  if (text.startsWith("/"))
+    return "command";
+  if (text.startsWith("!") || text.startsWith("$"))
+    return "shell";
+  return "prompt";
+}
+function decoratePrompt(job) {
+  const additions = [];
+  if (job.progressFile)
+    additions.push(`Use ${job.progressFile} as the main progress/TODO state file. Read it before choosing the next task and update it after work.`);
+  if (job.lastVerifyFailure)
+    additions.push("Previous verify command failed. Fix this before moving on. Failure summary: " + String(job.lastVerifyFailure).slice(0, 1200));
+  if (job.askNever)
+    additions.push("Do not ask the user questions. Make reasonable assumptions and continue. Only write a short BLOCKED note if truly blocked.");
+  if (job.safe)
+    additions.push("Safety rules: do not run destructive commands such as git reset, git clean, rm -rf, del /s, rmdir /s, force push, production deploys, production migrations, terraform destroy, or deleting user data. If such an action seems needed, write a BLOCKED note instead.");
+  if (job.batch > 0)
+    additions.push(`Batch rule: in this run, work on at most ${job.batch} unfinished TODO item(s). Mark completed items with [x].`);
+  if (job.quiet)
+    additions.push("Keep replies short. Summarize only what changed, tests run, and next step.");
+  if (job.testCommand)
+    additions.push(`After making changes, run this test/check command if applicable: ${job.testCommand}. If it fails, fix the failure and try again.`);
+  if (job.checkpointOnly || job.gitCheckpoint)
+    additions.push("Keep changes incremental and easy to review because the loop will create a checkpoint after the run.");
+  if (!additions.length)
+    return job.action;
+  return `${job.action}
+
+OpenCode loop instructions:
+- ${additions.join(`
+- `)}`;
+}
+function isGoalJob(job) {
+  return String(job?.kind || "").toLowerCase() === "goal";
+}
+function goalStatusText(job) {
+  const status = job?.goalStatus || (isGoalJob(job) ? "active" : "");
+  if (!status)
+    return "";
+  if (status === "completed")
+    return "completed";
+  if (status === "blocked")
+    return "blocked";
+  if (job?.paused)
+    return "paused";
+  return status;
 }
 
 // src/source/opencode/command-router.js
@@ -3224,6 +3226,143 @@ exit=` + preflight.code + `
   };
 }
 
+// src/source/runtime/goal-steering.js
+var DEFAULT_STEERING_SUPPRESSION_MS = 5 * 60000;
+function requireFunction8(value, label) {
+  if (typeof value !== "function")
+    throw new TypeError(`createGoalSteeringRuntime requires ${label}`);
+  return value;
+}
+function messageInfo(event) {
+  if (!["message.updated", "message.created"].includes(String(event?.type || "")))
+    return;
+  const props = event?.properties || {};
+  return props.info || props.message || props;
+}
+function userMessageFromEvent(event) {
+  const info = messageInfo(event);
+  if (!info || info.role !== "user")
+    return;
+  const props = event?.properties || {};
+  const sessionID = info.sessionID || props.sessionID;
+  if (typeof sessionID !== "string" || !sessionID)
+    return;
+  const messageID = typeof (info.id || props.messageID) === "string" ? info.id || props.messageID : "";
+  return { sessionID, messageID };
+}
+function assistantMessageFromEvent(event) {
+  const info = messageInfo(event);
+  if (!info || info.role !== "assistant")
+    return;
+  const props = event?.properties || {};
+  const sessionID = info.sessionID || props.sessionID;
+  if (typeof sessionID !== "string" || !sessionID)
+    return;
+  const parentID = typeof (info.parentID || props.parentID) === "string" ? info.parentID || props.parentID : "";
+  const createdAt = Number(info?.time?.created || 0);
+  return { sessionID, parentID, createdAt: Number.isFinite(createdAt) ? createdAt : 0 };
+}
+function activeGoalJobs(state) {
+  return (state?.jobs || []).filter((job) => {
+    if (!isGoalJob(job))
+      return false;
+    if (job.paused || job.enabled === false)
+      return false;
+    return !["completed", "blocked", "cleared"].includes(job.goalStatus);
+  });
+}
+function createGoalSteeringRuntime(options = {}) {
+  const getActiveRun = requireFunction8(options.getActiveRun, "getActiveRun");
+  const clearActiveRun = requireFunction8(options.clearActiveRun, "clearActiveRun");
+  const isLoopOwnedUserMessage = typeof options.isLoopOwnedUserMessage === "function" ? options.isLoopOwnedUserMessage : () => false;
+  const readState2 = typeof options.readState === "function" ? options.readState : readState;
+  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
+  const fireSdk2 = typeof options.fireSdk === "function" ? options.fireSdk : fireSdk;
+  const now2 = typeof options.now === "function" ? options.now : now;
+  const suppressionMs = Number.isFinite(Number(options.suppressionMs)) && Number(options.suppressionMs) > 0 ? Number(options.suppressionMs) : DEFAULT_STEERING_SUPPRESSION_MS;
+  const pendingSteering = new Map;
+  function pendingForSession(sessionID) {
+    const entry = pendingSteering.get(sessionID);
+    if (!entry)
+      return;
+    if (entry.expiresAt <= now2()) {
+      pendingSteering.delete(sessionID);
+      return;
+    }
+    return entry;
+  }
+  function shouldSuppressIdle(sessionID) {
+    return Boolean(pendingForSession(sessionID));
+  }
+  function observeAssistantMessage(event) {
+    const assistant = assistantMessageFromEvent(event);
+    if (!assistant)
+      return false;
+    const entry = pendingForSession(assistant.sessionID);
+    if (!entry)
+      return false;
+    const matchesMessage = entry.messageID && assistant.parentID === entry.messageID;
+    const matchesFallback = !entry.messageID && (!assistant.createdAt || assistant.createdAt >= entry.armedAt);
+    if (!matchesMessage && !matchesFallback)
+      return false;
+    pendingSteering.delete(assistant.sessionID);
+    return true;
+  }
+  async function handleEvent(directory, client, event) {
+    observeAssistantMessage(event);
+    const user = userMessageFromEvent(event);
+    if (!user)
+      return;
+    if (isLoopOwnedUserMessage(user.sessionID, user.messageID)) {
+      return { handled: false, loopOwned: true, ...user };
+    }
+    const state = await readState2(directory, user.sessionID);
+    const goals = activeGoalJobs(state);
+    if (!goals.length)
+      return { handled: false, ...user };
+    const active = getActiveRun(user.sessionID);
+    const activeGoalIDs = new Set(goals.map((goal) => goal.id));
+    const canPreempt = active && activeGoalIDs.has(active.jobId) && isGoalJob(active.job) && typeof client?.session?.abort === "function";
+    let preempted = false;
+    let abortError = "";
+    if (canPreempt) {
+      pendingSteering.set(user.sessionID, {
+        messageID: user.messageID,
+        goalID: active.jobId,
+        armedAt: now2(),
+        expiresAt: now2() + suppressionMs
+      });
+      try {
+        await fireSdk2(client, "session.abort", client.session.abort.bind(client.session), { path: { id: user.sessionID }, body: {} }, { path: { sessionID: user.sessionID }, body: {} }, { sessionID: user.sessionID });
+        clearActiveRun(user.sessionID);
+        preempted = true;
+      } catch (error) {
+        pendingSteering.delete(user.sessionID);
+        abortError = error instanceof Error ? error.message : String(error);
+      }
+    }
+    await appendLoopLog2(directory, "goal-user-steering", {
+      sessionID: user.sessionID,
+      messageID: user.messageID,
+      goals: goals.length,
+      preempted,
+      ...abortError ? { abortError } : {}
+    });
+    return { handled: true, preempted, ...user };
+  }
+  function clearSession(sessionID) {
+    pendingSteering.delete(sessionID);
+  }
+  return {
+    handleEvent,
+    observeAssistantMessage,
+    shouldSuppressIdle,
+    hasPendingSteering: shouldSuppressIdle,
+    pendingForSession,
+    clearSession
+  };
+}
+
 // src/source/legacy-v1.js
 var DEFAULT_ACTIVE_GUARD_MS2 = 45000;
 var workspaceRuntime = createJobWorkspaceRuntime({ toast });
@@ -3262,6 +3401,13 @@ schedulerRuntime = createSchedulerRuntime({
   errorMessage: sdkErrorMessage
 });
 var { rememberSession, scheduleIdleWork, scheduleDueWork, stopWatchdog, cancelDueWork } = schedulerRuntime;
+var goalSteeringRuntime = createGoalSteeringRuntime({
+  getActiveRun: executorRuntime.getActiveRun,
+  clearActiveRun,
+  isLoopOwnedUserMessage: loopOwnedUserMessageGuardActive,
+  appendLoopLog,
+  now
+});
 var { addLoop } = createLoopRegistration({
   snapshotPaths,
   scheduleDueWork,
@@ -3332,47 +3478,19 @@ function disposeRuntime(directory, client) {
   for (const sessionID of sessions) {
     executorRuntime.disposeSession(sessionID);
     schedulerRuntime.clearSessionScheduling(sessionID);
+    goalSteeringRuntime.clearSession(sessionID);
     clearLoopOwnedUserMessageGuard(sessionID);
     clearSessionActivity(sessionID);
     clearCommandLifecycle(sessionID);
   }
 }
-function userInterruptSessionFromEvent(event) {
-  if (!["message.updated", "message.created"].includes(String(event?.type || "")))
+function steeringToolRejection(sessionID) {
+  if (!goalSteeringRuntime.hasPendingSteering(sessionID))
     return;
-  const props = event?.properties || {};
-  const info = props.info || props.message || props;
-  const role = info?.role;
-  const sessionID = info?.sessionID || props.sessionID;
-  const messageID = info?.id || props.messageID;
-  if (role !== "user" || typeof sessionID !== "string")
-    return;
-  if (loopOwnedUserMessageGuardActive(sessionID, messageID))
-    return;
-  return sessionID;
-}
-async function pauseGoalsForUserInterrupt(directory, client, sessionID) {
-  const state = await readState(directory, sessionID);
-  const interruptedAt = now();
-  let count = 0;
-  state.jobs = (state.jobs || []).map((job) => {
-    if (!isGoalJob(job) || job.paused || job.enabled === false || ["completed", "blocked", "cleared"].includes(job.goalStatus))
-      return job;
-    count++;
-    return {
-      ...job,
-      paused: true,
-      lastUserInterruptAt: interruptedAt,
-      goalInterruptedReason: "Paused because the user sent a new message while the experimental goal was active."
-    };
-  });
-  if (!count)
-    return false;
-  await writeState(directory, sessionID, state);
-  await toast(client, `Paused ${count} experimental goal(s) because a new user message arrived. Resume with /loop-goal-resume.`, "warning");
-  await appendLoopLog(directory, "goal-user-interrupt", { sessionID, count });
-  await scheduleDueWork(directory, client, sessionID);
-  return true;
+  return {
+    title: "Goal steering pending",
+    output: "Goal lifecycle update deferred because queued user steering is pending. The experimental Goal remains active and unchanged."
+  };
 }
 function goalTools(defaultDirectory) {
   return {
@@ -3383,6 +3501,9 @@ function goalTools(defaultDirectory) {
         evidence: tool.schema.string().describe("Concrete evidence that the goal is complete, such as commands run, passing checks, files changed, and important results.")
       },
       execute: async (args, context) => {
+        const steering = steeringToolRejection(context.sessionID);
+        if (steering)
+          return steering;
         const result = await setGoalComplete(context.directory || defaultDirectory, context.sessionID, args);
         return { title: result.ok ? "Goal completed" : result.rejected ? "Goal completion rejected" : "Goal not found", output: result.message };
       }
@@ -3394,6 +3515,9 @@ function goalTools(defaultDirectory) {
         needed: tool.schema.string().describe("What user input, credential, decision, or manual action is needed to continue.")
       },
       execute: async (args, context) => {
+        const steering = steeringToolRejection(context.sessionID);
+        if (steering)
+          return steering;
         const result = await setGoalBlocked(context.directory || defaultDirectory, context.sessionID, args);
         return { title: result.ok ? "Goal blocked" : "Goal not found", output: result.message };
       }
@@ -3405,6 +3529,9 @@ function goalTools(defaultDirectory) {
         next: tool.schema.string().describe("The next step toward completing the goal.")
       },
       execute: async (args, context) => {
+        const steering = steeringToolRejection(context.sessionID);
+        if (steering)
+          return steering;
         const result = await setGoalProgress(context.directory || defaultDirectory, context.sessionID, args);
         return { title: result.ok ? "Goal progress" : "Goal not found", output: result.message };
       }
@@ -3445,16 +3572,15 @@ var OpenCodeLoopPlugin = async ({ client, directory }) => {
         const props = event.properties || {};
         await handleCommand(directory, client, props, props.name, props.arguments, undefined, "event");
       }
-      const interruptedSessionID = userInterruptSessionFromEvent(event);
-      if (interruptedSessionID) {
-        rememberSession(directory, client, interruptedSessionID);
-        await pauseGoalsForUserInterrupt(directory, client, interruptedSessionID);
-      }
+      const steering = await goalSteeringRuntime.handleEvent(directory, client, event);
+      if (steering?.handled && steering.sessionID)
+        rememberSession(directory, client, steering.sessionID);
       const statusUpdate = updateSessionStatusFromEvent(event);
       if (statusUpdate?.sessionID)
         rememberSession(directory, client, statusUpdate.sessionID);
-      if (statusUpdate?.idle)
+      if (statusUpdate?.idle && !goalSteeringRuntime.shouldSuppressIdle(statusUpdate.sessionID)) {
         scheduleIdleWork(directory, client, statusUpdate.sessionID);
+      }
     }
   };
 };
