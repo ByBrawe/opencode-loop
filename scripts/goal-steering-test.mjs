@@ -38,27 +38,41 @@ function assistantEvent(sessionID = "ses-steering", parentID = "user-steering") 
   let activeRun = { jobId: originalGoal.id, job: structuredClone(originalGoal), startedAt: 900 }
   let aborts = 0
   let clears = 0
+  const order = []
   const logs = []
-  const client = { session: { abort: async () => { aborts += 1 } } }
+  const client = { session: { abort: async () => { order.push("abort"); aborts += 1 } } }
   const runtime = createGoalSteeringRuntime({
     getActiveRun: () => activeRun,
-    clearActiveRun: () => { clears += 1; activeRun = undefined },
+    clearActiveRun: () => { order.push("clear"); clears += 1; activeRun = undefined },
     readState: async () => structuredClone(state),
     appendLoopLog: async (_directory, type, detail) => logs.push({ type, detail }),
     fireSdk: async (_client, _label, method) => await method(),
+    waitForAbortReady: async (_directory, _client, sessionID) => {
+      order.push(`ready:${sessionID}`)
+      return true
+    },
     isLoopOwnedUserMessage: () => false,
     now: () => 1000,
   })
 
-  const result = await runtime.handleUserMessage("/workspace", client, { sessionID: "ses-steering", messageID: "user-steering" })
+  const result = await runtime.handleChatMessage(
+    "/workspace",
+    client,
+    { sessionID: "ses-steering" },
+    { message: { id: "user-steering", sessionID: "ses-steering", role: "user" }, parts: [] },
+  )
   assert.equal(result.handled, true)
   assert.equal(result.preempted, true)
+  assert.equal(result.abortReady, true)
+  assert.equal(result.messageID, "user-steering", "chat.message must bind the real ID from the mutable hook output")
+  assert.deepEqual(order, ["abort", "clear", "ready:ses-steering"], "foreground steering must wait until the aborted Goal runner is ready to be replaced")
   assert.equal(aborts, 1, "chat.message steering should abort only the active Goal turn before the new prompt dispatches")
   assert.equal(clears, 1, "the aborted Goal run must no longer be finalized as a completed loop run")
   assert.equal(runtime.shouldSuppressIdle("ses-steering"), true, "abort-generated idle must be suppressed while steering is queued")
   assert.deepEqual(state.jobs[0], originalGoal, "normal steering must not pause or rewrite the Goal contract")
   assert.equal(logs.at(-1)?.type, "goal-user-steering")
   assert.equal(logs.at(-1)?.detail?.preempted, true)
+  assert.equal(logs.at(-1)?.detail?.abortReady, true)
 
   const duplicate = await runtime.handleEvent("/workspace", client, userEvent())
   assert.equal(duplicate.duplicate, true, "message.updated must not abort a steering message already handled by chat.message")
@@ -138,6 +152,26 @@ function assistantEvent(sessionID = "ses-steering", parentID = "user-steering") 
   assert.equal(runtime.shouldSuppressIdle("ses-expire"), true)
   clock += 101
   assert.equal(runtime.shouldSuppressIdle("ses-expire"), false, "lost steering must not suppress autonomous continuation forever")
+}
+
+{
+  const currentGoal = goal()
+  const logs = []
+  const runtime = createGoalSteeringRuntime({
+    getActiveRun: () => ({ jobId: currentGoal.id, job: currentGoal, startedAt: 1 }),
+    clearActiveRun: () => {},
+    readState: async () => ({ jobs: [structuredClone(currentGoal)] }),
+    appendLoopLog: async (_directory, type, detail) => logs.push({ type, detail }),
+    fireSdk: async (_client, _label, method) => await method(),
+    waitForAbortReady: async () => false,
+    isLoopOwnedUserMessage: () => false,
+    now: () => 5000,
+  })
+  const result = await runtime.handleUserMessage("/workspace", { session: { abort: async () => {} } }, { sessionID: "ses-not-ready", messageID: "user-not-ready" })
+  assert.equal(result.preempted, true, "the Goal stream was still aborted even if host cleanup readiness timed out")
+  assert.equal(result.abortReady, false)
+  assert.equal(logs.at(-1)?.detail?.abortReady, false, "abort readiness failure must remain diagnosable in the loop log")
+  assert.equal(runtime.shouldSuppressIdle("ses-not-ready"), true)
 }
 
 {
