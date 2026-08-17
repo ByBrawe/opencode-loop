@@ -65,7 +65,14 @@ function scopeFrom(event) {
 function dueAt(job, current) {
   const intervalMs = Math.max(0, Number(job?.intervalMs || 0))
   const lastRunAt = Number(job?.lastRunAt || 0)
-  if (intervalMs === 0 || lastRunAt <= 0) return current
+  if (intervalMs === 0) return current
+  if (lastRunAt <= 0) {
+    if (job?.immediate === false) {
+      const createdAt = Date.parse(job?.createdAt || "")
+      return (Number.isFinite(createdAt) ? createdAt : current) + intervalMs
+    }
+    return current
+  }
   return lastRunAt + intervalMs
 }
 
