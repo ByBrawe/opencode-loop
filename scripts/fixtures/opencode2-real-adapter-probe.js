@@ -2,12 +2,6 @@ import { writeFile } from "node:fs/promises"
 
 const COMMAND_SENTINEL = "__opencode_loop_missing_command_probe__"
 
-function functionShape(value) {
-  return typeof value === "function"
-    ? { type: "function", length: value.length, source: String(value).slice(0, 800) }
-    : { type: typeof value, length: null, source: null }
-}
-
 export default {
   id: "bybrawe.opencode-loop.v2.real-adapter-probe",
   async setup(ctx) {
@@ -26,15 +20,6 @@ export default {
         .sort()
         .map((key) => [key, typeof ctx.session[key]]),
     )
-    const eventMethods = Object.fromEntries(
-      Object.keys(ctx?.event || {})
-        .sort()
-        .map((key) => [key, typeof ctx.event[key]]),
-    )
-    const eventSubscribe = functionShape(ctx?.event?.subscribe)
-    const sessionHook = functionShape(ctx?.session?.hook)
-    const sessionPromptShape = functionShape(ctx?.session?.prompt)
-    const sessionCommandShape = functionShape(ctx?.session?.command)
 
     let commandFieldProbe = { matched: false, error: "session command probe did not run" }
     if (typeof ctx?.session?.create === "function" && typeof ctx?.session?.command === "function") {
@@ -70,14 +55,8 @@ export default {
       activated: true,
       commandTransform: typeof ctx?.command?.transform === "function",
       eventSubscribe: typeof ctx?.event?.subscribe === "function",
-      eventSubscribeLength: eventSubscribe.length,
-      eventSubscribeSource: eventSubscribe.source,
-      eventMethods,
-      sessionHook,
       sessionPrompt: typeof ctx?.session?.prompt === "function",
-      sessionPromptShape,
       sessionCommand: typeof ctx?.session?.command === "function",
-      sessionCommandShape,
       sessionShell: typeof ctx?.session?.shell === "function",
       sessionMethods,
       commandFieldProbe,
