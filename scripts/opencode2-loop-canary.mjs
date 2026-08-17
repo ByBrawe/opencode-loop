@@ -58,6 +58,22 @@ function parseJSONResult(result, label) {
   }
 }
 
+function collectCommandNames(value, names = new Set()) {
+  if (Array.isArray(value)) {
+    for (const item of value) collectCommandNames(item, names)
+    return names
+  }
+  if (!value || typeof value !== "object") return names
+  for (const [key, item] of Object.entries(value)) {
+    if (key === "name" || key === "command" || key === "id") {
+      if (typeof item === "string") names.add(item)
+    } else if (item && typeof item === "object") {
+      collectCommandNames(item, names)
+    }
+  }
+  return names
+}
+
 function contentText(content) {
   if (typeof content === "string") return content
   if (!Array.isArray(content)) return ""
@@ -223,6 +239,19 @@ async function main() {
   }
 
   try {
+    await runOpenCode2(["service", "stop"], { cwd: workspace, env, timeoutMs: 15_000, allowFailure: true })
+
+    const commandRegistryResult = await runOpenCode2([
+      "api",
+      "get",
+      "/api/command",
+      "-H",
+      `x-opencode-directory: ${workspace}`,
+    ], { cwd: workspace, env, timeoutMs: 60_000 })
+    const commandRegistry = parseJSONResult(commandRegistryResult, "GET /api/command")
+    const commandNames = collectCommandNames(commandRegistry)
+    assert.ok(commandNames.has("loop"), `OpenCode 2 did not register the project loop command: ${JSON.stringify(commandRegistry)}`)
+
     const createBody = {
       title: "OpenCode 2 Loop canary",
       model: { providerID: "canary", id: "canary" },
@@ -230,7 +259,6 @@ async function main() {
     }
     const createdResult = await runOpenCode2([
       "api",
-      "--standalone",
       "v2.session.create",
       "-d",
       JSON.stringify(createBody),
@@ -247,7 +275,6 @@ async function main() {
     }
     const commandPromise = runOpenCode2([
       "api",
-      "--standalone",
       "v2.session.command",
       "--param",
       `sessionID=${sessionID}`,
@@ -263,6 +290,7 @@ async function main() {
       try { state = await readFile(stateFile, "utf8") } catch {}
       const log = await readOpenCodeLogTail(env)
       return [
+        `commands=${JSON.stringify([...commandNames])}`,
         `provider=${JSON.stringify(provider.stats)}`,
         `command=${commandResult?.error ? String(commandResult.error) : JSON.stringify(commandResult)}`,
         `state=${state}`,
@@ -272,7 +300,7 @@ async function main() {
 
     await waitFor(async () => {
       try { return Boolean(JSON.parse(await readFile(marker, "utf8"))?.activated) } catch { return false }
-    }, "real V2 adapter activation during command execution", diagnostics, 30_000)
+    }, "real V2 adapter activation on the shared OpenCode service", diagnostics, 30_000)
 
     await waitFor(() => provider.stats.loopRequests >= EXPECTED_TURNS, `${EXPECTED_TURNS} autonomous OpenCode 2 Loop turns`, diagnostics, 90_000)
     await new Promise((resolve) => setTimeout(resolve, 1_000))
@@ -286,17 +314,23 @@ async function main() {
 
     const finalCommand = await commandPromise
     if (finalCommand?.error) throw finalCommand.error
+    const finalCommandPayload = parseJSONResult(finalCommand, "v2.session.command")
+    if (finalCommandPayload?._tag) {
+      throw new Error(`v2.session.command returned ${finalCommandPayload._tag}: ${JSON.stringify(finalCommandPayload)}`)
+    }
 
     console.log(JSON.stringify({
       ok: true,
       opencode2: true,
       sessionID,
+      registeredCommands: [...commandNames],
       loopRequests: provider.stats.loopRequests,
       chatRequests: provider.stats.chatRequests,
       runCount: loop.runCount,
       enabled: loop.enabled,
     }, null, 2))
   } finally {
+    await runOpenCode2(["service", "stop"], { cwd: workspace, env, timeoutMs: 15_000, allowFailure: true }).catch(() => undefined)
     await provider.close().catch(() => undefined)
     await rm(workspace, { recursive: true, force: true }).catch(() => undefined)
   }
