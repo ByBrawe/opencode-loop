@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { createGoalSteeringRuntime } from "../src/source/runtime/goal-steering.js"
+import { guardLoopOwnedUserMessage, loopOwnedUserMessageGuardActive, clearLoopOwnedUserMessageGuard } from "../src/source/opencode/messages.js"
 
 function goal(id = "goal-1") {
   return {
@@ -137,6 +138,16 @@ function assistantEvent(sessionID = "ses-steering", parentID = "user-steering") 
   assert.equal(runtime.shouldSuppressIdle("ses-expire"), true)
   clock += 101
   assert.equal(runtime.shouldSuppressIdle("ses-expire"), false, "lost steering must not suppress autonomous continuation forever")
+}
+
+{
+  const sessionID = "ses-loop-owned-two-stage"
+  guardLoopOwnedUserMessage(sessionID)
+  assert.equal(loopOwnedUserMessageGuardActive(sessionID), true, "chat.message should recognize a pending synthetic prompt before OpenCode assigns its ID")
+  assert.equal(loopOwnedUserMessageGuardActive(sessionID, "synthetic-user-1"), true, "message.updated should consume the pending guard and bind the real synthetic message ID")
+  assert.equal(loopOwnedUserMessageGuardActive(sessionID, "synthetic-user-1"), true, "the bound synthetic message ID should remain Loop-owned for later duplicate events")
+  clearLoopOwnedUserMessageGuard(sessionID)
+  assert.equal(loopOwnedUserMessageGuardActive(sessionID, "synthetic-user-1"), false)
 }
 
 console.log("Goal steering runtime tests passed")
