@@ -1,0 +1,42 @@
+name: Temporary Goal Steering Build
+
+on:
+  push:
+    branches:
+      - fix/loop-goal-user-steering
+    paths:
+      - scripts/goal-steering-refactor-ready.txt
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+      - run: npm ci
+      - run: node --check src/source/runtime/goal-steering.js
+      - run: node scripts/goal-steering-test.mjs
+      - run: npm run build:plugin
+      - run: npm run check
+      - run: npm test
+      - name: Commit generated single-file plugin
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/index.js
+          if git diff --cached --quiet; then
+            echo "src/index.js already matches source"
+            exit 0
+          fi
+          git commit -m "build: regenerate plugin bundle"
+          git push origin HEAD:fix/loop-goal-user-steering
