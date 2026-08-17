@@ -19,6 +19,8 @@ import { createLoopExecutor } from "./runtime/executor.js"
 import { createGoalSteeringRuntime } from "./runtime/goal-steering.js"
 
 const DEFAULT_ACTIVE_GUARD_MS = 45_000
+const STEERING_ABORT_READY_TIMEOUT_MS = 2_000
+const STEERING_ABORT_READY_POLL_MS = 25
 
 const workspaceRuntime = createJobWorkspaceRuntime({ toast })
 const { snapshotPaths } = workspaceRuntime
@@ -55,6 +57,17 @@ async function maybeRunDueJobs(directory, client, sessionID, runOptions) {
   return await runDueJobs(directory, client, sessionID, runOptions)
 }
 
+async function waitForSteeringAbortReady(directory, client, sessionID) {
+  const deadline = Date.now() + STEERING_ABORT_READY_TIMEOUT_MS
+  do {
+    executorRuntime.clearSessionStatus(sessionID)
+    if (await sessionIsIdle(client, sessionID, directory, { recoverStaleActive: false })) return true
+    await new Promise((resolve) => setTimeout(resolve, STEERING_ABORT_READY_POLL_MS))
+  } while (Date.now() < deadline)
+  executorRuntime.clearSessionStatus(sessionID)
+  return await sessionIsIdle(client, sessionID, directory, { recoverStaleActive: false })
+}
+
 schedulerRuntime = createSchedulerRuntime({
   sessionIsIdle,
   finalizeActiveRun,
@@ -70,6 +83,7 @@ goalSteeringRuntime = createGoalSteeringRuntime({
   clearActiveRun,
   isLoopOwnedUserMessage: loopOwnedUserMessageGuardActive,
   appendLoopLog,
+  waitForAbortReady: waitForSteeringAbortReady,
   now,
 })
 
@@ -219,11 +233,8 @@ export const OpenCodeLoopPlugin = async ({ client, directory }) => {
     dispose: async () => { disposeRuntime(directory, client) },
     tool: goalTools(directory),
     "command.execute.before": async (input, output) => { await handleCommand(directory, client, input, undefined, undefined, output) },
-    "chat.message": async (input) => {
-      const steering = await goalSteeringRuntime.handleUserMessage(directory, client, {
-        sessionID: input?.sessionID,
-        messageID: input?.messageID,
-      })
+    "chat.message": async (input, output) => {
+      const steering = await goalSteeringRuntime.handleChatMessage(directory, client, input, output)
       if (steering?.handled && steering.sessionID) rememberSession(directory, client, steering.sessionID)
     },
     "tool.execute.before": async (input) => { markToolCallActive(input) },
