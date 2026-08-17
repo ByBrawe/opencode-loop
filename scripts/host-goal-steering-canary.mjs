@@ -12,7 +12,8 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const isWindows = process.platform === "win32"
 const GOAL_OBJECTIVE = "queued steering real host goal objective"
 const USER_STEERING = "queued user steering must run before goal continuation"
-const SESSION_BOOTSTRAP_TIMEOUT_MS = 90_000
+const SESSION_BOOTSTRAP_FIRST_TIMEOUT_MS = 30_000
+const SESSION_BOOTSTRAP_RETRY_TIMEOUT_MS = 60_000
 
 function resolveOpenCodeBinary() {
   if (!isWindows) return path.join(repoRoot, "node_modules", ".bin", "opencode")
@@ -249,6 +250,20 @@ async function waitFor(predicate, description, diagnostics, timeoutMs = 45_000) 
   throw new Error(`timed out waiting for ${description}\n${await diagnostics()}`)
 }
 
+function isFetchTimeout(error) {
+  return error?.name === "TimeoutError" || /aborted due to timeout/i.test(String(error?.message ?? error))
+}
+
+async function bootstrapSessions(api, diagnostics) {
+  try {
+    return await api("/session", { method: "GET", signal: AbortSignal.timeout(SESSION_BOOTSTRAP_FIRST_TIMEOUT_MS) })
+  } catch (error) {
+    if (!isFetchTimeout(error)) throw error
+    console.error(`OpenCode session API was not ready after ${SESSION_BOOTSTRAP_FIRST_TIMEOUT_MS}ms; retrying with a fresh request.\n${diagnostics()}`)
+    return await api("/session", { method: "GET", signal: AbortSignal.timeout(SESSION_BOOTSTRAP_RETRY_TIMEOUT_MS) })
+  }
+}
+
 async function readGoalJob(stateFile) {
   try {
     const state = JSON.parse(await readFile(stateFile, "utf8"))
@@ -334,10 +349,11 @@ async function main() {
 
     let sessionsPayload
     try {
-      sessionsPayload = await api("/session", { method: "GET", signal: AbortSignal.timeout(SESSION_BOOTSTRAP_TIMEOUT_MS) })
+      sessionsPayload = await bootstrapSessions(api, () => `server log:\n${serverLog}`)
     } catch (error) {
       const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
-      throw new Error(`OpenCode session bootstrap failed after ${SESSION_BOOTSTRAP_TIMEOUT_MS}ms: ${message}\nserver log:\n${serverLog}`)
+      const totalTimeoutMs = SESSION_BOOTSTRAP_FIRST_TIMEOUT_MS + SESSION_BOOTSTRAP_RETRY_TIMEOUT_MS
+      throw new Error(`OpenCode session bootstrap failed after two requests within ${totalTimeoutMs}ms: ${message}\nserver log:\n${serverLog}`)
     }
     assert.ok(Array.isArray(sessionsPayload?.data ?? sessionsPayload), "GET /session bootstrap did not return an array")
     const createdPayload = await api("/session", { method: "POST", body: JSON.stringify({ title: "opencode-loop Goal steering canary" }) })
