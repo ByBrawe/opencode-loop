@@ -219,6 +219,13 @@ export const OpenCodeLoopPlugin = async ({ client, directory }) => {
     dispose: async () => { disposeRuntime(directory, client) },
     tool: goalTools(directory),
     "command.execute.before": async (input, output) => { await handleCommand(directory, client, input, undefined, undefined, output) },
+    "chat.message": async (input) => {
+      const steering = await goalSteeringRuntime.handleUserMessage(directory, client, {
+        sessionID: input?.sessionID,
+        messageID: input?.messageID,
+      })
+      if (steering?.handled && steering.sessionID) rememberSession(directory, client, steering.sessionID)
+    },
     "tool.execute.before": async (input) => { markToolCallActive(input) },
     "tool.execute.after": async (input) => { markToolCallFinished(input) },
     "experimental.session.compacting": async (input) => { await noteLoopCompactionStarted(directory, input?.sessionID) },
