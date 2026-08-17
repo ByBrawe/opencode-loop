@@ -28,6 +28,14 @@ function userMessageFromEvent(event) {
   return { sessionID, messageID }
 }
 
+function userMessageFromChatHook(input, output) {
+  const info = output?.message || output?.info || {}
+  const sessionID = info.sessionID || input?.sessionID
+  if (typeof sessionID !== "string" || !sessionID) return undefined
+  const messageID = typeof (info.id || input?.messageID) === "string" ? (info.id || input?.messageID) : ""
+  return { sessionID, messageID }
+}
+
 function assistantMessageFromEvent(event) {
   const info = messageInfo(event)
   if (!info || info.role !== "assistant") return undefined
@@ -54,6 +62,7 @@ export function createGoalSteeringRuntime(options = {}) {
   const readState = typeof options.readState === "function" ? options.readState : defaultReadState
   const appendLoopLog = typeof options.appendLoopLog === "function" ? options.appendLoopLog : defaultAppendLoopLog
   const fireSdk = typeof options.fireSdk === "function" ? options.fireSdk : defaultFireSdk
+  const waitForAbortReady = typeof options.waitForAbortReady === "function" ? options.waitForAbortReady : async () => true
   const now = typeof options.now === "function" ? options.now : defaultNow
   const suppressionMs = Number.isFinite(Number(options.suppressionMs)) && Number(options.suppressionMs) > 0
     ? Number(options.suppressionMs)
@@ -136,6 +145,7 @@ export function createGoalSteeringRuntime(options = {}) {
     const activeGoalIDs = new Set(goals.map((goal) => goal.id))
     const canPreempt = active && activeGoalIDs.has(active.jobId) && isGoalJob(active.job) && typeof client?.session?.abort === "function"
     let preempted = false
+    let abortReady = true
     let abortError = ""
 
     if (canPreempt) {
@@ -156,6 +166,11 @@ export function createGoalSteeringRuntime(options = {}) {
         )
         clearActiveRun(sessionID)
         preempted = true
+        try {
+          abortReady = await waitForAbortReady(directory, client, sessionID) !== false
+        } catch {
+          abortReady = false
+        }
       } catch (error) {
         pendingSteering.delete(sessionID)
         abortError = error instanceof Error ? error.message : String(error)
@@ -167,10 +182,17 @@ export function createGoalSteeringRuntime(options = {}) {
       messageID,
       goals: goals.length,
       preempted,
+      ...(preempted ? { abortReady } : {}),
       ...(abortError ? { abortError } : {}),
     })
 
-    return { handled: true, preempted, sessionID, messageID }
+    return { handled: true, preempted, abortReady, sessionID, messageID }
+  }
+
+  async function handleChatMessage(directory, client, input, output) {
+    const user = userMessageFromChatHook(input, output)
+    if (!user) return undefined
+    return await handleUserMessage(directory, client, user)
   }
 
   async function handleEvent(directory, client, event) {
@@ -188,6 +210,7 @@ export function createGoalSteeringRuntime(options = {}) {
 
   return {
     handleUserMessage,
+    handleChatMessage,
     handleEvent,
     observeAssistantMessage,
     shouldSuppressIdle,
