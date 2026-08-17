@@ -1,0 +1,112 @@
+name: One-shot V2 control canary sync
+
+on:
+  push:
+    branches:
+      - test/v2-real-control-lifecycle
+    paths:
+      - ".github/workflows/v2-control-canary-sync.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: test/v2-real-control-lifecycle
+      - name: Extend real V2 canary and remove helper
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/opencode2-loop-canary.mjs')
+          text = path.read_text()
+          old = '''    assert.equal(server.exitCode, null, `OpenCode 2 server exited during canary\\n${await diagnostics()}`)
+
+    console.log(JSON.stringify({
+      ok: true,
+      apiPrefix,
+      sessionID,
+      registeredCommands: [...latestCommands],
+      loopRequests: provider.stats.loopRequests,
+      chatRequests: provider.stats.chatRequests,
+      runCount: loop.runCount,
+      enabled: loop.enabled,
+    }, null, 2))
+'''
+          new = '''    assert.equal(server.exitCode, null, `OpenCode 2 server exited during canary\\n${await diagnostics()}`)
+
+    const readPersisted = async () => {
+      try { return JSON.parse(await readFile(stateFile, "utf8")) }
+      catch (error) {
+        if (error?.code === "ENOENT") return { jobs: [] }
+        throw error
+      }
+    }
+    const jobNamed = async (name) => (await readPersisted()).jobs?.find((job) => String(job?.name || "default") === name)
+    const sendControl = async (command, argumentsText = "") => {
+      const response = await request(`${apiPrefix}/session/${encodeURIComponent(sessionID)}/command`, {
+        method: "POST",
+        body: JSON.stringify({ command, arguments: argumentsText }),
+      }, 120_000)
+      if (!response.ok) throw new Error(`${command} failed: HTTP ${response.status} ${response.text}\\n${await diagnostics()}`)
+      return response
+    }
+
+    await sendControl("loop-pause", "default")
+    await waitFor(async () => (await jobNamed("default"))?.paused === true, "real V2 loop-pause state mutation", diagnostics, 30_000)
+
+    await sendControl("loop-resume", "default")
+    await waitFor(async () => {
+      const job = await jobNamed("default")
+      return job?.paused === false && job?.lastRunAt === 0
+    }, "real V2 loop-resume state mutation", diagnostics, 30_000)
+
+    await sendControl("loop-stop", "default")
+    await waitFor(async () => !(await jobNamed("default")), "real V2 loop-stop removal", diagnostics, 30_000)
+
+    const beforeRemoveTurn = provider.stats.loopRequests
+    await sendControl("loop", "0s --max-runs 1 --name removable removable control lifecycle task")
+    await waitFor(() => provider.stats.loopRequests === beforeRemoveTurn + 1, "real V2 removable Loop turn", diagnostics, 60_000)
+    await waitFor(async () => {
+      const job = await jobNamed("removable")
+      return job?.runCount === 1 && job?.enabled === false
+    }, "real V2 removable Loop persisted completion", diagnostics, 30_000)
+    await sendControl("loop-remove", "removable")
+    await waitFor(async () => !(await jobNamed("removable")), "real V2 loop-remove removal", diagnostics, 30_000)
+
+    const beforeClearTurn = provider.stats.loopRequests
+    await sendControl("loop", "0s --max-runs 1 --name clearable clearable control lifecycle task")
+    await waitFor(() => provider.stats.loopRequests === beforeClearTurn + 1, "real V2 clearable Loop turn", diagnostics, 60_000)
+    await waitFor(async () => Boolean(await jobNamed("clearable")), "real V2 clearable Loop persistence", diagnostics, 30_000)
+    await sendControl("loop-clear")
+    await waitFor(async () => (await readPersisted()).jobs?.length === 0, "real V2 loop-clear state removal", diagnostics, 30_000)
+
+    assert.equal(provider.stats.loopRequests, EXPECTED_TURNS + 2, `control lifecycle should add exactly two autonomous Loop turns\\n${await diagnostics()}`)
+    assert.equal(server.exitCode, null, `OpenCode 2 server exited during control lifecycle canary\\n${await diagnostics()}`)
+
+    console.log(JSON.stringify({
+      ok: true,
+      apiPrefix,
+      sessionID,
+      registeredCommands: [...latestCommands],
+      loopRequests: provider.stats.loopRequests,
+      chatRequests: provider.stats.chatRequests,
+      initialRunCount: loop.runCount,
+      initialEnabled: loop.enabled,
+      controlsVerified: ["loop-pause", "loop-resume", "loop-stop", "loop-remove", "loop-clear"],
+    }, null, 2))
+'''
+          if old not in text:
+              raise SystemExit('target final canary block not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git rm .github/workflows/v2-control-canary-sync.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/opencode2-loop-canary.mjs
+          git commit -m "test: cover real V2 Loop control lifecycle"
+          git push origin HEAD:test/v2-real-control-lifecycle
