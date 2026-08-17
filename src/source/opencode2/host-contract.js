@@ -18,12 +18,12 @@ function normalizePrompt(input) {
 
 function normalizeCommand(input) {
   const sessionID = String(input?.sessionID || "").trim()
-  const id = String(input?.id || "").trim().replace(/^\/+/, "")
+  const command = String(input?.command || "").trim().replace(/^\/+/, "")
   if (!sessionID) throw new TypeError("command requires a session ID")
-  if (!id) throw new TypeError("command requires an ID")
+  if (!command) throw new TypeError("command requires a command name")
   return Object.freeze({
     sessionID,
-    id,
+    command,
     arguments: input?.arguments === undefined ? undefined : String(input.arguments),
     agent: input?.agent,
     model: input?.model,
