@@ -212,13 +212,18 @@ async function main() {
   await writeFile(path.join(workspace, "opencode.json"), `${JSON.stringify({
     $schema: "https://opencode.ai/config.json",
     model: "canary/canary",
-    small_model: "canary/canary",
-    provider: {
+    providers: {
       canary: {
-        npm: "@ai-sdk/openai-compatible",
         name: "Deterministic OpenCode 2 Loop Canary",
-        options: { baseURL: `http://127.0.0.1:${providerPort}/v1`, apiKey: "canary-key" },
-        models: { canary: { name: "Deterministic OpenCode 2 Loop Canary", limit: { context: 100000, output: 4096 } } },
+        package: "@opencode-ai/ai/providers/openai-compatible",
+        settings: { baseURL: `http://127.0.0.1:${providerPort}/v1` },
+        models: {
+          canary: {
+            name: "Deterministic OpenCode 2 Loop Canary",
+            capabilities: { tools: true, input: ["text"], output: ["text"] },
+            limit: { context: 100000, output: 4096 },
+          },
+        },
       },
     },
   }, null, 2)}\n`)
