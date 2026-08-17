@@ -89,3 +89,58 @@ try {
   await runtime.dispose()
   await rm(directory, { recursive: true, force: true })
 }
+
+{
+  const delayedDirectory = await mkdtemp(path.join(os.tmpdir(), "opencode-loop-v2-no-now-"))
+  const delayedSessionID = "ses_v2_no_now"
+  const delayedPrompts = []
+  const scheduled = []
+  let clock = Date.now()
+  const delayedRuntime = createOpenCode2PromptRuntime({
+    prompt: async (request) => { delayedPrompts.push(request) },
+    now: () => clock,
+    setTimer: (fn, ms) => {
+      const handle = { fn, ms, unref() {} }
+      scheduled.push(handle)
+      return handle
+    },
+    clearTimer: () => {},
+  })
+  const delayedFile = path.join(delayedDirectory, ".opencode", "opencode-loop", `${delayedSessionID}.json`)
+
+  try {
+    const added = await delayedRuntime.onEvent({
+      kind: "command",
+      action: "executed",
+      name: "loop",
+      sessionID: delayedSessionID,
+      directory: delayedDirectory,
+      arguments: "1s --no-now --max-runs 1 wait before the first run",
+    })
+    assert.equal(added.accepted, true)
+    assert.equal(added.job.immediate, false)
+
+    let state = JSON.parse(await readFile(delayedFile, "utf8"))
+    const createdAt = Date.parse(state.jobs[0].createdAt)
+    assert.ok(Number.isFinite(createdAt))
+    assert.ok(scheduled.some((timer) => timer.ms > 0), "--no-now must schedule a future first run")
+
+    clock = createdAt + 999
+    const earlyIdle = await delayedRuntime.onEvent({ kind: "session", action: "idle", sessionID: delayedSessionID, directory: delayedDirectory })
+    assert.equal(earlyIdle.dispatched, false)
+    assert.equal(delayedPrompts.length, 0, "--no-now must not dispatch before createdAt + interval")
+
+    clock = createdAt + 1_000
+    const dueIdle = await delayedRuntime.onEvent({ kind: "session", action: "idle", sessionID: delayedSessionID, directory: delayedDirectory })
+    assert.equal(dueIdle.dispatched, true)
+    assert.equal(delayedPrompts.length, 1)
+    state = JSON.parse(await readFile(delayedFile, "utf8"))
+    assert.equal(state.jobs[0].runCount, 1)
+    assert.equal(state.jobs[0].enabled, false)
+  } finally {
+    await delayedRuntime.dispose()
+    await rm(delayedDirectory, { recursive: true, force: true })
+  }
+}
+
+console.log("OpenCode 2 --no-now first-run contract passed")
