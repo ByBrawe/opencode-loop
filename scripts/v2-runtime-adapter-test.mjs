@@ -91,6 +91,36 @@ async function waitFor(predicate, description, timeoutMs = 2_000) {
 }
 
 {
+  let callback
+  let subscriptions = 0
+  let disposals = 0
+  const ctx = {
+    event: {
+      subscribe(handler) {
+        subscriptions += 1
+        callback = handler
+        return { dispose: async () => { disposals += 1 } }
+      },
+    },
+    session: { prompt: async () => ({ accepted: true }) },
+  }
+
+  const adapter = createOpenCode2RuntimeAdapter(ctx)
+  assert.equal(await adapter.start(), true)
+  assert.equal(subscriptions, 1)
+  assert.equal(typeof callback, "function", "callback-style V2 subscribe must receive the bridge callback")
+
+  await callback({
+    directory: "/callback-project",
+    payload: { type: "session.created", properties: { info: { id: "ses_v2_callback", directory: "/callback-project" } } },
+  })
+  assert.ok(adapter.runtimeManager.peek("ses_v2_callback"), "callback-style V2 event subscription must reach the runtime manager")
+
+  assert.equal(await adapter.dispose("callback-test-complete"), true)
+  assert.equal(disposals, 1, "callback-style V2 subscription must dispose its registration")
+}
+
+{
   const events = controllableStream()
   let commandTransforms = 0
   let commandDisposals = 0
