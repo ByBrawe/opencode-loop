@@ -11,6 +11,8 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const LOOP_OBJECTIVE = "real OpenCode 2 loop canary"
 const EXPECTED_TURNS = 2
+const SERVER_USERNAME = "opencode"
+const SERVER_PASSWORD = "opencode-loop-v2-canary"
 
 function appendLog(current, chunk, limit = 100_000) {
   return (current + String(chunk)).slice(-limit)
@@ -267,6 +269,8 @@ async function main() {
     XDG_CACHE_HOME: path.join(home, ".cache"),
     OPENCODE_LOOP_V2_PLUGIN_URL: pathToFileURL(path.join(repoRoot, "src", "source", "opencode2", "experimental.js")).href,
     OPENCODE_LOOP_V2_MARKER: marker,
+    OPENCODE_SERVER_USERNAME: SERVER_USERNAME,
+    OPENCODE_SERVER_PASSWORD: SERVER_PASSWORD,
     OPENCODE_DISABLE_AUTOUPDATE: "true",
     OPENCODE_DISABLE_LSP_DOWNLOAD: "true",
     CI: "true",
@@ -307,12 +311,14 @@ async function main() {
     await waitForTcp(port, server, () => serverLog)
 
     const baseURL = `http://127.0.0.1:${port}`
+    const authorization = `Basic ${Buffer.from(`${SERVER_USERNAME}:${SERVER_PASSWORD}`).toString("base64")}`
     const request = async (pathname, init = {}, { timeoutMs = 30_000, allowHttpError = false } = {}) => {
       const response = await fetch(`${baseURL}${pathname}`, {
         ...init,
         headers: {
           "content-type": "application/json",
           "x-opencode-directory": workspace,
+          authorization,
           ...(init.headers ?? {}),
         },
         signal: init.signal ?? AbortSignal.timeout(timeoutMs),
