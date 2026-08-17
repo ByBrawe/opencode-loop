@@ -1,0 +1,52 @@
+name: One-shot Goal canary bootstrap retry sync
+
+on:
+  push:
+    branches:
+      - fix/goal-canary-bootstrap-retry
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/goal-canary-bootstrap-retry
+          fetch-depth: 0
+
+      - name: Apply focused bootstrap retry fix
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+          const file = 'scripts/host-goal-steering-canary.mjs'
+          let source = fs.readFileSync(file, 'utf8')
+
+          source = source.replace(
+            'const SESSION_BOOTSTRAP_TIMEOUT_MS = 90_000\n',
+            'const SESSION_BOOTSTRAP_FIRST_TIMEOUT_MS = 30_000\nconst SESSION_BOOTSTRAP_RETRY_TIMEOUT_MS = 60_000\n',
+          )
+
+          const marker = `async function readGoalJob(stateFile) {`
+          const helper = `function isFetchTimeout(error) {\n  return error?.name === "TimeoutError" || /aborted due to timeout/i.test(String(error?.message ?? error))\n}\n\nasync function bootstrapSessions(api, diagnostics) {\n  try {\n    return await api("/session", { method: "GET", signal: AbortSignal.timeout(SESSION_BOOTSTRAP_FIRST_TIMEOUT_MS) })\n  } catch (error) {\n    if (!isFetchTimeout(error)) throw error\n    console.error(\`OpenCode session API was not ready after \${SESSION_BOOTSTRAP_FIRST_TIMEOUT_MS}ms; retrying with a fresh request.\\n\${diagnostics()}\`)\n    return await api("/session", { method: "GET", signal: AbortSignal.timeout(SESSION_BOOTSTRAP_RETRY_TIMEOUT_MS) })\n  }\n}\n\n`
+          if (!source.includes('async function bootstrapSessions(api, diagnostics)')) {
+            source = source.replace(marker, helper + marker)
+          }
+
+          const oldBlock = `    let sessionsPayload\n    try {\n      sessionsPayload = await api("/session", { method: "GET", signal: AbortSignal.timeout(SESSION_BOOTSTRAP_TIMEOUT_MS) })\n    } catch (error) {\n      const message = error instanceof Error ? \`\${error.name}: \${error.message}\` : String(error)\n      throw new Error(\`OpenCode session bootstrap failed after \${SESSION_BOOTSTRAP_TIMEOUT_MS}ms: \${message}\\nserver log:\\n\${serverLog}\`)\n    }\n`
+          const newBlock = `    let sessionsPayload\n    try {\n      sessionsPayload = await bootstrapSessions(api, () => \`server log:\\n\${serverLog}\`)\n    } catch (error) {\n      const message = error instanceof Error ? \`\${error.name}: \${error.message}\` : String(error)\n      const totalTimeoutMs = SESSION_BOOTSTRAP_FIRST_TIMEOUT_MS + SESSION_BOOTSTRAP_RETRY_TIMEOUT_MS\n      throw new Error(\`OpenCode session bootstrap failed after two requests within \${totalTimeoutMs}ms: \${message}\\nserver log:\\n\${serverLog}\`)\n    }\n`
+          if (!source.includes(oldBlock)) throw new Error('expected bootstrap block not found')
+          source = source.replace(oldBlock, newBlock)
+          fs.writeFileSync(file, source)
+          NODE
+
+          git rm .github/workflows/goal-canary-bootstrap-retry-sync.yml
+          git add scripts/host-goal-steering-canary.mjs
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'test: retry Goal host bootstrap with fresh request'
+          git push origin HEAD:fix/goal-canary-bootstrap-retry
