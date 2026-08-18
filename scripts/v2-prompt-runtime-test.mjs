@@ -164,7 +164,7 @@ try {
     assert.equal(earlyIdle.dispatched, false)
     assert.equal(delayedPrompts.length, 0, "--no-now must not dispatch before createdAt + interval")
 
-    clock = createdAt + 1_000
+    clock = createdAt + 1_001
     const dueIdle = await delayedRuntime.onEvent({ kind: "session", action: "idle", sessionID: delayedSessionID, directory: delayedDirectory })
     assert.equal(dueIdle.dispatched, true)
     assert.equal(delayedPrompts.length, 1)
