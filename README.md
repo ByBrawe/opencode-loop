@@ -4,7 +4,7 @@
 
 OpenCode Loop adds `/loop`, scheduled prompt/command/shell jobs, compact scheduling, safe long-running continuation helpers, and the `opencode-loopd` background daemon.
 
-> **Current release: `0.5.28`.** Loop also contains an older experimental `/loop-goal` mode, but for strong persistent Goal contracts and host-verified completion, use the separate **OpenCode Goals** plugin described below.
+> **Current release: `0.5.29`.** Loop also contains an older experimental `/loop-goal` mode, but for strong persistent Goal contracts and host-verified completion, use the separate **OpenCode Goals** plugin described below.
 
 ## Install or update
 
