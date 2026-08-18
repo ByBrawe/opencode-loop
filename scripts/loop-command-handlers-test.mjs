@@ -200,7 +200,8 @@ assert.throws(() => createLoopCommandHandlers({ clearActiveRun() {} }), /cancelD
   assert.equal(jobs[1].paused, false)
   assert.equal(jobs[1].runNowRequestedAt, 10_000)
   assert.deepEqual(h.toasts, [[client, "Marked 1 loop job(s) due now.", "success"]])
-  assert.deepEqual(h.forcedRuns, [["/work", client, sessionID]])
+  assert.deepEqual(h.due, [["/work", client, sessionID]], "run-now must defer dispatch through the idle-safe scheduler")
+  assert.equal(h.forcedRuns.length, 0, "run-now must not start a model turn re-entrantly inside command.execute.before")
 }
 
 {
@@ -208,6 +209,7 @@ assert.throws(() => createLoopCommandHandlers({ clearActiveRun() {} }), /cancelD
   const h = harness({ [sessionID]: { jobs: [loopJob("a")] } })
   await h.handlers.runNow("/work", {}, sessionID, "missing")
   assert.deepEqual(h.toasts, [[{}, "Marked 0 loop job(s) due now.", "warning"]])
+  assert.equal(h.due.length, 0, "missing run-now target must not schedule unrelated jobs")
   assert.equal(h.forcedRuns.length, 0, "missing run-now target must not run unrelated due jobs")
 }
 
