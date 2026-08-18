@@ -349,6 +349,12 @@ opencode-loopd --project . --every 5m --prompt-file loop-prompt.md
 Run immediately on each daemon iteration:
 
 ```bash
+opencode-loopd --project . --every 0s --prompt "continue from progress.md and implement the next unfinished TODO"
+```
+
+Select a model and agent:
+
+```bash
 opencode-loopd --project . --every 0s --max-runs 1 --timeout 30m --model provider/model --agent build --prompt-file loop-prompt.md
 ```
 
