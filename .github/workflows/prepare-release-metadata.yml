@@ -1,0 +1,93 @@
+name: Prepare release metadata
+
+on:
+  push:
+    branches:
+      - "release/prepare-v*"
+    paths:
+      - ".release-notes.md"
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref_name }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Resolve version
+        id: release
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#release/prepare-v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release version: $VERSION" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Update package metadata
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs"
+
+          const version = process.env.RELEASE_VERSION
+          for (const file of ["package.json", "package-lock.json"]) {
+            const data = JSON.parse(fs.readFileSync(file, "utf8"))
+            data.version = version
+            if (file === "package-lock.json") data.packages[""].version = version
+            fs.writeFileSync(file, JSON.stringify(data, null, 2) + "\n")
+          }
+
+          const readmePath = "README.md"
+          const readme = fs.readFileSync(readmePath, "utf8")
+          const marker = /\*\*Current release: `[^`]+`\.\*\*/
+          if (!marker.test(readme)) throw new Error("README current release marker not found")
+          fs.writeFileSync(readmePath, readme.replace(marker, `**Current release: \`${version}\`.**`))
+          NODE
+
+      - name: Prepend changelog notes
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs"
+
+          const version = process.env.RELEASE_VERSION
+          const notesPath = ".release-notes.md"
+          if (!fs.existsSync(notesPath)) throw new Error(".release-notes.md is required")
+          const notes = fs.readFileSync(notesPath, "utf8").trim()
+          if (!notes) throw new Error(".release-notes.md is empty")
+
+          const changelogPath = "CHANGELOG.md"
+          const changelog = fs.readFileSync(changelogPath, "utf8")
+          const header = "# Changelog\n\n"
+          if (!changelog.startsWith(header)) throw new Error("CHANGELOG header not found")
+          if (changelog.includes(`\n## ${version}\n`)) throw new Error(`CHANGELOG already contains ${version}`)
+          fs.writeFileSync(changelogPath, `${header}## ${version}\n\n${notes}\n\n${changelog.slice(header.length)}`)
+          fs.rmSync(notesPath)
+          NODE
+
+      - name: Commit prepared metadata
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json README.md CHANGELOG.md .release-notes.md
+          if git diff --cached --quiet; then
+            echo "No release metadata changes to commit."
+            exit 0
+          fi
+          git commit -m "chore: finalize $RELEASE_VERSION release metadata"
+          git push origin "HEAD:$GITHUB_REF_NAME"
