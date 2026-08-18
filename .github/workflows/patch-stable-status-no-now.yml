@@ -1,0 +1,49 @@
+name: Patch stable status no-now due
+
+# Retrigger after the workflow exists on this branch.
+on:
+  push:
+    branches:
+      - fix/stable-status-no-now-due
+    paths:
+      - ".github/workflows/patch-stable-status-no-now.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/stable-status-no-now-due
+      - name: Patch source and test
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path('src/source/opencode/loop-commands.js')
+          text = source.read_text()
+          old = '      const dueIn = Number(job.runNowRequestedAt || 0) > 0 ? 0 : Math.max(0, job.intervalMs - (now() - (job.lastRunAt || 0)))\n'
+          new = '''      const current = now()\n      const intervalMs = Number(job.intervalMs || 0)\n      const lastRunAt = Number(job.lastRunAt || 0)\n      const createdAt = Date.parse(job.createdAt || "")\n      const dueAt = Number(job.runNowRequestedAt || 0) > 0\n        ? current\n        : lastRunAt > 0\n          ? lastRunAt + intervalMs\n          : job.immediate === false && Number.isFinite(createdAt)\n            ? createdAt + intervalMs\n            : current\n      const dueIn = Math.max(0, dueAt - current)\n'''
+          if old not in text:
+              raise SystemExit('status due line not found')
+          source.write_text(text.replace(old, new, 1))
+
+          test = Path('scripts/loop-command-handlers-test.mjs')
+          text = test.read_text()
+          anchor = '''{\n  const sessionID = "status-empty"\n'''
+          block = '''{\n  const sessionID = "status-no-now"\n  const h = harness({\n    [sessionID]: {\n      jobs: [loopJob("delayed", {\n        intervalMs: 10_000,\n        lastRunAt: 0,\n        immediate: false,\n        createdAt: new Date(5_000).toISOString(),\n      })],\n    },\n  }, { now: () => 10_000 })\n  await h.handlers.statusLoop("/work", {}, sessionID)\n  assert.match(h.messages[0][2], /due in 5s/, "--no-now status must count the first interval from createdAt")\n}\n\n'''
+          if anchor not in text:
+              raise SystemExit('status-empty anchor not found')
+          test.write_text(text.replace(anchor, block + anchor, 1))
+          PY
+      - name: Commit patch and remove helper
+        run: |
+          rm .github/workflows/patch-stable-status-no-now.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/source/opencode/loop-commands.js scripts/loop-command-handlers-test.mjs .github/workflows/patch-stable-status-no-now.yml
+          git commit -m "fix: report first no-now due time correctly"
+          git push origin HEAD:fix/stable-status-no-now-due
