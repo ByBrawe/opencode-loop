@@ -1,5 +1,6 @@
 name: Prepare 0.5.29 metadata
 
+# Retrigger after the workflow exists on this branch.
 on:
   push:
     branches:
