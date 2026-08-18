@@ -39,6 +39,10 @@ export const OPENCODE_LOOP_V2_COMMANDS = Object.freeze({
     description: "Show the experimental OpenCode 2 Loop command help.",
     template: "OpenCode Loop help command handled locally. Reply exactly: OK.",
   }),
+  "loop-doctor": Object.freeze({
+    description: "Show experimental OpenCode 2 Loop diagnostics.",
+    template: "OpenCode Loop doctor command handled locally. Reply exactly: OK.",
+  }),
 })
 
 export function registerOpenCode2LoopCommands(draft) {
