@@ -2,8 +2,8 @@ import assert from "node:assert/strict"
 import plugin, {
   OPENCODE_LOOP_V2_COMMANDS,
   OPENCODE_LOOP_V2_PLUGIN_ID,
-  parseOpenCode2LoopCommandText,
 } from "../src/source/opencode2/experimental.js"
+import { parseOpenCode2LoopCommandText } from "../src/source/opencode2/commands.js"
 import {
   OPENCODE_LOOP_V2_COMMAND_SOURCE,
   OPENCODE_LOOP_V2_HOST_REQUIREMENTS,
