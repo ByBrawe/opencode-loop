@@ -136,7 +136,9 @@ export function createLoopCommandHandlers(options = {}) {
     }
     await writeState(directory, sessionID, state)
     await toast(client, `Marked ${count} loop job(s) due now.`, count ? "success" : "warning")
-    if (count) await maybeRunDueJobs(directory, client, sessionID)
+    // /loop-now is handled in command.execute.before. Do not start a model turn re-entrantly
+    // inside that hook; schedule the persisted request and let the idle-safe timer dispatch it.
+    if (count) await scheduleDueWork(directory, client, sessionID)
   }
 
   async function doctorLoop(directory, client, sessionID) {
