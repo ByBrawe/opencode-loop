@@ -177,4 +177,91 @@ try {
   }
 }
 
-console.log("OpenCode 2 --no-now first-run contract passed")
+{
+  const nowDirectory = await mkdtemp(path.join(os.tmpdir(), "opencode-loop-v2-run-now-"))
+  const nowSessionID = "ses_v2_run_now"
+  const nowPrompts = []
+  const clock = Date.parse("2026-08-18T00:00:00.000Z")
+  const nowRuntime = createOpenCode2PromptRuntime({
+    prompt: async (request) => { nowPrompts.push(request) },
+    now: () => clock,
+    setTimer: () => ({ unref() {} }),
+    clearTimer: () => {},
+  })
+  const nowFile = path.join(nowDirectory, ".opencode", "opencode-loop", `${nowSessionID}.json`)
+
+  try {
+    await nowRuntime.onEvent({
+      kind: "command",
+      action: "executed",
+      name: "loop",
+      sessionID: nowSessionID,
+      directory: nowDirectory,
+      arguments: "0s --name first --multi --max-runs 1 first naturally due job",
+    })
+    await nowRuntime.onEvent({
+      kind: "command",
+      action: "executed",
+      name: "loop",
+      sessionID: nowSessionID,
+      directory: nowDirectory,
+      arguments: "10m --no-now --name second --multi --max-runs 1 second forced job",
+    })
+    const paused = await nowRuntime.onEvent({
+      kind: "command",
+      action: "executed",
+      name: "loop-pause",
+      sessionID: nowSessionID,
+      directory: nowDirectory,
+      arguments: "second",
+    })
+    assert.equal(paused.count, 1)
+
+    const missing = await nowRuntime.onEvent({
+      kind: "command",
+      action: "executed",
+      name: "loop-now",
+      sessionID: nowSessionID,
+      directory: nowDirectory,
+      arguments: "missing",
+    })
+    assert.equal(missing.count, 0)
+
+    const requested = await nowRuntime.onEvent({
+      kind: "command",
+      action: "executed",
+      name: "loop-now",
+      sessionID: nowSessionID,
+      directory: nowDirectory,
+      arguments: "second",
+    })
+    assert.equal(requested.count, 1)
+    assert.equal(requested.target, "second")
+
+    let state = JSON.parse(await readFile(nowFile, "utf8"))
+    const first = state.jobs.find((job) => job.name === "first")
+    const second = state.jobs.find((job) => job.name === "second")
+    assert.equal(first.runNowRequestedAt, undefined)
+    assert.equal(second.paused, false)
+    assert.equal(second.runNowRequestedAt, clock)
+    const status = formatOpenCode2LoopStatus(state, clock)
+    assert.match(status.text, /second forced job[^\n]*due in every idle[^\n]*run-now/)
+
+    const forcedIdle = await nowRuntime.onEvent({ kind: "session", action: "idle", sessionID: nowSessionID, directory: nowDirectory })
+    assert.equal(forcedIdle.dispatched, true)
+    assert.match(nowPrompts[0].text, /second forced job/)
+    state = JSON.parse(await readFile(nowFile, "utf8"))
+    assert.equal(state.jobs.find((job) => job.name === "second").runNowRequestedAt, undefined)
+    assert.equal(state.jobs.find((job) => job.name === "second").runCount, 1)
+    assert.equal(state.jobs.find((job) => job.name === "first").runCount, 0)
+
+    const naturalIdle = await nowRuntime.onEvent({ kind: "session", action: "idle", sessionID: nowSessionID, directory: nowDirectory })
+    assert.equal(naturalIdle.dispatched, true)
+    assert.match(nowPrompts[1].text, /first naturally due job/)
+  } finally {
+    await nowRuntime.dispose()
+    await rm(nowDirectory, { recursive: true, force: true })
+  }
+}
+
+console.log("OpenCode 2 --no-now and loop-now contracts passed")

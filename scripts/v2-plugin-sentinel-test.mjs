@@ -3,6 +3,7 @@ import plugin, {
   OPENCODE_LOOP_V2_COMMANDS,
   OPENCODE_LOOP_V2_PLUGIN_ID,
 } from "../src/source/opencode2/experimental.js"
+import { parseOpenCode2LoopCommandText } from "../src/source/opencode2/commands.js"
 import {
   OPENCODE_LOOP_V2_COMMAND_SOURCE,
   OPENCODE_LOOP_V2_HOST_REQUIREMENTS,
@@ -28,7 +29,12 @@ assert.deepEqual(Object.keys(OPENCODE_LOOP_V2_COMMANDS), [
   "loop-remove",
   "loop-clear",
   "loop-status",
+  "loop-now",
 ])
+assert.deepEqual(
+  parseOpenCode2LoopCommandText(`${OPENCODE_LOOP_V2_COMMANDS["loop-now"].template}\n\nsecond`),
+  { name: "loop-now", arguments: "second" },
+)
 
 let transforms = 0
 let registered

@@ -63,7 +63,12 @@ function scopeFrom(event) {
   return { directory, sessionID, key: `${directory}\u0000${sessionID}` }
 }
 
+function runNowRequested(job) {
+  return Number(job?.runNowRequestedAt || 0) > 0
+}
+
 function dueAt(job, current) {
+  if (runNowRequested(job)) return current
   const intervalMs = Math.max(0, Number(job?.intervalMs || 0))
   const lastRunAt = Number(job?.lastRunAt || 0)
   if (intervalMs === 0) return current
@@ -185,12 +190,14 @@ export function createOpenCode2PromptRuntime(options = {}) {
   async function runDueAction(scope) {
     const state = await readState(scope.directory, scope.sessionID)
     const current = now()
-    const job = (state.jobs || []).find((candidate) => eligibleRuntimeJob(candidate) && dueAt(candidate, current) <= current)
+    const due = (state.jobs || []).filter((candidate) => eligibleRuntimeJob(candidate) && dueAt(candidate, current) <= current)
+    const job = due.find(runNowRequested) || due[0]
     if (!job) {
       await scheduleScope(scope)
       return { handled: true, dispatched: false }
     }
 
+    delete job.runNowRequestedAt
     job.lastRunAt = current
     job.runCount = (job.runCount || 0) + 1
     if (job.maxRuns > 0 && job.runCount >= job.maxRuns) job.enabled = false
@@ -237,6 +244,27 @@ export function createOpenCode2PromptRuntime(options = {}) {
       const request = { sessionID: scope.sessionID, text: status.text, noReply: true }
       await options.prompt(request)
       return { handled: true, accepted: true, status, request }
+    })
+  }
+
+  async function runPromptLoopsNow(event) {
+    const scope = scopeFrom(event)
+    if (!scope) return { handled: false, reason: "missing-scope" }
+    return await enqueueScope(scope, async () => {
+      const target = commandTarget(event)
+      const state = await readState(scope.directory, scope.sessionID)
+      const requestedAt = Math.max(1, now())
+      let count = 0
+      state.jobs = (state.jobs || []).map((job, index) => {
+        if (!matchJob(job, target, index)) return job
+        const resumed = { ...job, paused: false }
+        if (!eligibleRuntimeJob(resumed)) return job
+        count += 1
+        return { ...resumed, runNowRequestedAt: requestedAt }
+      })
+      await writeState(scope.directory, scope.sessionID, state)
+      await scheduleScope(scope)
+      return { handled: true, accepted: true, count, target, requestedAt: count ? requestedAt : undefined }
     })
   }
 
@@ -293,6 +321,7 @@ export function createOpenCode2PromptRuntime(options = {}) {
       if (scope) idle.set(scope.key, false)
       if (event?.name === "loop") return addPromptLoop(event)
       if (event?.name === "loop-status") return statusPromptLoops(event)
+      if (event?.name === "loop-now") return runPromptLoopsNow(event)
       if (event?.name === "loop-pause") return updatePromptLoops(event, (job) => ({ ...job, paused: true }))
       if (event?.name === "loop-resume") return updatePromptLoops(event, (job) => ({ ...job, paused: false, lastRunAt: 0 }))
       if (["loop-stop", "loop-remove"].includes(event?.name)) return stopPromptLoops(event)
@@ -342,6 +371,7 @@ export function createOpenCode2PromptRuntime(options = {}) {
     onEvent,
     addPromptLoop,
     statusPromptLoops,
+    runPromptLoopsNow,
     updatePromptLoops,
     stopPromptLoops,
     runIdlePrompt,

@@ -2,6 +2,7 @@ import { durationToText } from "../core/args.js"
 import { goalStatusText, isGoalJob, jobLabel } from "../core/jobs.js"
 
 function dueAt(job, current) {
+  if (Number(job?.runNowRequestedAt || 0) > 0) return current
   const intervalMs = Math.max(0, Number(job?.intervalMs || 0))
   const lastRunAt = Number(job?.lastRunAt || 0)
   if (intervalMs === 0) return current
@@ -21,6 +22,7 @@ export function formatOpenCode2LoopStatus(state, current = Date.now()) {
         const flags = [
           isGoalJob(job) ? `goal:${goalStatusText(job)}` : undefined,
           job.paused ? "paused" : "active",
+          Number(job.runNowRequestedAt || 0) > 0 ? "run-now" : undefined,
           job.safe ? "safe" : undefined,
           job.askNever ? "ask-never" : undefined,
           job.noOverlap ? "no-overlap" : undefined,
