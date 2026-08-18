@@ -358,9 +358,12 @@ async function testActionRoutingAndSafety() {
     await h.command("loop-clear")
     await h.command("loop-shell", "0s --safe rm -r -f ./important")
     await h.command("loop-now", "shell")
-    const separateFlagsState = await h.readState()
+    const separateFlagsState = await waitForValue(async () => {
+      const candidate = await h.readState()
+      return candidate.jobs[0]?.lastFailureReason === "safe_shell_blocked" ? candidate : undefined
+    }, 2_000)
     assert.equal(h.records.shells.length, 0)
-    assert.equal(separateFlagsState.jobs[0].lastFailureReason, "safe_shell_blocked", "separate rm -r -f flags must be blocked")
+    assert.equal(separateFlagsState?.jobs[0]?.lastFailureReason, "safe_shell_blocked", "separate rm -r -f flags must be blocked")
   } finally {
     await h.cleanup()
   }

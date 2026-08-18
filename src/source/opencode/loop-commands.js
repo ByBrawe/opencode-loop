@@ -89,7 +89,18 @@ export function createLoopCommandHandlers(options = {}) {
     const state = await readState(directory, sessionID)
     const jobs = state.jobs || []
     const lines = jobs.length ? jobs.map((job, index) => {
-      const dueIn = Number(job.runNowRequestedAt || 0) > 0 ? 0 : Math.max(0, job.intervalMs - (now() - (job.lastRunAt || 0)))
+      const current = now()
+      const intervalMs = Number(job.intervalMs || 0)
+      const lastRunAt = Number(job.lastRunAt || 0)
+      const createdAt = Date.parse(job.createdAt || "")
+      const dueAt = Number(job.runNowRequestedAt || 0) > 0
+        ? current
+        : lastRunAt > 0
+          ? lastRunAt + intervalMs
+          : job.immediate === false && Number.isFinite(createdAt)
+            ? createdAt + intervalMs
+            : current
+      const dueIn = Math.max(0, dueAt - current)
       const flags = [isGoalJob(job) ? `goal:${goalStatusText(job)}` : undefined, job.paused ? "paused" : "active", Number(job.runNowRequestedAt || 0) > 0 ? "run-now" : undefined, job.safe ? "safe" : undefined, job.askNever ? "ask-never" : undefined, job.noOverlap ? "no-overlap" : undefined, job.checkpointOnly ? "checkpoint-only" : undefined, job.gitCheckpoint ? "git-checkpoint" : undefined].filter(Boolean).join(",")
       return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${jobLabel(job)} | runs=${job.runCount || 0} | failures=${job.failureCount || 0} | due in ${durationToText(dueIn)} | ${flags}`
     }) : ["No active loop jobs."]
