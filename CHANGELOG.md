@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.29
+
+- Fix `--no-now` first-run semantics end to end: delayed jobs now wait until `createdAt + interval`, and stable `/loop-status` reports that first due time correctly instead of showing the job as immediately due.
+- Add experimental OpenCode 2 parity for native `/loop-status` and target-specific `/loop-now`, including real host command registration, idle-safe run-now persistence, target priority, `noReply` status output, and deterministic lifecycle coverage.
+- Make stable `/loop-now <target>` truly target-specific across busy retries and avoid unrelated due jobs; persist a one-shot run-now marker, prioritize the requested job, and consume it only when dispatch begins.
+- Defer stable `/loop-now` execution to the idle-safe scheduler instead of dispatching re-entrantly from `command.execute.before`, fixing a Windows real-host race where the command acknowledgement turn could supersede the requested autonomous prompt.
+- Strengthen release confidence with Ubuntu/Windows real-host target canaries, generated-bundle synchronization, Bundle Gate coverage for host-canary changes, and bounded scheduler-state waits in comprehensive Windows regressions.
+
 ## 0.5.28
 
 - Preserve experimental `/loop-goal` across ordinary queued user steering: preempt only the in-flight Goal turn, run the foreground user turn first, keep the Goal active/unpaused, then resume autonomous Goal work. Gate heartbeat, due, and watchdog dispatch while steering is pending, reject stale Goal lifecycle mutations, and cover the behavior with real OpenCode host canaries on Ubuntu and Windows for both source and freshly rebuilt bundles.
