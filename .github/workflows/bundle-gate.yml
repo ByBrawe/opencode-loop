@@ -45,6 +45,14 @@ jobs:
       - name: Build a single-file stable plugin from source
         run: npm run build:plugin
 
+      - name: Upload generated stable plugin
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: stable-plugin-source-build
+          path: src/index.js
+          if-no-files-found: error
+
       - name: Verify generated entry syntax and import
         run: |
           node --check src/index.js
