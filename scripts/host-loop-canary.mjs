@@ -226,7 +226,8 @@ async function waitFor(predicate, description, diagnostics, timeoutMs = 45_000) 
     if (await predicate()) return
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
-  throw new Error(`timed out waiting for ${description}\n${diagnostics()}`)
+  const detail = typeof diagnostics === "function" ? await diagnostics() : diagnostics
+  throw new Error(`timed out waiting for ${description}\n${detail}`)
 }
 
 function isFetchTimeout(error) {
@@ -339,8 +340,10 @@ async function main() {
     const stateFile = path.join(workspace, ".opencode", "opencode-loop", `${sessionID}.json`)
     const diagnostics = async () => {
       let state = "missing"
+      let loopLog = "missing"
       try { state = await readFile(stateFile, "utf8") } catch {}
-      return `provider=${JSON.stringify(provider.stats)}\ncommandError=${String(commandError ?? "none")}\nstate=${state}\nserver log:\n${serverLog}`
+      try { loopLog = await readFile(path.join(workspace, ".opencode", "opencode-loop", "loop.log"), "utf8") } catch {}
+      return `provider=${JSON.stringify(provider.stats)}\ncommandError=${String(commandError ?? "none")}\nstate=${state}\nloop log:\n${loopLog}\nserver log:\n${serverLog}`
     }
 
     await waitFor(() => provider.stats.loopRequests >= 3, "three real autonomous Loop turns", () => `provider=${JSON.stringify(provider.stats)}\nserver log:\n${serverLog}`)
@@ -370,7 +373,7 @@ async function main() {
 
     provider.stats.runNowSequence.length = 0
     await sendCommand("loop-now", "target")
-    await waitFor(() => provider.stats.runNowSequence.length >= 1, "targeted real-host loop-now turn", () => `provider=${JSON.stringify(provider.stats)}\nserver log:\n${serverLog}`)
+    await waitFor(() => provider.stats.runNowSequence.length >= 1, "targeted real-host loop-now turn", diagnostics)
     await new Promise((resolve) => setTimeout(resolve, 1_500))
     assert.deepEqual(provider.stats.runNowSequence, ["target"], `loop-now target must not run the earlier delayed natural job\n${await diagnostics()}`)
 
