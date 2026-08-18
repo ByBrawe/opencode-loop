@@ -70,7 +70,7 @@ jobs:
               node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(value.id!=="bybrawe.opencode-loop.v2.experimental" || value.activated!==true || value.commandTransform!==true || value.eventSubscribe!==true || value.sessionPrompt!==true || value.sessionCommand!==true || value.commandFieldProbe?.matched!==true) process.exit(1)' "$OPENCODE_LOOP_V2_MARKER"
               opencode2 api get /api/command -H "x-opencode-directory: $OPENCODE_LOOP_V2_PROJECT" > "$RUNNER_TEMP/opencode2-real-command-final.json"
               cat "$RUNNER_TEMP/opencode2-real-command-final.json"
-              node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); const data=Array.isArray(value?.data)?value.data:Array.isArray(value)?value:[]; const names=new Set(data.map((item)=>item?.name)); for (const required of ["loop-status","loop-now","loop-export"]) if(!names.has(required)) process.exit(1)' "$RUNNER_TEMP/opencode2-real-command-final.json"
+              node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); const data=Array.isArray(value?.data)?value.data:Array.isArray(value)?value:[]; const names=new Set(data.map((item)=>item?.name)); for (const required of ["loop-status","loop-now","loop-export","loop-help"]) if(!names.has(required)) process.exit(1)' "$RUNNER_TEMP/opencode2-real-command-final.json"
               exit 0
             fi
             sleep 0.2
