@@ -9,6 +9,10 @@ permissions:
   contents: write
   id-token: write
 
+concurrency:
+  group: npm-release
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -28,8 +32,18 @@ jobs:
 
       - uses: actions/checkout@v6
         with:
-          ref: main
+          ref: ${{ github.sha }}
           fetch-depth: 0
+
+      - name: Verify release source belongs to main
+        shell: bash
+        run: |
+          git fetch origin main --no-tags
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Release commit $GITHUB_SHA is not in main history." >&2
+            exit 1
+          fi
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - uses: actions/setup-node@v6
         with:
@@ -84,7 +98,8 @@ jobs:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
           TAG="v$RELEASE_VERSION"
-          COMMIT_SHA="$(git rev-parse HEAD)"
+          COMMIT_SHA="$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$COMMIT_SHA"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" "$COMMIT_SHA" -m "Release $TAG"
