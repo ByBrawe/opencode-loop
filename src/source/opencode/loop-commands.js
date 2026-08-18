@@ -89,8 +89,8 @@ export function createLoopCommandHandlers(options = {}) {
     const state = await readState(directory, sessionID)
     const jobs = state.jobs || []
     const lines = jobs.length ? jobs.map((job, index) => {
-      const dueIn = Math.max(0, job.intervalMs - (now() - (job.lastRunAt || 0)))
-      const flags = [isGoalJob(job) ? `goal:${goalStatusText(job)}` : undefined, job.paused ? "paused" : "active", job.safe ? "safe" : undefined, job.askNever ? "ask-never" : undefined, job.noOverlap ? "no-overlap" : undefined, job.checkpointOnly ? "checkpoint-only" : undefined, job.gitCheckpoint ? "git-checkpoint" : undefined].filter(Boolean).join(",")
+      const dueIn = Number(job.runNowRequestedAt || 0) > 0 ? 0 : Math.max(0, job.intervalMs - (now() - (job.lastRunAt || 0)))
+      const flags = [isGoalJob(job) ? `goal:${goalStatusText(job)}` : undefined, job.paused ? "paused" : "active", Number(job.runNowRequestedAt || 0) > 0 ? "run-now" : undefined, job.safe ? "safe" : undefined, job.askNever ? "ask-never" : undefined, job.noOverlap ? "no-overlap" : undefined, job.checkpointOnly ? "checkpoint-only" : undefined, job.gitCheckpoint ? "git-checkpoint" : undefined].filter(Boolean).join(",")
       return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${jobLabel(job)} | runs=${job.runCount || 0} | failures=${job.failureCount || 0} | due in ${durationToText(dueIn)} | ${flags}`
     }) : ["No active loop jobs."]
     await toast(client, jobs.length ? `${jobs.length} loop job(s).` : "No active loop jobs.", jobs.length ? "info" : "warning")
@@ -125,11 +125,18 @@ export function createLoopCommandHandlers(options = {}) {
   async function runNow(directory, client, sessionID, args) {
     const target = String(args || "").trim() || "all"
     const state = await readState(directory, sessionID)
+    const requestedAt = Math.max(1, Number(now()) || Date.now())
     let count = 0
-    for (const [index, job] of (state.jobs || []).entries()) if (matchJob(job, target, index)) { job.lastRunAt = 0; job.paused = false; count++ }
+    for (const [index, job] of (state.jobs || []).entries()) {
+      if (!matchJob(job, target, index)) continue
+      job.lastRunAt = 0
+      job.paused = false
+      job.runNowRequestedAt = requestedAt
+      count += 1
+    }
     await writeState(directory, sessionID, state)
     await toast(client, `Marked ${count} loop job(s) due now.`, count ? "success" : "warning")
-    await maybeRunDueJobs(directory, client, sessionID, { force: true })
+    if (count) await maybeRunDueJobs(directory, client, sessionID)
   }
 
   async function doctorLoop(directory, client, sessionID) {
