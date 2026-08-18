@@ -3,6 +3,10 @@ export const OPENCODE_LOOP_V2_COMMANDS = Object.freeze({
     description: "Start an OpenCode auto-continue loop. Usage: /loop 5m <task>",
     template: "OpenCode Loop local command handled. Reply exactly: OK.",
   }),
+  "loop-shell": Object.freeze({
+    description: "Schedule shell work when the experimental OpenCode 2 plugin host exposes session.shell.",
+    template: "OpenCode Loop shell command handled locally. Reply exactly: OK.",
+  }),
   "loop-pause": Object.freeze({
     description: "Pause OpenCode Loop jobs.",
     template: "OpenCode Loop pause command handled locally. Reply exactly: OK.",
