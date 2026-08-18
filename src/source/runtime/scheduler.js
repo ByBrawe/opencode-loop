@@ -13,6 +13,7 @@ export function jobDueAt(job, current = now()) {
   if (isGoalJob(job) && ["completed", "blocked", "cleared"].includes(job.goalStatus)) return Infinity
   if (!job.enabled || job.paused) return Infinity
   if (job.maxRuns > 0 && (job.runCount || 0) >= job.maxRuns) return Infinity
+  if (Number(job.runNowRequestedAt || 0) > 0) return current
   if (job.watchPaths?.length) return Infinity
   const created = Date.parse(job.createdAt || "")
   if (job.maxRuntimeMs > 0 && Number.isFinite(created) && current - created >= job.maxRuntimeMs) return current
@@ -76,6 +77,70 @@ export function createSchedulerRuntime(options = {}) {
             await options.maybeRunDueJobs?.(info.directory, info.client, sessionID, { heartbeat: true })
           })
           .catch((error) => appendLog(info.directory, "heartbeat-error", { sessionID, error: errorMessage(error) }).catch(() => {}))
+      }
+      stopHeartbeatIfIdle()
+    }, heartbeatMs)
+  }
+
+  function rememberSession(directory, client, sessionID) {
+    if (!sessionID) return
+    knownSessions.set(sessionID, { directory, client, seenAt: clock() })
+    startHeartbeat()
+  }
+
+  function cancelIdleWork(sessionID) {
+    const timer = idleTimers.get(sessionID)
+    if (timer) clearTimeoutFn(timer)
+    idleTimers.delete(sessionID)
+  }
+
+  function cancelDueWork(sessionID) {
+    const timer = dueTimers.get(sessionID)
+    if (timer) clearTimeoutFn(timer)
+    dueTimers.delete(sessionID)
+  }
+
+  function scheduleIdleWork(directory, client, sessionID) {
+    cancelIdleWork(sessionID)
+    const timer = setTimeoutFn(() => {
+      idleTimers.delete(sessionID)
+      Promise.resolve()
+        .then(async () => {
+          if (!await options.sessionIsIdle?.(client, sessionID, directory)) {
+            await scheduleDueWork(directory, client, sessionID, busyRetryMs)
+            return
+          }
+          await options.finalizeActiveRun?.(directory, client, sessionID)
+          if (!await options.sessionIsIdle?.(client, sessionID, directory)) {
+            await scheduleDueWork(directory, client, sessionID, busyRetryMs)
+            return
+          }
+          await options.maybeRunDueJobs?.(directory, client, sessionID)
+        })
+        .catch((error) => {
+          toast(client, `Loop idle handler failed: ${errorMessage(error)}`, "error").catch(() => {})
+          appendLog(directory, "idle-error", { sessionID, error: errorMessage(error) }).catch(() => {})
+        })
+    }, idleDebounceMs)
+    idleTimers.set(sessionID, timer)
+  }
+
+  async function startWatchdog(directory, client, sessionID) {
+    if (watchdogTimers.has(sessionID)) return
+    const timer = setIntervalFn(() => {
+      Promise.resolve()
+        .then(async () => {
+          const state = await readStateFn(directory, sessionID)
+          const delay = nextDueDelay(state, clock())
+          const hasJobs = (state.jobs || []).some((job) => job.enabled !== false && !job.paused && (!isGoalJob(job) || !["completed", "blocked", "cleared"].includes(job.goalStatus)))
+          if (!hasJobs || !Number.isFinite(delay)) {
+            stopWatchdog(sessionID)
+            return
+          }
+          if (delay <= 0) await options.maybeRunDueJobs?.(directory, client, sessionID)
+          else await scheduleDueWork(directory, client, sessionID)
+        })
+        .catch((error) => appendLog(info.directory, "heartbeat-error", { sessionID, error: errorMessage(error) }).catch(() => {}))
       }
       stopHeartbeatIfIdle()
     }, heartbeatMs)
