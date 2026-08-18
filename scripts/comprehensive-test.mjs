@@ -479,6 +479,9 @@ async function testStaleBusyUsesCompletedAssistantTail() {
       { info: { id: "usr_tail", sessionID: h.sessionID, role: "user", time: { created: completedAt - 2 } }, parts: [] },
       { info: { id: "asst_tail", sessionID: h.sessionID, role: "assistant", time: { created: completedAt - 1, completed: completedAt } }, parts: [] },
     )
+    // Let the short busy-status cache expire so the scheduler re-reads live host state
+    // and can reconcile the completed assistant tail instead of trusting cached busy.
+    await delay(1_700)
     await h.command("loop-now", "stale-complete")
     const state = await h.readState()
     assert.ok(state.jobs[0].lastFinishedAt > 0, "a completed assistant tail must override a stale busy status")
