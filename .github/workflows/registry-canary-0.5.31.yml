@@ -1,0 +1,81 @@
+name: Registry canary 0.5.31
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Published installer + Goals companion
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - name: Verify public package and real companion behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          LOOP_VERSION="0.5.31"
+          GOAL_VERSION="1.3.17"
+          LOOP_PACKAGE="@bybrawe/opencode-loop@$LOOP_VERSION"
+          REGISTRY="https://registry.npmjs.org"
+
+          test "$(npm view "$LOOP_PACKAGE" version --registry="$REGISTRY")" = "$LOOP_VERSION"
+          LOOP_BIN="$(npm view "$LOOP_PACKAGE" bin.opencode-loop --registry="$REGISTRY")"
+          test "$LOOP_BIN" = "scripts/install-with-goals.mjs" -o "$LOOP_BIN" = "./scripts/install-with-goals.mjs"
+          DAEMON_BIN="$(npm view "$LOOP_PACKAGE" bin.opencode-loopd --registry="$REGISTRY")"
+          test "$DAEMON_BIN" = "scripts/loopd.mjs" -o "$DAEMON_BIN" = "./scripts/loopd.mjs"
+
+          WORK="$(mktemp -d)"
+          trap 'rm -rf "$WORK"' EXIT
+          CONFIG="$WORK/config"
+          mkdir -p "$CONFIG"
+          cd "$WORK"
+
+          TARBALL="$(npm pack --silent --ignore-scripts "$LOOP_PACKAGE" --registry="$REGISTRY")"
+          tar -tzf "$TARBALL" > tar-contents.txt
+          grep -Fxq 'package/scripts/install-with-goals.mjs' tar-contents.txt
+          grep -Fxq 'package/scripts/goal-companion-test.mjs' tar-contents.txt
+
+          export OPENCODE_CONFIG_DIR="$CONFIG"
+          test "$(npm exec --yes --package="$LOOP_PACKAGE" -- opencode-loop --version)" = "$LOOP_VERSION"
+
+          npm exec --yes --package="$LOOP_PACKAGE" -- opencode-loop --with-goals
+
+          CONFIG_FILE="$(find "$CONFIG" -maxdepth 1 -type f \( -name 'opencode.json' -o -name 'opencode.jsonc' -o -name 'config.json' -o -name 'config.jsonc' \) -print -quit)"
+          test -n "$CONFIG_FILE"
+          grep -Fq "@bybrawe/opencode-loop@$LOOP_VERSION" "$CONFIG_FILE"
+          grep -Fq "@bybrawe/opencode-goal@$GOAL_VERSION" "$CONFIG_FILE"
+          test -f "$CONFIG/commands/goal.md"
+          grep -Fq '<!-- managed-by:@bybrawe/opencode-goal -->' "$CONFIG/commands/goal.md"
+          test -f "$CONFIG/commands/loop-help.md"
+
+          # Prove --loop-only is a real opt-out: downgrade the Goal pin locally,
+          # run Loop-only update, and require the old Goal pin to remain untouched.
+          node --input-type=module - "$CONFIG_FILE" "$GOAL_VERSION" <<'NODE'
+          import fs from "node:fs"
+          const [file, version] = process.argv.slice(2)
+          const raw = fs.readFileSync(file, "utf8")
+          const next = raw.replace(`@bybrawe/opencode-goal@${version}`, "@bybrawe/opencode-goal@1.3.16")
+          if (next === raw) throw new Error("could not seed old Goal pin")
+          fs.writeFileSync(file, next)
+          NODE
+          npm exec --yes --package="$LOOP_PACKAGE" -- opencode-loop --loop-only
+          grep -Fq '@bybrawe/opencode-goal@1.3.16' "$CONFIG_FILE"
+
+          # A normal Loop update must detect that managed Goals installation and
+          # delegate to Goals' latest installer, restoring the current stable pin.
+          npm exec --yes --package="$LOOP_PACKAGE" -- opencode-loop
+          grep -Fq "@bybrawe/opencode-goal@$GOAL_VERSION" "$CONFIG_FILE"
+          if grep -Fq '@bybrawe/opencode-goal@1.3.16' "$CONFIG_FILE"; then
+            echo "stale Goal pin remained after normal Loop companion refresh" >&2
+            exit 1
+          fi
+
+          echo "Verified public Loop $LOOP_VERSION installer, combined install, --loop-only opt-out, and automatic Goals $GOAL_VERSION refresh."
