@@ -1,5 +1,6 @@
 import { inspectOpenCode2Context } from "./capabilities.js"
 import { OPENCODE_LOOP_V2_COMMANDS, registerOpenCode2LoopCommands } from "./commands.js"
+import { createOpenCode2DiagnosticsRuntime } from "./diagnostics.js"
 import { createOpenCode2PromptRuntime } from "./prompt-runtime.js"
 import { createOpenCode2RuntimeAdapter } from "./runtime-adapter.js"
 
@@ -21,11 +22,19 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
     }
 
     let promptRuntime
-    const onRuntimeEvent = async (event) => promptRuntime?.onEvent(event)
+    let diagnosticsRuntime
+    const onRuntimeEvent = async (event) => {
+      const promptResult = await promptRuntime?.onEvent(event)
+      if (promptResult?.handled) return promptResult
+      return await diagnosticsRuntime?.onEvent(event) ?? promptResult
+    }
     const runtime = createOpenCode2RuntimeAdapter(ctx, { onEvent: onRuntimeEvent })
     promptRuntime = createOpenCode2PromptRuntime({
       prompt: (request) => runtime.prompt(request),
       command: capabilities.sessionCommand ? (request) => runtime.command(request) : undefined,
+    })
+    diagnosticsRuntime = createOpenCode2DiagnosticsRuntime({
+      prompt: (request) => runtime.prompt(request),
     })
 
     try {
