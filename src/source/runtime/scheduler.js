@@ -13,6 +13,7 @@ export function jobDueAt(job, current = now()) {
   if (isGoalJob(job) && ["completed", "blocked", "cleared"].includes(job.goalStatus)) return Infinity
   if (!job.enabled || job.paused) return Infinity
   if (job.maxRuns > 0 && (job.runCount || 0) >= job.maxRuns) return Infinity
+  if (Number(job.runNowRequestedAt || 0) > 0) return current
   if (job.watchPaths?.length) return Infinity
   const created = Date.parse(job.createdAt || "")
   if (job.maxRuntimeMs > 0 && Number.isFinite(created) && current - created >= job.maxRuntimeMs) return current
