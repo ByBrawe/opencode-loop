@@ -1,3 +1,5 @@
+import { promises as fs } from "node:fs"
+import path from "node:path"
 import { readState as defaultReadState, stateDir } from "../core/state.js"
 
 export const OPENCODE_LOOP_V2_HELP_TEXT = [
@@ -11,6 +13,7 @@ export const OPENCODE_LOOP_V2_HELP_TEXT = [
   "/loop-stop [target] | /loop-remove [target]       remove matching jobs",
   "/loop-clear                                       clear all jobs",
   "/loop-export                                      export current session Loop state as JSON",
+  "/loop-logs                                        show the latest V2 runtime events",
   "/loop-help                                        show this experimental V2 help",
   "/loop-doctor                                      show local V2 diagnostics",
   "Experimental V2 does not yet claim full stable-plugin parity; unsupported options fail closed.",
@@ -26,6 +29,7 @@ function scopeFrom(event) {
 export function createOpenCode2DiagnosticsRuntime(options = {}) {
   if (typeof options.prompt !== "function") throw new TypeError("V2 diagnostics runtime requires prompt()")
   const readState = typeof options.readState === "function" ? options.readState : defaultReadState
+  const readFile = typeof options.readFile === "function" ? options.readFile : (...args) => fs.readFile(...args)
   const runtimeVersion = options.runtimeVersion || process.version
   const runtimePlatform = options.runtimePlatform || process.platform
 
@@ -67,14 +71,33 @@ export function createOpenCode2DiagnosticsRuntime(options = {}) {
     return { handled: true, accepted: true, state, request }
   }
 
+  async function logs(event) {
+    const scope = scopeFrom(event)
+    if (!scope) return { handled: false, reason: "missing-scope" }
+    let text = "No OpenCode 2 Loop log found."
+    try {
+      const raw = await readFile(path.join(stateDir(scope.directory), "loop.log"), "utf8")
+      const lines = String(raw || "")
+        .trim()
+        .split(/\r?\n/)
+        .filter((line) => line.includes('"v2":true'))
+        .slice(-80)
+      if (lines.length) text = lines.join("\n")
+    } catch {}
+    const request = { sessionID: scope.sessionID, text: `OpenCode Loop V2 logs:\n${text}`, noReply: true }
+    await options.prompt(request)
+    return { handled: true, accepted: true, request }
+  }
+
   async function onEvent(event) {
     if (event?.kind === "command" && event?.action === "executed") {
       if (event?.name === "loop-export") return await exportState(event)
       if (event?.name === "loop-help") return await help(event)
       if (event?.name === "loop-doctor") return await doctor(event)
+      if (event?.name === "loop-logs") return await logs(event)
     }
     return { handled: false }
   }
 
-  return Object.freeze({ onEvent, exportState, help, doctor })
+  return Object.freeze({ onEvent, exportState, help, doctor, logs })
 }
