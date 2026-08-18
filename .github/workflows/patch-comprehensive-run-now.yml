@@ -1,6 +1,6 @@
 name: Patch comprehensive run-now timing
 
-# Second push triggers this one-shot helper after the workflow exists on the branch.
+# Retrigger the one-shot helper after the workflow is present on the branch.
 on:
   push:
     branches:
