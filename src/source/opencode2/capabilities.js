@@ -11,7 +11,10 @@ export const OPENCODE_LOOP_V2_HOST_REQUIREMENTS = Object.freeze([
   "session.prompt",
 ])
 
-export const OPENCODE_LOOP_V2_RUNTIME_IMPLEMENTED = false
+// Prompt/command scheduling is implemented and proven by the real-host adapter
+// canary. Optional features such as native shell scheduling are reported from
+// the host capability snapshot instead of making the whole runtime look absent.
+export const OPENCODE_LOOP_V2_RUNTIME_IMPLEMENTED = true
 
 export const OPENCODE_LOOP_V2_RUNTIME_REQUIREMENTS = Object.freeze([
   ...OPENCODE_LOOP_V2_HOST_REQUIREMENTS,
