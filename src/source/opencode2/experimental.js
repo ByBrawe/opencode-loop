@@ -1,6 +1,7 @@
 import { inspectOpenCode2Context } from "./capabilities.js"
 import { OPENCODE_LOOP_V2_COMMANDS, registerOpenCode2LoopCommands } from "./commands.js"
 import { createOpenCode2DiagnosticsRuntime } from "./diagnostics.js"
+import { createOpenCode2LogRuntime } from "./logging.js"
 import { createOpenCode2PromptRuntime } from "./prompt-runtime.js"
 import { createOpenCode2RuntimeAdapter } from "./runtime-adapter.js"
 
@@ -23,8 +24,10 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
 
     let promptRuntime
     let diagnosticsRuntime
+    const logRuntime = createOpenCode2LogRuntime()
     const onRuntimeEvent = async (event) => {
       const promptResult = await promptRuntime?.onEvent(event)
+      await logRuntime.record(event, promptResult)
       if (promptResult?.handled) return promptResult
       return await diagnosticsRuntime?.onEvent(event) ?? promptResult
     }
