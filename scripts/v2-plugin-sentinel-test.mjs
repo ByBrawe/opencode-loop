@@ -28,6 +28,7 @@ assert.deepEqual(Object.keys(OPENCODE_LOOP_V2_COMMANDS), [
   "loop-remove",
   "loop-clear",
   "loop-status",
+  "loop-now",
 ])
 
 let transforms = 0
