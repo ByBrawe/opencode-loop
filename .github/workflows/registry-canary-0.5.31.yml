@@ -50,7 +50,15 @@ jobs:
 
           CONFIG_FILE="$(find "$CONFIG" -maxdepth 1 -type f \( -name 'opencode.json' -o -name 'opencode.jsonc' -o -name 'config.json' -o -name 'config.jsonc' \) -print -quit)"
           test -n "$CONFIG_FILE"
-          grep -Fq "@bybrawe/opencode-loop@$LOOP_VERSION" "$CONFIG_FILE"
+
+          # Empty OpenCode configs intentionally receive Loop as a local plugin.
+          # Existing npm-configured Loop installations instead keep an exact
+          # package pin. Either representation is a valid successful install.
+          if ! grep -Fq "@bybrawe/opencode-loop@$LOOP_VERSION" "$CONFIG_FILE"; then
+            test -f "$CONFIG/plugins/opencode-loop.ts"
+            test ! -f "$CONFIG/plugins/opencode-loop.js"
+          fi
+
           grep -Fq "@bybrawe/opencode-goal@$GOAL_VERSION" "$CONFIG_FILE"
           test -f "$CONFIG/commands/goal.md"
           grep -Fq '<!-- managed-by:@bybrawe/opencode-goal -->' "$CONFIG/commands/goal.md"
