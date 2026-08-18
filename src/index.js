@@ -1751,7 +1751,7 @@ function createLoopCommandHandlers(options = {}) {
     await writeState2(directory, sessionID, state);
     await toast2(client, `Marked ${count} loop job(s) due now.`, count ? "success" : "warning");
     if (count)
-      await maybeRunDueJobs(directory, client, sessionID);
+      await scheduleDueWork(directory, client, sessionID);
   }
   async function doctorLoop(directory, client, sessionID) {
     const state = await readState2(directory, sessionID);
