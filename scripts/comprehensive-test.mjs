@@ -138,6 +138,8 @@ async function createHarness(options = {}) {
     messageHistory,
     async command(command, argumentsText = "", output = { parts: [] }) {
       await hooks["command.execute.before"]({ command, sessionID, arguments: argumentsText }, output)
+      // /loop-now persists a request and dispatches through the scheduler's 250ms idle-safe timer.
+      if (command === "loop-now") await delay(400)
       return output
     },
     async commandEvent(command, argumentsText = "", messageID = `msg_${Date.now()}_${Math.random()}`) {
