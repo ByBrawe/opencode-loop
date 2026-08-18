@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "src/source/**"
+      - "scripts/host-*-canary.mjs"
       - "package.json"
       - ".github/workflows/bundle-gate.yml"
   workflow_dispatch:
