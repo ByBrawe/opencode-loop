@@ -27,6 +27,10 @@ export const OPENCODE_LOOP_V2_COMMANDS = Object.freeze({
     description: "Show OpenCode Loop status for the current session.",
     template: "OpenCode Loop status command handled locally. Reply exactly: OK.",
   }),
+  "loop-now": Object.freeze({
+    description: "Run matching OpenCode Loop jobs on the next idle boundary.",
+    template: "OpenCode Loop run-now command handled locally. Reply exactly: OK.",
+  }),
 })
 
 export function registerOpenCode2LoopCommands(draft) {
