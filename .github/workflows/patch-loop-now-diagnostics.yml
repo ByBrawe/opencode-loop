@@ -1,6 +1,6 @@
 name: Patch loop-now canary diagnostics
 
-# Second push triggers the one-shot helper after the workflow exists on the branch.
+# Retrigger the one-shot helper after the workflow is present on the branch.
 on:
   push:
     branches:
