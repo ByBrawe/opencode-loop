@@ -41,12 +41,18 @@ jobs:
           import fs from "node:fs"
 
           const version = process.env.RELEASE_VERSION
-          for (const file of ["package.json", "package-lock.json"]) {
-            const data = JSON.parse(fs.readFileSync(file, "utf8"))
-            data.version = version
-            if (file === "package-lock.json") data.packages[""].version = version
-            fs.writeFileSync(file, JSON.stringify(data, null, 2) + "\n")
-          }
+          const packagePath = "package.json"
+          const packageJSON = JSON.parse(fs.readFileSync(packagePath, "utf8"))
+          packageJSON.version = version
+          fs.writeFileSync(packagePath, JSON.stringify(packageJSON, null, 2) + "\n")
+
+          const lockPath = "package-lock.json"
+          const packageLock = JSON.parse(fs.readFileSync(lockPath, "utf8"))
+          packageLock.version = version
+          if (!packageLock.packages?.[""]) throw new Error("package-lock root package metadata not found")
+          packageLock.packages[""].version = version
+          packageLock.packages[""].bin = packageJSON.bin
+          fs.writeFileSync(lockPath, JSON.stringify(packageLock, null, 2) + "\n")
 
           const readmePath = "README.md"
           const readme = fs.readFileSync(readmePath, "utf8")
