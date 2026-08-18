@@ -115,6 +115,12 @@ const dueState = {
 }
 assert.deepEqual(executor.dueJobs(dueState).map((job) => job.id), ["watch-yes", "interval"])
 assert.deepEqual(executor.dueJobs(dueState, true).map((job) => job.id), ["watch-no", "watch-yes", "interval"])
+assert.deepEqual(executor.dueJobs({
+  jobs: [
+    { id: "natural", enabled: true, paused: false, intervalMs: 0, runCount: 0, maxRuns: 0 },
+    { id: "target", enabled: true, paused: false, intervalMs: 600_000, lastRunAt: clock, runCount: 0, maxRuns: 0, runNowRequestedAt: clock },
+  ],
+}).map((job) => job.id), ["target", "natural"], "run-now target must outrank an earlier naturally-due job")
 
 const client = {
   session: {
@@ -198,6 +204,57 @@ assert.equal(executor.getActiveRun(sessionID), undefined)
 assert.equal(states.get(stateKey(directory, sessionID)).jobs[0].lastFinishedAt, clock)
 assert.ok(checkpoints.some((call) => call[2].id === "run-job"))
 
+const runNowSession = "run-now-session"
+states.set(stateKey(directory, runNowSession), {
+  jobs: [
+    {
+      id: "natural-job",
+      name: "natural",
+      action: "natural work",
+      enabled: true,
+      paused: false,
+      intervalMs: 0,
+      runCount: 0,
+      maxRuns: 0,
+      maxRuntimeMs: 0,
+      timeoutMs: 0,
+    },
+    {
+      id: "target-job",
+      name: "target",
+      action: "target work",
+      enabled: true,
+      paused: false,
+      intervalMs: 600_000,
+      immediate: false,
+      createdAt: new Date(clock).toISOString(),
+      lastRunAt: 0,
+      runCount: 0,
+      maxRuns: 0,
+      maxRuntimeMs: 0,
+      timeoutMs: 0,
+      runNowRequestedAt: clock,
+    },
+  ],
+})
+executor.markSessionStatus(runNowSession, "busy", clock)
+await executor.maybeRunDueJobs(directory, client, runNowSession)
+assert.equal(executor.getActiveRun(runNowSession), undefined)
+let runNowState = states.get(stateKey(directory, runNowSession))
+assert.equal(runNowState.jobs.find((job) => job.id === "target-job").runNowRequestedAt, clock, "busy retry must preserve the targeted run-now request")
+assert.ok(schedules.some((call) => call[2] === runNowSession && call[3] === 5_000))
+
+executor.markSessionStatus(runNowSession, "idle", clock)
+await executor.maybeRunDueJobs(directory, client, runNowSession)
+const runNowActive = executor.getActiveRun(runNowSession)
+assert.equal(runNowActive.jobId, "target-job", "targeted run-now job must dispatch before the natural due job")
+runNowState = states.get(stateKey(directory, runNowSession))
+assert.equal(runNowState.jobs.find((job) => job.id === "target-job").runNowRequestedAt, undefined, "run-now request must be consumed when the target dispatch starts")
+assert.equal(runNowState.jobs.find((job) => job.id === "target-job").runCount, 1)
+assert.equal(runNowState.jobs.find((job) => job.id === "natural-job").runCount, 0)
+clock += 1_000
+assert.equal(await executor.finalizeActiveRun(directory, client, runNowSession), true)
+
 const goalSession = "goal-session"
 states.set(stateKey(directory, goalSession), {
   jobs: [{
@@ -242,9 +299,10 @@ assert.equal(states.get(stateKey(directory, stopSession)).jobs.length, 0)
 assert.ok(notifications.some((call) => call[1]?.id === "stop-job" && call[2] === "stop_file"))
 
 executor.disposeSession(sessionID)
+executor.disposeSession(runNowSession)
 executor.disposeSession(goalSession)
 executor.disposeSession(stopSession)
-for (const id of ["shell-session", "command-session", "compact-session", "prompt-session", sessionID, goalSession, stopSession]) {
+for (const id of ["shell-session", "command-session", "compact-session", "prompt-session", sessionID, runNowSession, goalSession, stopSession]) {
   clearSessionActivity(id)
 }
 
