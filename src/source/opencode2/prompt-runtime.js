@@ -1,6 +1,7 @@
 import { parseLoopArgs, splitFirst } from "../core/args.js"
 import { actionKind, decoratePrompt, matchJob } from "../core/jobs.js"
 import { readState, removeState, writeState } from "../core/state.js"
+import { formatOpenCode2LoopStatus } from "./status.js"
 
 export const OPENCODE_LOOP_V2_PROMPT_RUNTIME = "prompt-zero-interval"
 export const OPENCODE_LOOP_V2_INTERVAL_RUNTIME = "idle-safe-timer"
@@ -228,6 +229,17 @@ export function createOpenCode2PromptRuntime(options = {}) {
     })
   }
 
+  async function statusPromptLoops(event) {
+    const scope = scopeFrom(event)
+    if (!scope) return { handled: false, reason: "missing-scope" }
+    return await enqueueScope(scope, async () => {
+      const status = formatOpenCode2LoopStatus(await readState(scope.directory, scope.sessionID), now())
+      const request = { sessionID: scope.sessionID, text: status.text, noReply: true }
+      await options.prompt(request)
+      return { handled: true, accepted: true, status, request }
+    })
+  }
+
   async function updatePromptLoops(event, updater) {
     const scope = scopeFrom(event)
     if (!scope) return { handled: false, reason: "missing-scope" }
@@ -280,6 +292,7 @@ export function createOpenCode2PromptRuntime(options = {}) {
     if (event?.kind === "command" && event?.action === "executed") {
       if (scope) idle.set(scope.key, false)
       if (event?.name === "loop") return addPromptLoop(event)
+      if (event?.name === "loop-status") return statusPromptLoops(event)
       if (event?.name === "loop-pause") return updatePromptLoops(event, (job) => ({ ...job, paused: true }))
       if (event?.name === "loop-resume") return updatePromptLoops(event, (job) => ({ ...job, paused: false, lastRunAt: 0 }))
       if (["loop-stop", "loop-remove"].includes(event?.name)) return stopPromptLoops(event)
@@ -328,6 +341,7 @@ export function createOpenCode2PromptRuntime(options = {}) {
   return Object.freeze({
     onEvent,
     addPromptLoop,
+    statusPromptLoops,
     updatePromptLoops,
     stopPromptLoops,
     runIdlePrompt,

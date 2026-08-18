@@ -152,6 +152,22 @@ async function verifyTwoTurnLoop({ directory, sessionID, events, prompts, native
   assert.deepEqual(result, { accepted: true })
   assert.deepEqual(prompts, [{ sessionID: "ses_v2", text: "continue" }])
 
+  const statusResult = await adapter.prompt({
+    sessionID: "ses_v2",
+    text: "OpenCode loop status:\nNo active loop jobs.",
+    noReply: true,
+    agent: "build",
+    model: { providerID: "canary", modelID: "canary" },
+  })
+  assert.deepEqual(statusResult, { accepted: true })
+  assert.deepEqual(prompts[1], {
+    sessionID: "ses_v2",
+    noReply: true,
+    parts: [{ type: "text", text: "OpenCode loop status:\nNo active loop jobs." }],
+    agent: "build",
+    model: { providerID: "canary", modelID: "canary" },
+  })
+
   assert.equal(await adapter.dispose("test-complete"), true)
   assert.equal(await adapter.dispose("test-complete"), false)
   assert.equal(events.returns(), 1, "disposing the V2 adapter must close the event iterator")
@@ -239,6 +255,25 @@ async function verifyTwoTurnLoop({ directory, sessionID, events, prompts, native
   const cleanup = await OpenCodeLoopV2ExperimentalPlugin.setup(runtimeContext(events, prompts))
   try {
     await verifyTwoTurnLoop({ directory, sessionID, events, prompts, native: true })
+    events.push({
+      id: "evt_status",
+      type: "session.inbox.enqueued",
+      location: { directory },
+      data: {
+        sessionID,
+        item: {
+          type: "user",
+          payload: { text: OPENCODE_LOOP_V2_COMMANDS["loop-status"].template },
+        },
+      },
+    })
+    await waitFor(() => prompts.length === 3, "native V2 loop-status response")
+    assert.equal(prompts[2].sessionID, sessionID)
+    assert.equal(prompts[2].noReply, true)
+    assert.equal(prompts[2].parts?.[0]?.type, "text")
+    assert.match(prompts[2].parts?.[0]?.text || "", /^OpenCode loop status:/)
+    assert.match(prompts[2].parts?.[0]?.text || "", /runs=2/)
+    assert.match(prompts[2].parts?.[0]?.text || "", /continue the native wiring test/)
   } finally {
     await cleanup?.()
     await rm(directory, { recursive: true, force: true })

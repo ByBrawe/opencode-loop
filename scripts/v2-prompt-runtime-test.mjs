@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { createOpenCode2PromptRuntime } from "../src/source/opencode2/prompt-runtime.js"
+import { formatOpenCode2LoopStatus } from "../src/source/opencode2/status.js"
 
 const directory = await mkdtemp(path.join(os.tmpdir(), "opencode-loop-v2-prompt-"))
 const sessionID = "ses_v2_prompt_runtime"
@@ -56,6 +57,14 @@ try {
   assert.equal((await runtime.onEvent({ kind: "session", action: "idle", sessionID, directory })).dispatched, false)
   assert.equal(prompts.length, 2)
 
+  const status = await runtime.onEvent({ kind: "command", action: "executed", name: "loop-status", sessionID, directory, arguments: "" })
+  assert.equal(status.accepted, true)
+  assert.equal(prompts.length, 3)
+  assert.equal(prompts[2].noReply, true)
+  assert.match(prompts[2].text, /^OpenCode loop status:/)
+  assert.match(prompts[2].text, /runs=2/)
+  assert.match(prompts[2].text, /continue the current task/)
+
   const interval = await runtime.onEvent({ kind: "command", action: "executed", name: "loop", sessionID, directory, arguments: "5m --name later --multi do this later" })
   assert.equal(interval.accepted, true)
   assert.equal(interval.job.intervalMs, 300_000)
@@ -84,10 +93,35 @@ try {
   assert.equal(cleared.target, "all")
   assert.equal((await readState()).jobs.length, 0)
 
+  const emptyStatus = await runtime.onEvent({ kind: "command", action: "executed", name: "loop-status", sessionID, directory, arguments: "" })
+  assert.equal(emptyStatus.accepted, true)
+  assert.equal(prompts.at(-1).noReply, true)
+  assert.equal(prompts.at(-1).text, "OpenCode loop status:\nNo active loop jobs.")
+
   console.log("OpenCode 2 prompt runtime contract passed")
 } finally {
   await runtime.dispose()
   await rm(directory, { recursive: true, force: true })
+}
+
+{
+  const current = Date.parse("2026-08-18T00:00:00.000Z")
+  const status = formatOpenCode2LoopStatus({
+    jobs: [{
+      id: "job_no_now",
+      name: "delayed",
+      action: "wait before the first run",
+      kind: "prompt",
+      intervalMs: 1_000,
+      immediate: false,
+      createdAt: new Date(current).toISOString(),
+      lastRunAt: 0,
+      runCount: 0,
+      failureCount: 0,
+      noOverlap: true,
+    }],
+  }, current)
+  assert.match(status.text, /due in 1s/)
 }
 
 {
@@ -130,7 +164,7 @@ try {
     assert.equal(earlyIdle.dispatched, false)
     assert.equal(delayedPrompts.length, 0, "--no-now must not dispatch before createdAt + interval")
 
-    clock = createdAt + 1_000
+    clock = createdAt + 1_001
     const dueIdle = await delayedRuntime.onEvent({ kind: "session", action: "idle", sessionID: delayedSessionID, directory: delayedDirectory })
     assert.equal(dueIdle.dispatched, true)
     assert.equal(delayedPrompts.length, 1)

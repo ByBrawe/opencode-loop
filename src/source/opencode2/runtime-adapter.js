@@ -2,10 +2,18 @@ import { inspectOpenCode2Context } from "./capabilities.js"
 import { createOpenCode2HostContract } from "./host-contract.js"
 
 function promptRequest(request) {
-  return {
+  const value = {
     sessionID: request.sessionID,
-    text: request.text,
   }
+  if (request.noReply === true) {
+    value.noReply = true
+    value.parts = [{ type: "text", text: request.text }]
+  } else {
+    value.text = request.text
+  }
+  if (request.agent !== undefined) value.agent = request.agent
+  if (request.model !== undefined) value.model = request.model
+  return value
 }
 
 function commandRequest(request) {
