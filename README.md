@@ -16,7 +16,21 @@ Choose either installation method below.
 npx -y @bybrawe/opencode-loop@latest
 ```
 
-Run the same command again whenever you want to update.
+Run the same command again whenever you want to update. If **OpenCode Goals is already installed**, a normal Loop install/update also makes a best-effort call to the official `@bybrawe/opencode-goal@latest` installer so the companion Goal plugin does not silently remain on an older release.
+
+Install Loop and Goals together from scratch with:
+
+```bash
+npx -y @bybrawe/opencode-loop@latest --with-goals
+```
+
+Update/install only Loop and skip all Goals companion network work with:
+
+```bash
+npx -y @bybrawe/opencode-loop@latest --loop-only
+```
+
+`--with-goals` is explicit and fails if the requested Goals install/update fails. The automatic refresh of an already-installed Goals companion is best-effort: Loop still finishes its own update and prints a retry command if the companion registry/install step is temporarily unavailable.
 
 ### Option 2 — install with npm
 
@@ -34,6 +48,12 @@ npm install -g @bybrawe/opencode-loop@latest
 opencode-loop
 ```
 
+If you want the global Loop installer to install Goals too, run:
+
+```bash
+opencode-loop --with-goals
+```
+
 `npm install @bybrawe/opencode-loop` by itself only adds the Node package to the current project. For a normal OpenCode installation, use the global npm method above or the recommended `npx` installer.
 
 The installer:
@@ -42,13 +62,21 @@ The installer:
 - installs the `/loop-*` slash-command definitions;
 - installs the tool-denied `opencode-loop-local` command agent;
 - keeps an existing npm plugin entry pinned to the installer’s exact version to avoid stale OpenCode package-cache resolution;
-- removes duplicate old local Loop plugin copies when the package entry is authoritative.
+- removes duplicate old local Loop plugin copies when the package entry is authoritative;
+- refreshes OpenCode Goals through **Goals' own official installer** when an existing managed Goals installation is detected;
+- can explicitly install both packages with `--with-goals`, or skip companion network work with `--loop-only`.
 
 Then **fully restart OpenCode** and verify:
 
 ```text
 /loop-help
 /loop-doctor
+```
+
+If Goals is installed too, also verify:
+
+```text
+/goal status
 ```
 
 ### Uninstall
@@ -68,7 +96,7 @@ npm uninstall -g @bybrawe/opencode-loop
 
 Run `opencode-loop --uninstall` before removing the global npm package so it can clean its OpenCode registrations and managed command files.
 
-Uninstall removes known OpenCode Loop package registrations, local plugin files, `/loop-*` command markdown files, and the Loop local command agent while preserving unrelated OpenCode configuration.
+Uninstall removes known OpenCode Loop package registrations, local plugin files, `/loop-*` command markdown files, and the Loop local command agent while preserving unrelated OpenCode configuration. It **does not uninstall OpenCode Goals**; Goals remains separately managed by its own installer.
 
 Project Loop state is intentionally preserved under:
 
@@ -142,7 +170,13 @@ OpenCode Loop still includes the older **experimental** `/loop-goal` workflow. I
 
 For durable Goal Contracts, host-owned evidence, semantic verification, native Todo coordination, revision isolation, false-completion protection, restart recovery, Goal audit, budgets, and ordered Goals, install **OpenCode Goals**.
 
-Recommended one-command installer:
+Convenient combined installer from Loop:
+
+```bash
+npx -y @bybrawe/opencode-loop@latest --with-goals
+```
+
+Or install Goals directly with its standalone installer:
 
 ```bash
 npx -y @bybrawe/opencode-goal@latest
@@ -177,20 +211,20 @@ Do **not** run Loop’s `/loop-goal` and OpenCode Goals `/goal` against the same
 
 Likewise, avoid leaving a prompt-producing `/loop ...` job continuously injecting agent turns into a session while an OpenCode Goal is actively continuing. Use separate sessions or pause/remove that prompt loop until the Goal is done. Scheduled shell/command jobs should also be chosen carefully so they do not race files or verification.
 
-Install both when needed with `npx`:
+Install both with one `npx` command:
 
 ```bash
-npx -y @bybrawe/opencode-loop@latest
-npx -y @bybrawe/opencode-goal@latest
+npx -y @bybrawe/opencode-loop@latest --with-goals
 ```
 
-Or install both globally with npm, then run both installers:
+Or install both globally with npm, then run the Loop installer with the companion flag:
 
 ```bash
 npm install -g @bybrawe/opencode-loop@latest @bybrawe/opencode-goal@latest
-opencode-loop
-opencode-goal
+opencode-loop --with-goals
 ```
+
+Once Goals is managed in the OpenCode config, future normal `opencode-loop` / `npx ...opencode-loop@latest` updates also attempt to refresh Goals to its latest stable release. Use `--loop-only` when you intentionally do not want that companion refresh.
 
 ## Core commands
 
