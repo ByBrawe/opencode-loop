@@ -13,6 +13,8 @@ const runtime = createOpenCode2DiagnosticsRuntime({
     reads.push([directory, sessionID])
     return structuredClone(state)
   },
+  runtimeVersion: "v-test",
+  runtimePlatform: "test-platform",
 })
 
 const unrelated = await runtime.onEvent({ kind: "command", action: "executed", name: "loop-status", sessionID: "ses", directory: "/work" })
@@ -46,9 +48,26 @@ assert.equal(prompts[1].text, OPENCODE_LOOP_V2_HELP_TEXT)
 assert.match(prompts[1].text, /^OpenCode Loop V2 experimental help:/)
 assert.match(prompts[1].text, /\/loop-status/)
 assert.match(prompts[1].text, /\/loop-export/)
+assert.match(prompts[1].text, /\/loop-doctor/)
 assert.match(prompts[1].text, /does not yet claim full stable-plugin parity/)
 assert.doesNotMatch(prompts[1].text, /\/loop-goal/)
 assert.doesNotMatch(prompts[1].text, /--verify/)
+
+const doctor = await runtime.onEvent({ kind: "command", action: "executed", name: "loop-doctor", sessionID: "ses", directory: "/work" })
+assert.equal(doctor.handled, true)
+assert.equal(doctor.accepted, true)
+assert.equal(reads.length, 2, "loop-doctor may read state but must not mutate it")
+assert.equal(prompts.length, 3)
+assert.equal(prompts[2].noReply, true)
+assert.match(prompts[2].text, /^OpenCode Loop V2 doctor:/)
+assert.match(prompts[2].text, /- plugin: bybrawe\.opencode-loop\.v2\.experimental/)
+assert.match(prompts[2].text, /- project directory: \/work/)
+assert.match(prompts[2].text, /- state directory:/)
+assert.match(prompts[2].text, /- active jobs: 1/)
+assert.match(prompts[2].text, /- node: v-test/)
+assert.match(prompts[2].text, /- platform: test-platform/)
+assert.match(prompts[2].text, /- full stable parity: not claimed/)
+assert.match(prompts[2].text, /- smoke test: \/loop 0s --max-runs 1/)
 
 assert.throws(() => createOpenCode2DiagnosticsRuntime({}), /requires prompt\(\)/)
 
