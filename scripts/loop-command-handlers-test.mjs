@@ -195,10 +195,12 @@ assert.throws(() => createLoopCommandHandlers({ clearActiveRun() {} }), /cancelD
   const jobs = h.states.get(sessionID).jobs
   assert.equal(jobs[0].lastRunAt, 999)
   assert.equal(jobs[0].paused, true)
+  assert.equal(jobs[0].runNowRequestedAt, undefined)
   assert.equal(jobs[1].lastRunAt, 0)
   assert.equal(jobs[1].paused, false)
+  assert.equal(jobs[1].runNowRequestedAt, 10_000)
   assert.deepEqual(h.toasts, [[client, "Marked 1 loop job(s) due now.", "success"]])
-  assert.deepEqual(h.forcedRuns, [["/work", client, sessionID, { force: true }]])
+  assert.deepEqual(h.forcedRuns, [["/work", client, sessionID]])
 }
 
 {
@@ -206,7 +208,7 @@ assert.throws(() => createLoopCommandHandlers({ clearActiveRun() {} }), /cancelD
   const h = harness({ [sessionID]: { jobs: [loopJob("a")] } })
   await h.handlers.runNow("/work", {}, sessionID, "missing")
   assert.deepEqual(h.toasts, [[{}, "Marked 0 loop job(s) due now.", "warning"]])
-  assert.equal(h.forcedRuns.length, 1, "run-now retains force scan even when no target matches")
+  assert.equal(h.forcedRuns.length, 0, "missing run-now target must not run unrelated due jobs")
 }
 
 {
