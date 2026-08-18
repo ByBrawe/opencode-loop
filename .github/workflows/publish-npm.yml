@@ -2,8 +2,6 @@ name: Publish to npm
 
 on:
   push:
-    tags:
-      - "v*"
     branches:
       - "release/npm-v*"
 
@@ -20,26 +18,17 @@ jobs:
         id: release
         shell: bash
         run: |
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
-            VERSION="${GITHUB_REF_NAME#v}"
-            CHECKOUT_REF="$GITHUB_REF_NAME"
-            CREATE_RELEASE="false"
-          elif [[ "$GITHUB_REF_NAME" == release/npm-v* ]]; then
-            VERSION="${GITHUB_REF_NAME#release/npm-v}"
-            CHECKOUT_REF="main"
-            CREATE_RELEASE="true"
-          else
+          if [[ "$GITHUB_REF_NAME" != release/npm-v* ]]; then
             echo "Unsupported release ref: $GITHUB_REF" >&2
             exit 1
           fi
+          VERSION="${GITHUB_REF_NAME#release/npm-v}"
           test -n "$VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "checkout_ref=$CHECKOUT_REF" >> "$GITHUB_OUTPUT"
-          echo "create_release=$CREATE_RELEASE" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v6
         with:
-          ref: ${{ steps.release.outputs.checkout_ref }}
+          ref: main
           fetch-depth: 0
 
       - uses: actions/setup-node@v6
@@ -70,8 +59,25 @@ jobs:
 
       - run: npm publish --access public
 
-      - name: Create tag and GitHub release for release branch
-        if: steps.release.outputs.create_release == 'true'
+      - name: Verify published version is readable from npm
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          PACKAGE_NAME="$(node -p "require('./package.json').name")"
+          for attempt in {1..18}; do
+            PUBLISHED_VERSION="$(npm view "$PACKAGE_NAME@$RELEASE_VERSION" version 2>/dev/null || true)"
+            if [[ "$PUBLISHED_VERSION" == "$RELEASE_VERSION" ]]; then
+              echo "Verified $PACKAGE_NAME@$RELEASE_VERSION on npm."
+              exit 0
+            fi
+            echo "npm registry has not exposed $PACKAGE_NAME@$RELEASE_VERSION yet (attempt $attempt/18); retrying..."
+            sleep 5
+          done
+          echo "Published version $PACKAGE_NAME@$RELEASE_VERSION was not readable from npm after retries." >&2
+          exit 1
+
+      - name: Create tag and GitHub release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -87,6 +93,6 @@ jobs:
           gh release create "$TAG" opencode-loop.zip --title "$TAG" --generate-notes --target "$COMMIT_SHA"
 
       - name: Remove one-shot release branch
-        if: steps.release.outputs.create_release == 'true' && success()
+        if: success()
         shell: bash
         run: git push origin --delete "$GITHUB_REF_NAME" || true
