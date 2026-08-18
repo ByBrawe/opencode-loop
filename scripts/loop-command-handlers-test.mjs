@@ -154,6 +154,22 @@ assert.throws(() => createLoopCommandHandlers({ clearActiveRun() {} }), /cancelD
 }
 
 {
+  const sessionID = "status-no-now"
+  const h = harness({
+    [sessionID]: {
+      jobs: [loopJob("delayed", {
+        intervalMs: 10_000,
+        lastRunAt: 0,
+        immediate: false,
+        createdAt: new Date(5_000).toISOString(),
+      })],
+    },
+  }, { now: () => 10_000 })
+  await h.handlers.statusLoop("/work", {}, sessionID)
+  assert.match(h.messages[0][2], /due in 5s/, "--no-now status must count the first interval from createdAt")
+}
+
+{
   const sessionID = "status-empty"
   const h = harness({ [sessionID]: { jobs: [] } })
   await h.handlers.statusLoop("/work", {}, sessionID)
