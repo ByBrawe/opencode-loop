@@ -1698,8 +1698,8 @@ function createLoopCommandHandlers(options = {}) {
     const state = await readState2(directory, sessionID);
     const jobs = state.jobs || [];
     const lines = jobs.length ? jobs.map((job, index) => {
-      const dueIn = Math.max(0, job.intervalMs - (now2() - (job.lastRunAt || 0)));
-      const flags = [isGoalJob(job) ? `goal:${goalStatusText(job)}` : undefined, job.paused ? "paused" : "active", job.safe ? "safe" : undefined, job.askNever ? "ask-never" : undefined, job.noOverlap ? "no-overlap" : undefined, job.checkpointOnly ? "checkpoint-only" : undefined, job.gitCheckpoint ? "git-checkpoint" : undefined].filter(Boolean).join(",");
+      const dueIn = Number(job.runNowRequestedAt || 0) > 0 ? 0 : Math.max(0, job.intervalMs - (now2() - (job.lastRunAt || 0)));
+      const flags = [isGoalJob(job) ? `goal:${goalStatusText(job)}` : undefined, job.paused ? "paused" : "active", Number(job.runNowRequestedAt || 0) > 0 ? "run-now" : undefined, job.safe ? "safe" : undefined, job.askNever ? "ask-never" : undefined, job.noOverlap ? "no-overlap" : undefined, job.checkpointOnly ? "checkpoint-only" : undefined, job.gitCheckpoint ? "git-checkpoint" : undefined].filter(Boolean).join(",");
       return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${jobLabel(job)} | runs=${job.runCount || 0} | failures=${job.failureCount || 0} | due in ${durationToText(dueIn)} | ${flags}`;
     }) : ["No active loop jobs."];
     await toast2(client, jobs.length ? `${jobs.length} loop job(s).` : "No active loop jobs.", jobs.length ? "info" : "warning");
@@ -1738,16 +1738,20 @@ function createLoopCommandHandlers(options = {}) {
   async function runNow(directory, client, sessionID, args) {
     const target = String(args || "").trim() || "all";
     const state = await readState2(directory, sessionID);
+    const requestedAt = Math.max(1, Number(now2()) || Date.now());
     let count = 0;
-    for (const [index, job] of (state.jobs || []).entries())
-      if (matchJob(job, target, index)) {
-        job.lastRunAt = 0;
-        job.paused = false;
-        count++;
-      }
+    for (const [index, job] of (state.jobs || []).entries()) {
+      if (!matchJob(job, target, index))
+        continue;
+      job.lastRunAt = 0;
+      job.paused = false;
+      job.runNowRequestedAt = requestedAt;
+      count += 1;
+    }
     await writeState2(directory, sessionID, state);
     await toast2(client, `Marked ${count} loop job(s) due now.`, count ? "success" : "warning");
-    await maybeRunDueJobs(directory, client, sessionID, { force: true });
+    if (count)
+      await scheduleDueWork(directory, client, sessionID);
   }
   async function doctorLoop(directory, client, sessionID) {
     const state = await readState2(directory, sessionID);
@@ -2005,15 +2009,20 @@ function jobDueAt(job, current = now()) {
     return Infinity;
   if (job.maxRuns > 0 && (job.runCount || 0) >= job.maxRuns)
     return Infinity;
+  if (Number(job.runNowRequestedAt || 0) > 0)
+    return current;
   if (job.watchPaths?.length)
     return Infinity;
-  const created = Date.parse(job.createdAt || new Date().toISOString());
-  if (job.maxRuntimeMs > 0 && current - created >= job.maxRuntimeMs)
+  const created = Date.parse(job.createdAt || "");
+  if (job.maxRuntimeMs > 0 && Number.isFinite(created) && current - created >= job.maxRuntimeMs)
     return current;
   if (job.intervalMs === 0)
     return current;
-  if (!job.lastRunAt)
+  if (!job.lastRunAt) {
+    if (job.immediate === false)
+      return (Number.isFinite(created) ? created : current) + (job.intervalMs || 0);
     return current;
+  }
   return job.lastRunAt + (job.intervalMs || 0);
 }
 function nextDueDelay(state, current = now()) {
@@ -2806,7 +2815,7 @@ function createLoopExecutor(options = {}) {
   });
   function dueJobs(state, force = false) {
     const current = now2();
-    return (state.jobs || []).filter((job) => {
+    const due = (state.jobs || []).filter((job) => {
       if (isGoalJob(job) && ["completed", "blocked", "cleared"].includes(job.goalStatus))
         return false;
       if (!job.enabled || job.paused)
@@ -2815,12 +2824,15 @@ function createLoopExecutor(options = {}) {
         return false;
       if (job.maxRuntimeMs > 0 && current - Date.parse(job.createdAt || new Date().toISOString()) >= job.maxRuntimeMs)
         return true;
+      if (Number(job.runNowRequestedAt || 0) > 0)
+        return true;
       if (force)
         return true;
       if (job.watchPaths?.length)
         return job.watchTriggered === true;
       return job.intervalMs === 0 || !job.lastRunAt || current - job.lastRunAt >= job.intervalMs;
     });
+    return due.sort((a, b) => Number(Number(b.runNowRequestedAt || 0) > 0) - Number(Number(a.runNowRequestedAt || 0) > 0));
   }
   function clearActiveRun(sessionID) {
     const active = activeRuns.get(sessionID);
@@ -3053,13 +3065,14 @@ ${prompt}`;
           candidate.watchTriggered = true;
         }
       }
-      const due = dueJobs(state, runOptions.force);
+      const due = dueJobs(state, Boolean(runOptions.force));
       if (!due.length) {
         await writeState2(directory, sessionID, state);
         await reschedule();
         return;
       }
       job = due[0];
+      const runNowRequested = Number(job.runNowRequestedAt || 0) > 0;
       if (job.maxRuntimeMs > 0 && now2() - Date.parse(job.createdAt || new Date().toISOString()) >= job.maxRuntimeMs) {
         state.jobs = (state.jobs || []).filter((candidate) => candidate.id !== job.id);
         await writeState2(directory, sessionID, state);
@@ -3087,6 +3100,8 @@ ${prompt}`;
       }
       if (job.preflightCommand) {
         if (job.safe && dangerousShell2(job.preflightCommand)) {
+          if (runNowRequested)
+            delete job.runNowRequestedAt;
           job.paused = true;
           await writeState2(directory, sessionID, state);
           await notifyJob2(directory, job, "preflight_blocked");
@@ -3102,6 +3117,8 @@ ${prompt}`;
           code: preflight.code
         });
         if (preflight.code !== 0) {
+          if (runNowRequested)
+            delete job.runNowRequestedAt;
           job.paused = true;
           job.failureCount = (job.failureCount || 0) + 1;
           job.lastPreflightFailure = (job.preflightCommand + `
@@ -3139,6 +3156,8 @@ exit=` + preflight.code + `
         await reschedule(busyRetryMs);
         return;
       }
+      if (runNowRequested)
+        delete job.runNowRequestedAt;
       job.watchTriggered = false;
       job.lastRunAt = now2();
       job.runCount = (job.runCount || 0) + 1;

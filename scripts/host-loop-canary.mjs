@@ -11,6 +11,8 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const isWindows = process.platform === "win32"
 const LOOP_OBJECTIVE = "real host loop canary"
+const RUN_NOW_NATURAL_OBJECTIVE = "real host loop-now natural canary"
+const RUN_NOW_TARGET_OBJECTIVE = "real host loop-now target canary"
 
 function resolveOpenCodeBinary() {
   if (!isWindows) return path.join(repoRoot, "node_modules", ".bin", "opencode")
@@ -120,8 +122,12 @@ function contentText(content) {
   return content.map((part) => typeof part?.text === "string" ? part.text : typeof part?.content === "string" ? part.content : "").join("\n")
 }
 
-function allMessageText(body) {
-  return (body.messages ?? []).map((message) => contentText(message?.content)).join("\n")
+function lastUserMessageText(body) {
+  const messages = Array.isArray(body?.messages) ? body.messages : []
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") return contentText(messages[index]?.content)
+  }
+  return contentText(messages.at(-1)?.content)
 }
 
 function streamHeaders(res) {
@@ -159,7 +165,7 @@ function streamText(res, content, sequence) {
 }
 
 function startProvider() {
-  const stats = { chatRequests: 0, loopRequests: 0, paths: [] }
+  const stats = { chatRequests: 0, loopRequests: 0, runNowSequence: [], paths: [] }
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1")
     stats.paths.push(`${req.method} ${url.pathname}`)
@@ -178,10 +184,20 @@ function startProvider() {
     for await (const chunk of req) raw += String(chunk)
     const body = raw ? JSON.parse(raw) : {}
     stats.chatRequests += 1
-    const text = allMessageText(body)
+    const text = lastUserMessageText(body)
     if (text.includes("AUTONOMOUS OPENCODE LOOP ITERATION") && text.includes(LOOP_OBJECTIVE)) {
       stats.loopRequests += 1
       streamText(res, `LOOP_TURN_${stats.loopRequests}`, stats.chatRequests)
+      return
+    }
+    if (text.includes("AUTONOMOUS OPENCODE LOOP ITERATION") && text.includes(RUN_NOW_TARGET_OBJECTIVE)) {
+      stats.runNowSequence.push("target")
+      streamText(res, "RUN_NOW_TARGET", stats.chatRequests)
+      return
+    }
+    if (text.includes("AUTONOMOUS OPENCODE LOOP ITERATION") && text.includes(RUN_NOW_NATURAL_OBJECTIVE)) {
+      stats.runNowSequence.push("natural")
+      streamText(res, "RUN_NOW_NATURAL", stats.chatRequests)
       return
     }
     streamText(res, "OK", stats.chatRequests)
@@ -210,7 +226,8 @@ async function waitFor(predicate, description, diagnostics, timeoutMs = 45_000) 
     if (await predicate()) return
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
-  throw new Error(`timed out waiting for ${description}\n${diagnostics()}`)
+  const detail = typeof diagnostics === "function" ? await diagnostics() : diagnostics
+  throw new Error(`timed out waiting for ${description}\n${detail}`)
 }
 
 function isFetchTimeout(error) {
@@ -249,6 +266,7 @@ async function main() {
   const pluginEntry = pathToFileURL(path.join(repoRoot, "src", "index.js")).href
   await writeFile(path.join(pluginDir, "opencode-loop.js"), `export { default as OpenCodeLoopPlugin } from ${JSON.stringify(pluginEntry)}\n`)
   await writeFile(path.join(commandDir, "loop.md"), `---\ndescription: Start a host canary loop\nagent: opencode-loop-local\n---\n\nOpenCode Loop local command handled. Reply exactly: OK.\n`)
+  await writeFile(path.join(commandDir, "loop-now.md"), `---\ndescription: Run a host canary loop now\nagent: opencode-loop-local\n---\n\nOpenCode Loop run-now command handled locally. Reply exactly: OK.\n`)
   await writeFile(path.join(agentDir, "opencode-loop-local.md"), `---\ndescription: Local Loop command acknowledgement\nmode: primary\npermission:\n  "*": deny\n---\n\nReply exactly: OK\n`)
   await writeFile(path.join(workspace, "opencode.json"), `${JSON.stringify({
     $schema: "https://opencode.ai/config.json",
@@ -307,11 +325,14 @@ async function main() {
     const sessionID = String(session?.id ?? "")
     assert.ok(sessionID, `OpenCode did not create a session: ${JSON.stringify(createdPayload)}`)
 
-    const command = api(`/session/${encodeURIComponent(sessionID)}/command`, {
+    const commandPath = `/session/${encodeURIComponent(sessionID)}/command`
+    const sendCommand = async (name, argumentsText, timeoutMs = 90_000) => await api(commandPath, {
       method: "POST",
-      body: JSON.stringify({ agent: "build", model: "canary/canary", command: "loop", arguments: `0s --max-runs 3 ${LOOP_OBJECTIVE}` }),
-      signal: AbortSignal.timeout(90_000),
-    }).catch((error) => {
+      body: JSON.stringify({ agent: "build", model: "canary/canary", command: name, arguments: argumentsText }),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+
+    const command = sendCommand("loop", `0s --max-runs 3 ${LOOP_OBJECTIVE}`).catch((error) => {
       commandError = error
       return null
     })
@@ -319,14 +340,17 @@ async function main() {
     const stateFile = path.join(workspace, ".opencode", "opencode-loop", `${sessionID}.json`)
     const diagnostics = async () => {
       let state = "missing"
+      let loopLog = "missing"
       try { state = await readFile(stateFile, "utf8") } catch {}
-      return `provider=${JSON.stringify(provider.stats)}\ncommandError=${String(commandError ?? "none")}\nstate=${state}\nserver log:\n${serverLog}`
+      try { loopLog = await readFile(path.join(workspace, ".opencode", "opencode-loop", "loop.log"), "utf8") } catch {}
+      return `provider=${JSON.stringify(provider.stats)}\ncommandError=${String(commandError ?? "none")}\nstate=${state}\nloop log:\n${loopLog}\nserver log:\n${serverLog}`
     }
 
     await waitFor(() => provider.stats.loopRequests >= 3, "three real autonomous Loop turns", () => `provider=${JSON.stringify(provider.stats)}\nserver log:\n${serverLog}`)
     await new Promise((resolve) => setTimeout(resolve, 1_500))
     assert.equal(provider.stats.loopRequests, 3, `Loop must stop at --max-runs 3; got extra real-host turn(s)\n${await diagnostics()}`)
     assert.equal(server.exitCode, null, `OpenCode server exited during canary\n${await diagnostics()}`)
+    await command
 
     let persisted = null
     try { persisted = JSON.parse(await readFile(stateFile, "utf8")) } catch {}
@@ -335,15 +359,33 @@ async function main() {
       if (loop) assert.ok((loop.runCount || 0) >= 3, `persisted Loop run count was lower than provider turn count: ${JSON.stringify(loop)}`)
     }
 
+    await sendCommand("loop", `10m --no-now --name natural --multi --max-runs 1 ${RUN_NOW_NATURAL_OBJECTIVE}`)
+    await sendCommand("loop", `10m --no-now --name target --multi --max-runs 1 ${RUN_NOW_TARGET_OBJECTIVE}`)
+    await waitFor(async () => {
+      try {
+        const state = JSON.parse(await readFile(stateFile, "utf8"))
+        const names = new Set((state.jobs || []).map((job) => job.name))
+        return names.has("natural") && names.has("target")
+      } catch {
+        return false
+      }
+    }, "two delayed real-host Loop jobs", () => `provider=${JSON.stringify(provider.stats)}\nserver log:\n${serverLog}`)
+
+    provider.stats.runNowSequence.length = 0
+    await sendCommand("loop-now", "target")
+    await waitFor(() => provider.stats.runNowSequence.length >= 1, "targeted real-host loop-now turn", diagnostics)
+    await new Promise((resolve) => setTimeout(resolve, 1_500))
+    assert.deepEqual(provider.stats.runNowSequence, ["target"], `loop-now target must not run the earlier delayed natural job\n${await diagnostics()}`)
+
     console.log(JSON.stringify({
       ok: true,
       platform: process.platform,
       sessionID,
       loopRequests: provider.stats.loopRequests,
+      runNowSequence: provider.stats.runNowSequence,
       chatRequests: provider.stats.chatRequests,
       commandError: commandError ? String(commandError) : null,
     }, null, 2))
-    void command
   } finally {
     await stopProcess(server)
     await provider.close().catch(() => undefined)
