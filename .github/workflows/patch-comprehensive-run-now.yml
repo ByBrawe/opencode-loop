@@ -1,0 +1,42 @@
+name: Patch comprehensive run-now timing
+
+# Second push triggers this one-shot helper after the workflow exists on the branch.
+on:
+  push:
+    branches:
+      - test/stable-loop-now-real-host
+    paths:
+      - ".github/workflows/patch-comprehensive-run-now.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: test/stable-loop-now-real-host
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Patch comprehensive harness and remove helper
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+          const file = 'scripts/comprehensive-test.mjs'
+          let text = fs.readFileSync(file, 'utf8')
+          const before = `    async command(command, argumentsText = "", output = { parts: [] }) {\n      await hooks["command.execute.before"]({ command, sessionID, arguments: argumentsText }, output)\n      return output\n    },`
+          const after = `    async command(command, argumentsText = "", output = { parts: [] }) {\n      await hooks["command.execute.before"]({ command, sessionID, arguments: argumentsText }, output)\n      // /loop-now persists a request and dispatches through the scheduler's 250ms idle-safe timer.\n      if (command === "loop-now") await delay(400)\n      return output\n    },`
+          if (!text.includes(before)) throw new Error('comprehensive command harness marker not found')
+          text = text.replace(before, after)
+          fs.writeFileSync(file, text)
+          NODE
+          rm .github/workflows/patch-comprehensive-run-now.yml
+          git config user.email "opencode-loop-ci@example.invalid"
+          git config user.name "OpenCode Loop CI"
+          git add scripts/comprehensive-test.mjs .github/workflows/patch-comprehensive-run-now.yml
+          git commit -m "test: wait for idle-safe loop-now scheduling"
+          git push origin HEAD:test/stable-loop-now-real-host
