@@ -31,6 +31,7 @@ assert.deepEqual(Object.keys(OPENCODE_LOOP_V2_COMMANDS), [
   "loop-status",
   "loop-now",
   "loop-export",
+  "loop-help",
 ])
 assert.deepEqual(
   parseOpenCode2LoopCommandText(`${OPENCODE_LOOP_V2_COMMANDS["loop-now"].template}\n\nsecond`),
