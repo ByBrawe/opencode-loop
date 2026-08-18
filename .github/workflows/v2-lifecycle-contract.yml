@@ -15,6 +15,7 @@ on:
       - "scripts/v2-command-runtime-test.mjs"
       - "scripts/v2-command-adapter-test.mjs"
       - "scripts/v2-diagnostics-test.mjs"
+      - "scripts/v2-logging-test.mjs"
       - ".github/workflows/v2-lifecycle-contract.yml"
   push:
     branches: [main]
@@ -31,6 +32,7 @@ on:
       - "scripts/v2-command-runtime-test.mjs"
       - "scripts/v2-command-adapter-test.mjs"
       - "scripts/v2-diagnostics-test.mjs"
+      - "scripts/v2-logging-test.mjs"
       - ".github/workflows/v2-lifecycle-contract.yml"
 
 permissions:
@@ -60,6 +62,7 @@ jobs:
       - run: node --check src/source/opencode2/runtime-adapter.js
       - run: node --check src/source/opencode2/prompt-runtime.js
       - run: node --check src/source/opencode2/diagnostics.js
+      - run: node --check src/source/opencode2/logging.js
       - run: node --check src/source/opencode2/experimental.js
       - run: node --check scripts/v2-event-bridge-test.mjs
       - run: node --check scripts/v2-event-stream-contract-test.mjs
@@ -70,6 +73,7 @@ jobs:
       - run: node --check scripts/v2-command-runtime-test.mjs
       - run: node --check scripts/v2-command-adapter-test.mjs
       - run: node --check scripts/v2-diagnostics-test.mjs
+      - run: node --check scripts/v2-logging-test.mjs
       - run: node scripts/v2-event-bridge-test.mjs
       - run: node scripts/v2-event-stream-contract-test.mjs
       - run: node scripts/v2-host-contract-test.mjs
@@ -79,4 +83,5 @@ jobs:
       - run: node scripts/v2-command-runtime-test.mjs
       - run: node scripts/v2-command-adapter-test.mjs
       - run: node scripts/v2-diagnostics-test.mjs
+      - run: node scripts/v2-logging-test.mjs
       - run: node scripts/v2-plugin-sentinel-test.mjs

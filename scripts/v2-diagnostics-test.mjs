@@ -7,12 +7,17 @@ const state = {
   version: 1,
   jobs: [{ id: "job_export", name: "exported", runCount: 2, paused: false }],
 }
+const logLines = [
+  JSON.stringify({ time: "stable", line: "stable-only" }),
+  ...Array.from({ length: 82 }, (_, index) => JSON.stringify({ time: `t${index + 1}`, line: "run", v2: true, seq: index + 1 })),
+].join("\n")
 const runtime = createOpenCode2DiagnosticsRuntime({
   prompt: async (request) => { prompts.push(request) },
   readState: async (directory, sessionID) => {
     reads.push([directory, sessionID])
     return structuredClone(state)
   },
+  readFile: async () => logLines,
   runtimeVersion: "v-test",
   runtimePlatform: "test-platform",
 })
@@ -48,6 +53,7 @@ assert.equal(prompts[1].text, OPENCODE_LOOP_V2_HELP_TEXT)
 assert.match(prompts[1].text, /^OpenCode Loop V2 experimental help:/)
 assert.match(prompts[1].text, /\/loop-status/)
 assert.match(prompts[1].text, /\/loop-export/)
+assert.match(prompts[1].text, /\/loop-logs/)
 assert.match(prompts[1].text, /\/loop-doctor/)
 assert.match(prompts[1].text, /does not yet claim full stable-plugin parity/)
 assert.doesNotMatch(prompts[1].text, /\/loop-goal/)
@@ -68,6 +74,27 @@ assert.match(prompts[2].text, /- node: v-test/)
 assert.match(prompts[2].text, /- platform: test-platform/)
 assert.match(prompts[2].text, /- full stable parity: not claimed/)
 assert.match(prompts[2].text, /- smoke test: \/loop 0s --max-runs 1/)
+
+const logs = await runtime.onEvent({ kind: "command", action: "executed", name: "loop-logs", sessionID: "ses", directory: "/work" })
+assert.equal(logs.handled, true)
+assert.equal(logs.accepted, true)
+assert.equal(reads.length, 2, "loop-logs must not read or mutate Loop state")
+assert.equal(prompts.length, 4)
+assert.equal(prompts[3].noReply, true)
+assert.match(prompts[3].text, /^OpenCode Loop V2 logs:\n/)
+assert.doesNotMatch(prompts[3].text, /stable-only/)
+assert.doesNotMatch(prompts[3].text, /"seq":1}/)
+assert.doesNotMatch(prompts[3].text, /"seq":2}/)
+assert.match(prompts[3].text, /"seq":3}/)
+assert.match(prompts[3].text, /"seq":82}/)
+
+const missingLogs = []
+const missingLogRuntime = createOpenCode2DiagnosticsRuntime({
+  prompt: async (request) => { missingLogs.push(request) },
+  readFile: async () => { throw new Error("missing") },
+})
+await missingLogRuntime.onEvent({ kind: "command", action: "executed", name: "loop-logs", sessionID: "ses", directory: "/work" })
+assert.equal(missingLogs[0].text, "OpenCode Loop V2 logs:\nNo OpenCode 2 Loop log found.")
 
 assert.throws(() => createOpenCode2DiagnosticsRuntime({}), /requires prompt\(\)/)
 
