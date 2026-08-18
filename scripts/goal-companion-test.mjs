@@ -144,6 +144,9 @@ try {
   const help = await runInstaller(path.join(temporaryRoot, "help"), ["--with-goals", "--help"], { FAKE_NPM_LOG: helpLog })
   assert.equal(help.code, 0, help.stderr)
   assert.match(help.stdout, /OpenCode Loop installer\/updater/)
+  assert.match(help.stdout, /--with-goals/)
+  assert.match(help.stdout, /--loop-only/)
+  assert.match(help.stdout, /Loop uninstall never removes Goals/)
   assert.deepEqual(await calls(helpLog), [], "help/version flows must never install companion packages")
 
   console.log("OpenCode Loop Goals companion installer test passed")
