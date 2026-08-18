@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { createOpenCode2DiagnosticsRuntime } from "../src/source/opencode2/diagnostics.js"
+import { createOpenCode2DiagnosticsRuntime, OPENCODE_LOOP_V2_HELP_TEXT } from "../src/source/opencode2/diagnostics.js"
 
 const prompts = []
 const reads = []
@@ -35,6 +35,20 @@ assert.match(prompts[0].text, /^OpenCode loop state export:\n```json\n/)
 assert.match(prompts[0].text, /"name": "exported"/)
 assert.match(prompts[0].text, /"runCount": 2/)
 assert.match(prompts[0].text, /\n```$/)
+
+const help = await runtime.onEvent({ kind: "command", action: "executed", name: "loop-help", sessionID: "ses", directory: "/work" })
+assert.equal(help.handled, true)
+assert.equal(help.accepted, true)
+assert.equal(reads.length, 1, "loop-help must not read or mutate Loop state")
+assert.equal(prompts.length, 2)
+assert.equal(prompts[1].noReply, true)
+assert.equal(prompts[1].text, OPENCODE_LOOP_V2_HELP_TEXT)
+assert.match(prompts[1].text, /^OpenCode Loop V2 experimental help:/)
+assert.match(prompts[1].text, /\/loop-status/)
+assert.match(prompts[1].text, /\/loop-export/)
+assert.match(prompts[1].text, /does not yet claim full stable-plugin parity/)
+assert.doesNotMatch(prompts[1].text, /\/loop-goal/)
+assert.doesNotMatch(prompts[1].text, /--verify/)
 
 assert.throws(() => createOpenCode2DiagnosticsRuntime({}), /requires prompt\(\)/)
 
