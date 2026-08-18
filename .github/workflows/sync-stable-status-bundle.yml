@@ -1,5 +1,6 @@
 name: Sync stable status bundle
 
+# Retrigger after the workflow exists on this branch.
 on:
   push:
     branches:
