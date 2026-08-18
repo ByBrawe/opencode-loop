@@ -1,5 +1,6 @@
 name: Sync generated stable bundle
 
+# Second push intentionally triggers this one-shot helper after it exists on the branch.
 on:
   push:
     branches:
