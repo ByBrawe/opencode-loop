@@ -93,15 +93,17 @@ export function createLoopExecutor(options = {}) {
 
   function dueJobs(state, force = false) {
     const current = now()
-    return (state.jobs || []).filter((job) => {
+    const due = (state.jobs || []).filter((job) => {
       if (isGoalJob(job) && ["completed", "blocked", "cleared"].includes(job.goalStatus)) return false
       if (!job.enabled || job.paused) return false
       if (job.maxRuns > 0 && (job.runCount || 0) >= job.maxRuns) return false
       if (job.maxRuntimeMs > 0 && current - Date.parse(job.createdAt || new Date().toISOString()) >= job.maxRuntimeMs) return true
+      if (Number(job.runNowRequestedAt || 0) > 0) return true
       if (force) return true
       if (job.watchPaths?.length) return job.watchTriggered === true
       return job.intervalMs === 0 || !job.lastRunAt || current - job.lastRunAt >= job.intervalMs
     })
+    return due.sort((a, b) => Number(Number(b.runNowRequestedAt || 0) > 0) - Number(Number(a.runNowRequestedAt || 0) > 0))
   }
 
   function clearActiveRun(sessionID) {
@@ -358,13 +360,14 @@ export function createLoopExecutor(options = {}) {
           candidate.watchTriggered = true
         }
       }
-      const due = dueJobs(state, runOptions.force)
+      const due = dueJobs(state, Boolean(runOptions.force))
       if (!due.length) {
         await writeState(directory, sessionID, state)
         await reschedule()
         return
       }
       job = due[0]
+      const runNowRequested = Number(job.runNowRequestedAt || 0) > 0
 
       if (job.maxRuntimeMs > 0 && now() - Date.parse(job.createdAt || new Date().toISOString()) >= job.maxRuntimeMs) {
         state.jobs = (state.jobs || []).filter((candidate) => candidate.id !== job.id)
@@ -394,6 +397,7 @@ export function createLoopExecutor(options = {}) {
 
       if (job.preflightCommand) {
         if (job.safe && dangerousShell(job.preflightCommand)) {
+          if (runNowRequested) delete job.runNowRequestedAt
           job.paused = true
           await writeState(directory, sessionID, state)
           await notifyJob(directory, job, "preflight_blocked")
@@ -409,6 +413,7 @@ export function createLoopExecutor(options = {}) {
           code: preflight.code,
         })
         if (preflight.code !== 0) {
+          if (runNowRequested) delete job.runNowRequestedAt
           job.paused = true
           job.failureCount = (job.failureCount || 0) + 1
           job.lastPreflightFailure = (job.preflightCommand + "\nexit=" + preflight.code + "\n" + preflight.stdout + "\n" + preflight.stderr).slice(0, 4000)
@@ -452,6 +457,7 @@ export function createLoopExecutor(options = {}) {
         return
       }
 
+      if (runNowRequested) delete job.runNowRequestedAt
       job.watchTriggered = false
       job.lastRunAt = now()
       job.runCount = (job.runCount || 0) + 1
