@@ -18,7 +18,9 @@ const withGoals = rawArgs.includes("--with-goals")
 const loopOnly = rawArgs.includes("--loop-only")
 const loopArgs = rawArgs.filter((arg) => arg !== "--with-goals" && arg !== "--loop-only")
 const uninstallRequested = loopArgs.length === 1 && ["--uninstall", "uninstall", "--remove"].includes(loopArgs[0] || "")
-const informational = loopArgs.some((arg) => ["--help", "-h", "--version", "-v"].includes(arg))
+const helpRequested = loopArgs.some((arg) => ["--help", "-h"].includes(arg))
+const versionRequested = loopArgs.some((arg) => ["--version", "-v"].includes(arg))
+const informational = helpRequested || versionRequested
 
 function stripJsonComments(input) {
   let output = ""
@@ -145,6 +147,10 @@ function statusCode(result) {
   return result?.error ? 1 : 0
 }
 
+function printCompanionHelp() {
+  console.log(`\nOpenCode Goals companion options:\n  --with-goals  Install/update @bybrawe/opencode-goal@latest even when it is not already installed.\n  --loop-only   Skip all OpenCode Goals companion detection and network update work.\n\nNormal Loop install/update refreshes an already-managed OpenCode Goals installation on a best-effort basis. Loop uninstall never removes Goals.`)
+}
+
 async function main() {
   if (withGoals && loopOnly) {
     console.error("Use either --with-goals or --loop-only, not both.")
@@ -164,7 +170,11 @@ async function main() {
     return
   }
 
-  if (informational || uninstallRequested) return
+  if (informational) {
+    if (helpRequested) printCompanionHelp()
+    return
+  }
+  if (uninstallRequested) return
 
   if (loopOnly) {
     console.log("Skipped OpenCode Goals companion update (--loop-only).")
