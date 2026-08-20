@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.32
+
+- Hide the tool-denied `opencode-loop-local` acknowledgement agent from the normal primary-agent cycle by installing it as a hidden subagent while keeping Loop slash commands explicitly bound to it.
+- Add `--without-loop-goals` so Loop installs/updates can omit the packaged experimental `/loop-goal*` command files without removing normal Loop commands, Loop runtime state, or the separate OpenCode Goals plugin.
+- Keep backward compatibility by installing the older Loop Goal command surface by default; the new opt-out composes with `--with-goals` for a cleaner `/loop` + dedicated `/goal` setup.
+- Add deterministic installer coverage for hidden-agent metadata, default legacy-command compatibility, clean command-surface opt-out, and combined Loop + Goals installation.
+
 ## 0.5.31
 
 - Add best-effort experimental OpenCode 2 runtime logging in the existing JSON-lines `loop.log` format, tagged with `v2: true`, plus experimental `/loop-logs` diagnostics for recent V2 records. Logging remains non-critical and does not change the stable OpenCode 1.x support claim.

@@ -4,7 +4,7 @@
 
 OpenCode Loop adds `/loop`, scheduled prompt/command/shell jobs, compact scheduling, safe long-running continuation helpers, and the `opencode-loopd` background daemon.
 
-> **Current release: `0.5.31`.** Loop also contains an older experimental `/loop-goal` mode, but for strong persistent Goal contracts and host-verified completion, use the separate **OpenCode Goals** plugin described below.
+> **Current release: `0.5.32`.** Loop also contains an older experimental `/loop-goal` mode, but for strong persistent Goal contracts and host-verified completion, use the separate **OpenCode Goals** plugin described below.
 
 ## Install or update
 
@@ -23,6 +23,14 @@ Install Loop and Goals together from scratch with:
 ```bash
 npx -y @bybrawe/opencode-loop@latest --with-goals
 ```
+
+If you use the dedicated OpenCode Goals plugin and do not want Loop's older experimental `/loop-goal*` commands in the slash-command list, use:
+
+```bash
+npx -y @bybrawe/opencode-loop@latest --with-goals --without-loop-goals
+```
+
+`--without-loop-goals` removes only Loop's packaged experimental `/loop-goal*` command files for that install/update. It keeps `/loop`, `/loop-command`, `/loop-shell`, the Loop runtime, and the separate OpenCode Goals `/goal` workflow. The choice is not persisted: run the flag again on a later Loop update if you want to keep those legacy command files omitted.
 
 Update/install only Loop and skip all Goals companion network work with:
 
@@ -54,17 +62,23 @@ If you want the global Loop installer to install Goals too, run:
 opencode-loop --with-goals
 ```
 
+For the cleaner command surface with the dedicated Goals plugin:
+
+```bash
+opencode-loop --with-goals --without-loop-goals
+```
+
 `npm install @bybrawe/opencode-loop` by itself only adds the Node package to the current project. For a normal OpenCode installation, use the global npm method above or the recommended `npx` installer.
 
 The installer:
 
 - installs/updates the OpenCode Loop plugin;
 - installs the `/loop-*` slash-command definitions;
-- installs the tool-denied `opencode-loop-local` command agent;
+- installs the tool-denied, hidden `opencode-loop-local` acknowledgement subagent used only by Loop's bound local command definitions;
 - keeps an existing npm plugin entry pinned to the installer’s exact version to avoid stale OpenCode package-cache resolution;
 - removes duplicate old local Loop plugin copies when the package entry is authoritative;
 - refreshes OpenCode Goals through **Goals' own official installer** when an existing managed Goals installation is detected;
-- can explicitly install both packages with `--with-goals`, or skip companion network work with `--loop-only`.
+- can explicitly install both packages with `--with-goals`, skip companion network work with `--loop-only`, or omit the packaged experimental `/loop-goal*` command files with `--without-loop-goals`.
 
 Then **fully restart OpenCode** and verify:
 
@@ -166,7 +180,7 @@ Loop is idle-safe: if a job becomes due while the session is busy, active tools 
 
 ## For stronger persistent Goals, use OpenCode Goals
 
-OpenCode Loop still includes the older **experimental** `/loop-goal` workflow. It is useful for compatibility and lightweight outcome-driven automation, but it is not the strongest Goal implementation in this project family.
+OpenCode Loop still includes the older **experimental** `/loop-goal` workflow for backward compatibility unless you install/update with `--without-loop-goals`. It is useful for compatibility and lightweight outcome-driven automation, but it is not the strongest Goal implementation in this project family.
 
 For durable Goal Contracts, host-owned evidence, semantic verification, native Todo coordination, revision isolation, false-completion protection, restart recovery, Goal audit, budgets, and ordered Goals, install **OpenCode Goals**.
 
@@ -174,6 +188,12 @@ Convenient combined installer from Loop:
 
 ```bash
 npx -y @bybrawe/opencode-loop@latest --with-goals
+```
+
+For new installations where the dedicated `/goal` workflow replaces Loop's older experimental Goal commands, prefer:
+
+```bash
+npx -y @bybrawe/opencode-loop@latest --with-goals --without-loop-goals
 ```
 
 Or install Goals directly with its standalone installer:
@@ -207,7 +227,7 @@ Recommended split:
 - use **`/goal`** for persistent, strongly verified outcome completion;
 - use **`/loop`**, `/loop-command`, `/loop-shell`, and `opencode-loopd` for scheduling/repetition/background infrastructure.
 
-Do **not** run Loop’s `/loop-goal` and OpenCode Goals `/goal` against the same work in the same session. Both can autonomously continue on idle boundaries and can compete to start turns.
+Do **not** run Loop’s `/loop-goal` and OpenCode Goals `/goal` against the same work in the same session. Both can autonomously continue on idle boundaries and can compete to start turns. Use `--without-loop-goals` when you want to remove that legacy command surface entirely.
 
 Likewise, avoid leaving a prompt-producing `/loop ...` job continuously injecting agent turns into a session while an OpenCode Goal is actively continuing. Use separate sessions or pause/remove that prompt loop until the Goal is done. Scheduled shell/command jobs should also be chosen carefully so they do not race files or verification.
 
@@ -224,7 +244,7 @@ npm install -g @bybrawe/opencode-loop@latest @bybrawe/opencode-goal@latest
 opencode-loop --with-goals
 ```
 
-Once Goals is managed in the OpenCode config, future normal `opencode-loop` / `npx ...opencode-loop@latest` updates also attempt to refresh Goals to its latest stable release. Use `--loop-only` when you intentionally do not want that companion refresh.
+Once Goals is managed in the OpenCode config, future normal `opencode-loop` / `npx ...opencode-loop@latest` updates also attempt to refresh Goals to its latest stable release. Use `--loop-only` when you intentionally do not want that companion refresh. Use `--without-loop-goals` on any install/update where you want the older Loop Goal command files omitted.
 
 ## Core commands
 
@@ -244,7 +264,7 @@ Once Goals is managed in the OpenCode config, future normal `opencode-loop` / `n
 | `/loop-doctor` | Diagnose Loop/OpenCode state |
 | `/loop-init` | Create a starter `progress.md` |
 | `/loop-export` | Export Loop state as JSON |
-| `/loop-goal <objective>` | Start the older experimental Loop Goal Mode |
+| `/loop-goal <objective>` | Start the older experimental Loop Goal Mode when those optional legacy command files are installed |
 
 ## Intervals and job types
 
@@ -386,7 +406,7 @@ opencode-loopd uninstall-task --name OpenCodeLoop
 
 ## Experimental Loop Goal Mode
 
-Loop’s original Goal Mode remains available for existing users:
+Loop’s original Goal Mode remains available for existing users by default. If you install/update Loop with `--without-loop-goals`, its packaged `/loop-goal*` command definitions are removed while the rest of Loop keeps working.
 
 ```text
 /loop-goal --check "npm test" --complete-when-checks-pass fix the failing tests
