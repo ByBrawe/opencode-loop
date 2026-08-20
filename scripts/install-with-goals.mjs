@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process"
-import { readFile } from "node:fs/promises"
+import { readFile, readdir, rm } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import process from "node:process"
@@ -16,7 +16,8 @@ const managedGoalCommandMarker = "<!-- managed-by:@bybrawe/opencode-goal -->"
 const rawArgs = process.argv.slice(2)
 const withGoals = rawArgs.includes("--with-goals")
 const loopOnly = rawArgs.includes("--loop-only")
-const loopArgs = rawArgs.filter((arg) => arg !== "--with-goals" && arg !== "--loop-only")
+const withoutLoopGoals = rawArgs.includes("--without-loop-goals")
+const loopArgs = rawArgs.filter((arg) => !["--with-goals", "--loop-only", "--without-loop-goals"].includes(arg))
 const uninstallRequested = loopArgs.length === 1 && ["--uninstall", "uninstall", "--remove"].includes(loopArgs[0] || "")
 const helpRequested = loopArgs.some((arg) => ["--help", "-h"].includes(arg))
 const versionRequested = loopArgs.some((arg) => ["--version", "-v"].includes(arg))
@@ -117,6 +118,22 @@ async function goalsAlreadyInstalled() {
   return false
 }
 
+async function removeLoopGoalCommands() {
+  const commandDir = join(config, "commands")
+  const names = (await readdir(join(root, "commands")))
+    .filter((name) => name === "loop-goal.md" || (name.startsWith("loop-goal-") && name.endsWith(".md")))
+  let removed = 0
+  for (const name of names) {
+    try {
+      await rm(join(commandDir, name))
+      removed++
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error
+    }
+  }
+  return removed
+}
+
 function runLoopInstaller() {
   return spawnSync(process.execPath, [loopInstaller, ...loopArgs], {
     cwd: root,
@@ -148,7 +165,7 @@ function statusCode(result) {
 }
 
 function printCompanionHelp() {
-  console.log(`\nOpenCode Goals companion options:\n  --with-goals  Install/update @bybrawe/opencode-goal@latest even when it is not already installed.\n  --loop-only   Skip all OpenCode Goals companion detection and network update work.\n\nNormal Loop install/update refreshes an already-managed OpenCode Goals installation on a best-effort basis. Loop uninstall never removes Goals.`)
+  console.log(`\nOpenCode Goals companion options:\n  --with-goals          Install/update @bybrawe/opencode-goal@latest even when it is not already installed.\n  --loop-only           Skip all OpenCode Goals companion detection and network update work.\n  --without-loop-goals  Omit/remove Loop's packaged experimental /loop-goal* command files for this install/update.\n\nNormal Loop install/update refreshes an already-managed OpenCode Goals installation on a best-effort basis. Loop uninstall never removes Goals.`)
 }
 
 async function main() {
@@ -175,6 +192,11 @@ async function main() {
     return
   }
   if (uninstallRequested) return
+
+  if (withoutLoopGoals) {
+    const removed = await removeLoopGoalCommands()
+    console.log(`Omitted ${removed} packaged experimental /loop-goal* command file(s) (--without-loop-goals).`)
+  }
 
   if (loopOnly) {
     console.log("Skipped OpenCode Goals companion update (--loop-only).")
