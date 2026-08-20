@@ -1,6 +1,7 @@
 ---
 description: Handles OpenCode Loop slash-command acknowledgements without tools.
-mode: primary
+mode: subagent
+hidden: true
 permission:
   "*": deny
 ---
