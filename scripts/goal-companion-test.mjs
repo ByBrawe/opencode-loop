@@ -62,6 +62,20 @@ async function calls(log) {
   }
 }
 
+async function loopGoalCommands(config) {
+  try {
+    return (await fs.readdir(path.join(config, "commands")))
+      .filter((name) => name === "loop-goal.md" || (name.startsWith("loop-goal-") && name.endsWith(".md")))
+  } catch (error) {
+    if (error?.code === "ENOENT") return []
+    throw error
+  }
+}
+
+async function exists(target) {
+  try { await fs.access(target); return true } catch { return false }
+}
+
 async function writeConfig(config, plugins, comment = "") {
   await fs.mkdir(config, { recursive: true })
   await fs.writeFile(
@@ -71,12 +85,26 @@ async function writeConfig(config, plugins, comment = "") {
   )
 }
 
+const localAgent = await fs.readFile(path.join(root, "agents", "opencode-loop-local.md"), "utf8")
+assert.match(localAgent, /^mode:\s*subagent$/m, "the local acknowledgement agent must not participate in the primary-agent cycle")
+assert.match(localAgent, /^hidden:\s*true$/m, "the local acknowledgement agent must be hidden from normal subagent selection")
+
 try {
   const absentConfig = path.join(temporaryRoot, "absent")
   const absentLog = path.join(temporaryRoot, "absent.log")
   const absent = await runInstaller(absentConfig, [], { FAKE_NPM_LOG: absentLog })
   assert.equal(absent.code, 0, absent.stderr)
   assert.deepEqual(await calls(absentLog), [], "Loop-only installations must not silently add Goals")
+  assert.ok((await loopGoalCommands(absentConfig)).length > 0, "legacy Loop Goal commands stay installed by default for compatibility")
+
+  const withoutLoopGoalsConfig = path.join(temporaryRoot, "without-loop-goals")
+  const withoutLoopGoalsLog = path.join(temporaryRoot, "without-loop-goals.log")
+  const withoutLoopGoals = await runInstaller(withoutLoopGoalsConfig, ["--without-loop-goals"], { FAKE_NPM_LOG: withoutLoopGoalsLog })
+  assert.equal(withoutLoopGoals.code, 0, withoutLoopGoals.stderr)
+  assert.deepEqual(await calls(withoutLoopGoalsLog), [], "omitting legacy Loop Goal commands must not silently install Goals")
+  assert.deepEqual(await loopGoalCommands(withoutLoopGoalsConfig), [], "--without-loop-goals must remove every packaged experimental /loop-goal* command")
+  assert.equal(await exists(path.join(withoutLoopGoalsConfig, "commands", "loop.md")), true, "normal Loop commands must remain installed")
+  assert.match(withoutLoopGoals.stdout, /Omitted \d+ packaged experimental \/loop-goal\*/)
 
   const existingConfig = path.join(temporaryRoot, "existing")
   const existingLog = path.join(temporaryRoot, "existing.log")
@@ -114,6 +142,13 @@ try {
   assert.equal(explicit.code, 0, explicit.stderr)
   assert.deepEqual(await calls(explicitLog), [expectedGoalExec], "--with-goals must install the companion even when it is absent")
 
+  const explicitCleanConfig = path.join(temporaryRoot, "explicit-clean")
+  const explicitCleanLog = path.join(temporaryRoot, "explicit-clean.log")
+  const explicitClean = await runInstaller(explicitCleanConfig, ["--with-goals", "--without-loop-goals"], { FAKE_NPM_LOG: explicitCleanLog })
+  assert.equal(explicitClean.code, 0, explicitClean.stderr)
+  assert.deepEqual(await calls(explicitCleanLog), [expectedGoalExec], "the clean command surface option must compose with --with-goals")
+  assert.deepEqual(await loopGoalCommands(explicitCleanConfig), [], "combined install must keep the stronger Goals plugin without legacy Loop Goal command clutter")
+
   const optOutConfig = path.join(temporaryRoot, "opt-out")
   const optOutLog = path.join(temporaryRoot, "opt-out.log")
   await writeConfig(optOutConfig, ["@bybrawe/opencode-goal@1.3.16"])
@@ -146,6 +181,7 @@ try {
   assert.match(help.stdout, /OpenCode Loop installer\/updater/)
   assert.match(help.stdout, /--with-goals/)
   assert.match(help.stdout, /--loop-only/)
+  assert.match(help.stdout, /--without-loop-goals/)
   assert.match(help.stdout, /Loop uninstall never removes Goals/)
   assert.deepEqual(await calls(helpLog), [], "help/version flows must never install companion packages")
 
