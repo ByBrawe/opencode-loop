@@ -2751,10 +2751,85 @@ function createCompactionRuntime(options = {}) {
   };
 }
 
+// src/source/runtime/action-dispatch.js
+function requireFunction7(value, label) {
+  if (typeof value !== "function")
+    throw new TypeError(`createActionDispatcher requires ${label}`);
+  return value;
+}
+function createActionDispatcher(options = {}) {
+  const buildPrompt = requireFunction7(options.buildPrompt, "buildPrompt");
+  const startCompaction = requireFunction7(options.compactionRuntime?.start, "compactionRuntime.start");
+  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
+  const sdkCall2 = typeof options.sdkCall === "function" ? options.sdkCall : sdkCall;
+  const normalizedModelRef2 = typeof options.normalizedModelRef === "function" ? options.normalizedModelRef : normalizedModelRef;
+  const fireSdk2 = typeof options.fireSdk === "function" ? options.fireSdk : fireSdk;
+  const compactTuiCommandName2 = typeof options.compactTuiCommandName === "function" ? options.compactTuiCommandName : compactTuiCommandName;
+  const toast2 = typeof options.toast === "function" ? options.toast : toast;
+  const guardLoopOwnedUserMessage2 = typeof options.guardLoopOwnedUserMessage === "function" ? options.guardLoopOwnedUserMessage : guardLoopOwnedUserMessage;
+  const dangerousShell2 = typeof options.dangerousShell === "function" ? options.dangerousShell : dangerousShell;
+  async function fireAction(directory, client, sessionID, job) {
+    const action = String(job.action || "").trim();
+    const kind = actionKind(action, job);
+    const agent = job.agent || "build";
+    const model = normalizedModelRef2(job.model);
+    if (kind === "compact") {
+      const ok = await startCompaction(directory, client, sessionID, job.id, model, false);
+      return { startsAssistantTurn: ok, pause: !ok, reason: "compact_failed", compaction: ok };
+    }
+    if (kind === "command") {
+      const normalized = action.startsWith("/") ? action.slice(1) : action;
+      const [command, argumentsText] = splitFirst(normalized);
+      if (!command) {
+        await toast2(client, "Loop command action is empty. Example: /loop-command 200m /compact", "warning");
+        return { startsAssistantTurn: false, pause: true, reason: "empty_command" };
+      }
+      const tuiCommand = compactTuiCommandName2(command);
+      if (tuiCommand) {
+        guardLoopOwnedUserMessage2(sessionID);
+        const ok = await startCompaction(directory, client, sessionID, job.id, model, false);
+        return { startsAssistantTurn: ok, pause: !ok, reason: "compact_failed", compaction: ok };
+      }
+      guardLoopOwnedUserMessage2(sessionID);
+      const commandBody = { command, arguments: argumentsText, agent };
+      if (model)
+        commandBody.model = `${model.providerID}/${model.modelID}`;
+      await sdkCall2(client.session.command.bind(client.session), { path: { id: sessionID }, body: commandBody }, { path: { sessionID }, body: commandBody }, { sessionID, ...commandBody });
+      return { startsAssistantTurn: true };
+    }
+    if (kind === "shell") {
+      const command = action.replace(/^[!$]\s*/, "").trim();
+      if (job.safe && dangerousShell2(command)) {
+        await toast2(client, `Blocked dangerous shell command in safe mode: ${command}`, "error");
+        await appendLoopLog2(directory, "blocked", { sessionID, job: job.name || job.id, command });
+        return { startsAssistantTurn: false, pause: true, reason: "safe_shell_blocked" };
+      }
+      guardLoopOwnedUserMessage2(sessionID);
+      const shellBody = { command, agent };
+      if (model)
+        shellBody.model = model;
+      const dispatch2 = fireSdk2(client, "session.shell", client.session.shell.bind(client.session), { path: { id: sessionID }, body: shellBody }, { path: { sessionID }, body: shellBody }, { sessionID, ...shellBody });
+      return { startsAssistantTurn: true, dispatch: dispatch2 };
+    }
+    const prompt = await buildPrompt(directory, job);
+    const prefix = kind === "goal" ? "EXPERIMENTAL GOAL MODE CONTINUATION. Continue pursuing the active goal. Do not explain the /loop-goal command. Use the goal tools only when progress/completion/block state is real." : "AUTONOMOUS OPENCODE LOOP ITERATION. Continue the configured task now. Do not explain the /loop command. Do not search for documentation about this plugin. Do not create scheduler files. Do not ask questions. Make reasonable assumptions and work directly.";
+    const promptText = `${prefix}
+
+${prompt}`;
+    guardLoopOwnedUserMessage2(sessionID);
+    const promptBody = { agent, parts: [{ type: "text", text: promptText }] };
+    if (model)
+      promptBody.model = model;
+    const dispatch = fireSdk2(client, "session.prompt", client.session.prompt.bind(client.session), { path: { id: sessionID }, body: promptBody }, { path: { sessionID }, body: promptBody }, { sessionID, ...promptBody });
+    return { startsAssistantTurn: true, dispatch };
+  }
+  return { fireAction };
+}
+
 // src/source/runtime/executor.js
 var DEFAULT_ACTIVE_GUARD_MS = 45000;
 var DEFAULT_BUSY_RETRY_MS2 = 5000;
-function requireFunction7(value, label) {
+function requireFunction8(value, label) {
   if (typeof value !== "function")
     throw new TypeError(`createLoopExecutor requires ${label}`);
   return value;
@@ -2763,15 +2838,15 @@ function createLoopExecutor(options = {}) {
   const workspace = options.workspace || {};
   const goalPolicy = options.goalPolicy || {};
   const scheduler = options.scheduler || {};
-  const buildPrompt = requireFunction7(workspace.buildPrompt, "workspace.buildPrompt");
-  const ensureBranch = requireFunction7(workspace.ensureBranch, "workspace.ensureBranch");
-  const watchChanged = requireFunction7(workspace.watchChanged, "workspace.watchChanged");
-  const untilReached = requireFunction7(workspace.untilReached, "workspace.untilReached");
-  const createCheckpoint = requireFunction7(workspace.createCheckpoint, "workspace.createCheckpoint");
-  const runGoalChecks = requireFunction7(goalPolicy.runGoalChecks, "goalPolicy.runGoalChecks");
-  const applyGoalNoProgressGuard = requireFunction7(goalPolicy.applyGoalNoProgressGuard, "goalPolicy.applyGoalNoProgressGuard");
-  const rememberSession = requireFunction7(scheduler.rememberSession, "scheduler.rememberSession");
-  const scheduleDueWork = requireFunction7(scheduler.scheduleDueWork, "scheduler.scheduleDueWork");
+  const buildPrompt = requireFunction8(workspace.buildPrompt, "workspace.buildPrompt");
+  const ensureBranch = requireFunction8(workspace.ensureBranch, "workspace.ensureBranch");
+  const watchChanged = requireFunction8(workspace.watchChanged, "workspace.watchChanged");
+  const untilReached = requireFunction8(workspace.untilReached, "workspace.untilReached");
+  const createCheckpoint = requireFunction8(workspace.createCheckpoint, "workspace.createCheckpoint");
+  const runGoalChecks = requireFunction8(goalPolicy.runGoalChecks, "goalPolicy.runGoalChecks");
+  const applyGoalNoProgressGuard = requireFunction8(goalPolicy.applyGoalNoProgressGuard, "goalPolicy.applyGoalNoProgressGuard");
+  const rememberSession = requireFunction8(scheduler.rememberSession, "scheduler.rememberSession");
+  const scheduleDueWork = requireFunction8(scheduler.scheduleDueWork, "scheduler.scheduleDueWork");
   const now2 = typeof options.now === "function" ? options.now : now;
   const readState2 = typeof options.readState === "function" ? options.readState : readState;
   const writeState2 = typeof options.writeState === "function" ? options.writeState : writeState;
@@ -2780,13 +2855,9 @@ function createLoopExecutor(options = {}) {
   const runShellCommand2 = typeof options.runShellCommand === "function" ? options.runShellCommand : runShellCommand;
   const notifyJob2 = typeof options.notifyJob === "function" ? options.notifyJob : notifyJob;
   const errorMessage = typeof options.errorMessage === "function" ? options.errorMessage : sdkErrorMessage;
-  const sdkCall2 = typeof options.sdkCall === "function" ? options.sdkCall : sdkCall;
-  const normalizedModelRef2 = typeof options.normalizedModelRef === "function" ? options.normalizedModelRef : normalizedModelRef;
   const fireSdk2 = typeof options.fireSdk === "function" ? options.fireSdk : fireSdk;
-  const compactTuiCommandName2 = typeof options.compactTuiCommandName === "function" ? options.compactTuiCommandName : compactTuiCommandName;
   const log2 = typeof options.log === "function" ? options.log : log;
   const toast2 = typeof options.toast === "function" ? options.toast : toast;
-  const guardLoopOwnedUserMessage2 = typeof options.guardLoopOwnedUserMessage === "function" ? options.guardLoopOwnedUserMessage : guardLoopOwnedUserMessage;
   const writeGoalReport2 = typeof options.writeGoalReport === "function" ? options.writeGoalReport : writeGoalReport;
   const dangerousShell2 = typeof options.dangerousShell === "function" ? options.dangerousShell : dangerousShell;
   const activeGuardMs = Number.isFinite(Number(options.activeGuardMs)) && Number(options.activeGuardMs) > 0 ? Number(options.activeGuardMs) : DEFAULT_ACTIVE_GUARD_MS;
@@ -2817,6 +2888,18 @@ function createLoopExecutor(options = {}) {
     log: log2,
     errorMessage,
     now: now2
+  });
+  const actionDispatcher = createActionDispatcher({
+    buildPrompt,
+    compactionRuntime,
+    appendLoopLog: appendLoopLog2,
+    sdkCall: options.sdkCall,
+    normalizedModelRef: options.normalizedModelRef,
+    fireSdk: options.fireSdk,
+    compactTuiCommandName: options.compactTuiCommandName,
+    toast: toast2,
+    guardLoopOwnedUserMessage: options.guardLoopOwnedUserMessage,
+    dangerousShell: dangerousShell2
   });
   function dueJobs(state, force = false) {
     const current = now2();
@@ -2981,61 +3064,7 @@ exit=` + postrun.code + `
     await scheduleDueWork(directory, client, sessionID);
     return true;
   }
-  async function fireAction(directory, client, sessionID, job) {
-    const action = String(job.action || "").trim();
-    const kind = actionKind(action, job);
-    const agent = job.agent || "build";
-    const model = normalizedModelRef2(job.model);
-    if (kind === "compact") {
-      const ok = await compactionRuntime.start(directory, client, sessionID, job.id, model, false);
-      return { startsAssistantTurn: ok, pause: !ok, reason: "compact_failed", compaction: ok };
-    }
-    if (kind === "command") {
-      const normalized = action.startsWith("/") ? action.slice(1) : action;
-      const [command, argumentsText] = splitFirst(normalized);
-      if (!command) {
-        await toast2(client, "Loop command action is empty. Example: /loop-command 200m /compact", "warning");
-        return { startsAssistantTurn: false, pause: true, reason: "empty_command" };
-      }
-      const tuiCommand = compactTuiCommandName2(command);
-      if (tuiCommand) {
-        guardLoopOwnedUserMessage2(sessionID);
-        const ok = await compactionRuntime.start(directory, client, sessionID, job.id, model, false);
-        return { startsAssistantTurn: ok, pause: !ok, reason: "compact_failed", compaction: ok };
-      }
-      guardLoopOwnedUserMessage2(sessionID);
-      const commandBody = { command, arguments: argumentsText, agent };
-      if (model)
-        commandBody.model = `${model.providerID}/${model.modelID}`;
-      await sdkCall2(client.session.command.bind(client.session), { path: { id: sessionID }, body: commandBody }, { path: { sessionID }, body: commandBody }, { sessionID, ...commandBody });
-      return { startsAssistantTurn: true };
-    }
-    if (kind === "shell") {
-      const command = action.replace(/^[!$]\s*/, "").trim();
-      if (job.safe && dangerousShell2(command)) {
-        await toast2(client, `Blocked dangerous shell command in safe mode: ${command}`, "error");
-        await appendLoopLog2(directory, "blocked", { sessionID, job: job.name || job.id, command });
-        return { startsAssistantTurn: false, pause: true, reason: "safe_shell_blocked" };
-      }
-      guardLoopOwnedUserMessage2(sessionID);
-      const shellBody = { command, agent };
-      if (model)
-        shellBody.model = model;
-      const dispatch2 = fireSdk2(client, "session.shell", client.session.shell.bind(client.session), { path: { id: sessionID }, body: shellBody }, { path: { sessionID }, body: shellBody }, { sessionID, ...shellBody });
-      return { startsAssistantTurn: true, dispatch: dispatch2 };
-    }
-    const prompt = await buildPrompt(directory, job);
-    const prefix = kind === "goal" ? "EXPERIMENTAL GOAL MODE CONTINUATION. Continue pursuing the active goal. Do not explain the /loop-goal command. Use the goal tools only when progress/completion/block state is real." : "AUTONOMOUS OPENCODE LOOP ITERATION. Continue the configured task now. Do not explain the /loop command. Do not search for documentation about this plugin. Do not create scheduler files. Do not ask questions. Make reasonable assumptions and work directly.";
-    const promptText = `${prefix}
-
-${prompt}`;
-    guardLoopOwnedUserMessage2(sessionID);
-    const promptBody = { agent, parts: [{ type: "text", text: promptText }] };
-    if (model)
-      promptBody.model = model;
-    const dispatch = fireSdk2(client, "session.prompt", client.session.prompt.bind(client.session), { path: { id: sessionID }, body: promptBody }, { path: { sessionID }, body: promptBody }, { sessionID, ...promptBody });
-    return { startsAssistantTurn: true, dispatch };
-  }
+  const fireAction = actionDispatcher.fireAction;
   async function maybeRunDueJobs(directory, client, sessionID, runOptions = {}) {
     rememberSession(directory, client, sessionID);
     const reschedule = async (minDelayMs = 0) => {
@@ -3254,7 +3283,7 @@ exit=` + preflight.code + `
 // src/source/runtime/goal-steering.js
 var DEFAULT_STEERING_SUPPRESSION_MS = 5 * 60000;
 var DEFAULT_SEEN_USER_MESSAGE_MS = 10 * 60000;
-function requireFunction8(value, label) {
+function requireFunction9(value, label) {
   if (typeof value !== "function")
     throw new TypeError(`createGoalSteeringRuntime requires ${label}`);
   return value;
@@ -3298,8 +3327,8 @@ function activeGoalJobs(state) {
   });
 }
 function createGoalSteeringRuntime(options = {}) {
-  const getActiveRun = requireFunction8(options.getActiveRun, "getActiveRun");
-  const clearActiveRun = requireFunction8(options.clearActiveRun, "clearActiveRun");
+  const getActiveRun = requireFunction9(options.getActiveRun, "getActiveRun");
+  const clearActiveRun = requireFunction9(options.clearActiveRun, "clearActiveRun");
   const isLoopOwnedUserMessage = typeof options.isLoopOwnedUserMessage === "function" ? options.isLoopOwnedUserMessage : () => false;
   const readState2 = typeof options.readState === "function" ? options.readState : readState;
   const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
@@ -4138,6 +4167,6 @@ var OpenCodeLoopPlugin2 = async (input = {}) => {
 };
 var v1_default = OpenCodeLoopPlugin2;
 export {
-  v1_default as default,
-  OpenCodeLoopPlugin2 as OpenCodeLoopPlugin
+  OpenCodeLoopPlugin2 as OpenCodeLoopPlugin,
+  v1_default as default
 };
