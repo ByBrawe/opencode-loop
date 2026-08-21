@@ -6,6 +6,7 @@
 - Split experimental Loop Goal prompt rendering, report writing, and evidence/progress decision helpers into dedicated modules while preserving the existing source facade and runtime state schema.
 - Regenerate the committed single-file stable plugin from the modular source tree and keep Linux/Windows real-host, compatibility, generated-bundle, and lifecycle gates green throughout the refactor.
 - Add direct regression coverage for the extracted admission/finalization paths; this release is intended to be behavior-preserving with no user-visible command changes.
+
 ## 0.5.32
 
 - Hide the tool-denied `opencode-loop-local` acknowledgement agent from the normal primary-agent cycle by installing it as a hidden subagent while keeping Loop slash commands explicitly bound to it.
