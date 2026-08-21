@@ -1,7 +1,6 @@
-import path from "node:path"
 import { now as defaultNow } from "../core/args.js"
 import { isGoalJob } from "../core/jobs.js"
-import { pathExists as defaultPathExists, readState as defaultReadState, writeState as defaultWriteState } from "../core/state.js"
+import { readState as defaultReadState, writeState as defaultWriteState } from "../core/state.js"
 import { appendLoopLog as defaultAppendLoopLog, runShellCommand as defaultRunShellCommand, notifyJob as defaultNotifyJob } from "../core/process.js"
 import { sdkErrorMessage as defaultErrorMessage } from "../opencode/sdk.js"
 import { fireSdk as defaultFireSdk, log as defaultLog, toast as defaultToast } from "../opencode/host.js"
@@ -10,6 +9,7 @@ import { createSessionStatusRuntime } from "./session-status.js"
 import { createCompactionRuntime } from "./compaction.js"
 import { createActionDispatcher } from "./action-dispatch.js"
 import { createRunFinalizationRuntime } from "./run-finalization.js"
+import { createRunAdmissionRuntime } from "./run-admission.js"
 
 const DEFAULT_ACTIVE_GUARD_MS = 45_000
 const DEFAULT_BUSY_RETRY_MS = 5_000
@@ -37,7 +37,6 @@ export function createLoopExecutor(options = {}) {
   const now = typeof options.now === "function" ? options.now : defaultNow
   const readState = typeof options.readState === "function" ? options.readState : defaultReadState
   const writeState = typeof options.writeState === "function" ? options.writeState : defaultWriteState
-  const pathExists = typeof options.pathExists === "function" ? options.pathExists : defaultPathExists
   const appendLoopLog = typeof options.appendLoopLog === "function" ? options.appendLoopLog : defaultAppendLoopLog
   const runShellCommand = typeof options.runShellCommand === "function" ? options.runShellCommand : defaultRunShellCommand
   const notifyJob = typeof options.notifyJob === "function" ? options.notifyJob : defaultNotifyJob
@@ -111,20 +110,19 @@ export function createLoopExecutor(options = {}) {
     dangerousShell,
   })
 
-  function dueJobs(state, force = false) {
-    const current = now()
-    const due = (state.jobs || []).filter((job) => {
-      if (isGoalJob(job) && ["completed", "blocked", "cleared"].includes(job.goalStatus)) return false
-      if (!job.enabled || job.paused) return false
-      if (job.maxRuns > 0 && (job.runCount || 0) >= job.maxRuns) return false
-      if (job.maxRuntimeMs > 0 && current - Date.parse(job.createdAt || new Date().toISOString()) >= job.maxRuntimeMs) return true
-      if (Number(job.runNowRequestedAt || 0) > 0) return true
-      if (force) return true
-      if (job.watchPaths?.length) return job.watchTriggered === true
-      return job.intervalMs === 0 || !job.lastRunAt || current - job.lastRunAt >= job.intervalMs
-    })
-    return due.sort((a, b) => Number(Number(b.runNowRequestedAt || 0) > 0) - Number(Number(a.runNowRequestedAt || 0) > 0))
-  }
+  const admissionRuntime = createRunAdmissionRuntime({
+    untilReached,
+    scheduleDueWork,
+    now,
+    pathExists: options.pathExists,
+    writeState,
+    appendLoopLog,
+    runShellCommand,
+    notifyJob,
+    toast,
+    dangerousShell,
+  })
+  const dueJobs = admissionRuntime.dueJobs
 
   function clearActiveRun(sessionID) {
     const active = activeRuns.get(sessionID)
@@ -249,64 +247,11 @@ export function createLoopExecutor(options = {}) {
         return
       }
       job = due[0]
-      const runNowRequested = Number(job.runNowRequestedAt || 0) > 0
 
-      if (job.maxRuntimeMs > 0 && now() - Date.parse(job.createdAt || new Date().toISOString()) >= job.maxRuntimeMs) {
-        state.jobs = (state.jobs || []).filter((candidate) => candidate.id !== job.id)
-        await writeState(directory, sessionID, state)
-        await notifyJob(directory, job, "max_runtime_reached")
-        await toast(client, `Loop stopped by --max-runtime: ${job.name || job.id}`, "success")
-        await appendLoopLog(directory, "max-runtime", { sessionID, job: job.name || job.id })
-        await reschedule()
-        return
-      }
-      if (job.stopFile && await pathExists(path.resolve(directory, job.stopFile))) {
-        state.jobs = (state.jobs || []).filter((candidate) => candidate.id !== job.id)
-        await writeState(directory, sessionID, state)
-        await notifyJob(directory, job, "stop_file")
-        await toast(client, "Loop stopped by --stop-file: " + job.stopFile, "success")
-        await reschedule()
-        return
-      }
-      if (await untilReached(directory, job)) {
-        state.jobs = (state.jobs || []).filter((candidate) => candidate.id !== job.id)
-        await writeState(directory, sessionID, state)
-        await notifyJob(directory, job, "until_reached")
-        await toast(client, `Loop stopped by --until: ${job.until}`, "success")
-        await reschedule()
-        return
-      }
-
-      if (job.preflightCommand) {
-        if (job.safe && dangerousShell(job.preflightCommand)) {
-          if (runNowRequested) delete job.runNowRequestedAt
-          job.paused = true
-          await writeState(directory, sessionID, state)
-          await notifyJob(directory, job, "preflight_blocked")
-          await toast(client, "Preflight blocked in safe mode and loop paused: " + job.preflightCommand, "error")
-          await reschedule()
-          return
-        }
-        const preflight = await runShellCommand(job.preflightCommand, directory, job.timeoutMs || 300_000)
-        await appendLoopLog(directory, "preflight", {
-          sessionID,
-          job: job.name || job.id,
-          command: job.preflightCommand,
-          code: preflight.code,
-        })
-        if (preflight.code !== 0) {
-          if (runNowRequested) delete job.runNowRequestedAt
-          job.paused = true
-          job.failureCount = (job.failureCount || 0) + 1
-          job.lastPreflightFailure = (job.preflightCommand + "\nexit=" + preflight.code + "\n" + preflight.stdout + "\n" + preflight.stderr).slice(0, 4000)
-          state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate)
-          await writeState(directory, sessionID, state)
-          await notifyJob(directory, job, "preflight_failed")
-          await toast(client, "Preflight failed and loop paused: " + job.preflightCommand, "warning")
-          await reschedule()
-          return
-        }
-      }
+      const admission = await admissionRuntime.admitJob(directory, client, sessionID, state, job)
+      if (!admission.admitted) return
+      job = admission.job
+      const runNowRequested = admission.runNowRequested
 
       job = await ensureBranch(directory, job, client, sessionID)
       const compactResult = await compactionRuntime.maybeCompact(directory, client, sessionID, job)
