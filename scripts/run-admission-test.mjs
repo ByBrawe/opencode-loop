@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import path from "node:path"
 import { createRunAdmissionRuntime } from "../src/source/runtime/run-admission.js"
 
 assert.throws(() => createRunAdmissionRuntime({}), /untilReached/)
@@ -13,12 +14,13 @@ const toasts = []
 const schedules = []
 const stopFiles = new Set()
 const untilJobs = new Set()
+const normalizePath = (value) => String(value).replace(/\\/g, "/")
 
 const runtime = createRunAdmissionRuntime({
   untilReached: async (_directory, job) => untilJobs.has(job.id),
   scheduleDueWork: async (...args) => { schedules.push(args) },
   now: () => clock,
-  pathExists: async (target) => stopFiles.has(String(target).replace(/\\/g, "/")),
+  pathExists: async (target) => stopFiles.has(normalizePath(target)),
   writeState: async (...args) => { writes.push(args) },
   appendLoopLog: async (...args) => { logs.push(args) },
   runShellCommand: async (command) => {
@@ -62,7 +64,7 @@ assert.equal(logs.at(-1)[1], "max-runtime")
 assert.match(toasts.at(-1)[1], /--max-runtime/)
 assert.equal(schedules.at(-1)[2], "session-expired")
 
-stopFiles.add("/repo/STOP")
+stopFiles.add(normalizePath(path.resolve("/repo", "STOP")))
 const stopped = { id: "stopped", enabled: true, stopFile: "STOP" }
 const stoppedState = { jobs: [stopped] }
 const stoppedResult = await runtime.admitJob("/repo", {}, "session-stop", stoppedState, stopped)
