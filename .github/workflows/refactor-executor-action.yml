@@ -1,0 +1,53 @@
+name: Temporary executor action extraction
+
+on:
+  push:
+    branches:
+      - "refactor/executor-action-dispatch"
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: true
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: npm ci
+
+      - name: Apply extraction
+        run: node scripts/refactor-executor-action.mjs
+
+      - name: Rebuild stable single-file entry
+        run: npm run build:plugin
+
+      - name: Verify syntax and regressions
+        run: |
+          npm run check
+          npm test
+          git diff --check
+
+      - name: Commit generated refactor
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json src/source/runtime/executor.js src/index.js
+          git diff --cached --quiet && exit 0
+          git commit -m "refactor: extract executor action dispatch"
+          git push origin HEAD:refactor/executor-action-dispatch
