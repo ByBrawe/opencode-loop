@@ -82,7 +82,7 @@ const blockedState = { jobs: [blockedPostrun] }
 const shellCountBeforeBlocked = shellCalls.length
 await runtime.finalizeJob("/repo", {}, "session-blocked", blockedState, blockedPostrun, { id: "before-blocked" })
 assert.equal(shellCalls.length, shellCountBeforeBlocked)
-assert.equal(logs.findLast((entry) => entry[1] === "postrun-blocked")?.[3].command, "danger --all")
+assert.equal(logs.findLast((entry) => entry[1] === "postrun-blocked")?.[2].command, "danger --all")
 
 const failedPostrun = {
   id: "failed-postrun",
