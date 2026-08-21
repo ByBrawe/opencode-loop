@@ -1,7 +1,7 @@
 import { DEFAULT_GOAL_MAX_NO_PROGRESS, now as defaultNow } from "../core/args.js"
 import { isGoalJob } from "../core/jobs.js"
 import { appendLoopLog as defaultAppendLoopLog } from "../core/process.js"
-import { goalMadeMeaningfulProgress } from "./goal-runtime.js"
+import { goalMadeMeaningfulProgress } from "./goal-evidence.js"
 
 function requireFunction(value, name) {
   if (typeof value !== "function") throw new TypeError(`createGoalExecutionPolicy requires ${name}`)
