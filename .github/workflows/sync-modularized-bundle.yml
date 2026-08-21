@@ -1,0 +1,50 @@
+name: Temporary modularized bundle sync
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: true
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: npm ci
+
+      - name: Rebuild committed stable entry from modular source
+        run: |
+          npm run build:plugin
+          node --check src/index.js
+          git diff --check
+
+      - name: Commit generated bundle
+        shell: bash
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/index.js
+          git diff --cached --quiet && exit 0
+          git commit -m "chore: sync generated bundle after modularization"
+          git push origin HEAD:"$HEAD_REF"
