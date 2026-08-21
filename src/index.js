@@ -1231,91 +1231,10 @@ function createCommandRouter(options = {}) {
   };
 }
 
-// src/source/runtime/goal-runtime.js
+// src/source/runtime/goal-report.js
 import { promises as fs3 } from "fs";
 import path3 from "path";
 var GOAL_REPORT_DIR = "goals";
-var GOAL_PROMPT_PREFIX = "EXPERIMENTAL OPENCODE GOAL MODE ITERATION";
-async function buildGoalPrompt(directory, job) {
-  const sections = [];
-  sections.push(`Working directory:
-${path3.resolve(directory)}
-Keep every file operation inside this directory. Prefer workspace-relative paths such as "src/index.js"; never turn a relative path into a root path such as "/src/index.js".`);
-  const objective = String(job.action || "").trim();
-  if (objective)
-    sections.push(`Goal objective:
-${objective}`);
-  if (job.goalFile) {
-    const text = await readSmallTextFile(path3.resolve(directory, job.goalFile), 120000);
-    if (text.trim())
-      sections.push(`Goal file ${job.goalFile}:
-${text.trim()}`);
-    else
-      sections.push(`Goal file ${job.goalFile} was requested but could not be read. Continue from the inline goal objective.`);
-  }
-  if (job.promptFile) {
-    const text = await readSmallTextFile(path3.resolve(directory, job.promptFile), 120000);
-    if (text.trim())
-      sections.push(`Extra goal instructions from ${job.promptFile}:
-${text.trim()}`);
-  }
-  if (job.goalAcceptance?.length)
-    sections.push(`Acceptance criteria:
-` + job.goalAcceptance.map((item, index) => `${index + 1}. ${item}`).join(`
-`));
-  if (job.goalChecks?.length)
-    sections.push(`Verification commands that define useful evidence:
-` + job.goalChecks.map((item, index) => `${index + 1}. ${item}`).join(`
-`));
-  if (job.verifyCommand)
-    sections.push(`Post-turn verify command configured by the loop: ${job.verifyCommand}`);
-  if (job.lastGoalChecks?.length)
-    sections.push(`Latest goal check results:
-` + job.lastGoalChecks.map((item) => `- ${item.command}: exit ${item.code}`).join(`
-`));
-  if (job.lastVerifyFailure)
-    sections.push(`Previous verify/check failure summary:
-` + String(job.lastVerifyFailure).slice(0, 1600));
-  if (job.goalCompletionRejectedReason)
-    sections.push(`Previous completion attempt was rejected:
-${job.goalCompletionRejectedReason}`);
-  if ((job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0)
-    sections.push(`No-progress guard:
-${job.noProgressCount || 0}/${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS} recent turn(s) without recorded meaningful progress.`);
-  if (job.goalProgress?.length)
-    sections.push(`Recent goal progress:
-` + job.goalProgress.slice(-5).map((item) => `- ${item.time}: ${item.summary}`).join(`
-`));
-  for (const file of job.includeFiles || []) {
-    const text = await readSmallTextFile(path3.resolve(directory, file), 80000);
-    if (text.trim())
-      sections.push(`Context from ${file}:
-${text.trim().slice(0, 20000)}`);
-  }
-  return `${GOAL_PROMPT_PREFIX}.
-
-You are pursuing an experimental persistent goal for this OpenCode session. This is not a timer loop and not a one-shot prompt. Keep working toward the goal until it is completed, blocked, paused, cleared, or stopped by safety limits.
-
-Rules:
-- Work on the next smallest useful step toward the goal.
-- Prefer direct code changes, tests, typechecks, builds, and evidence over discussion.
-- Do not claim the goal is complete unless the acceptance criteria are satisfied and verification evidence supports it.
-- If verification commands are configured, do not call opencode_loop_goal_complete until the latest relevant checks have passed unless the user explicitly overrides the goal.
-- Completion evidence must be concrete: mention commands, files, checks, results, or code inspection details.
-- When the goal is complete, call the tool opencode_loop_goal_complete with a summary and evidence.
-- If you are truly blocked and need user input, call the tool opencode_loop_goal_blocked with the reason and what is needed.
-- If you made meaningful progress but the goal is not complete, call the tool opencode_loop_goal_progress with the summary and next step.
-- If you cannot make meaningful progress for this turn, call opencode_loop_goal_blocked instead of repeating the same attempt.
-- Do not call completion tools just to be polite; only call them when the state is real.
-- Do not ask the user questions unless blocked; make reasonable assumptions and continue.
-- Follow safety rules: no destructive commands, force pushes, production deploys, production database resets, or deleting user data.
-
-${sections.join(`
-
----
-
-`)}`;
-}
 function goalReportPath(directory, sessionID, job) {
   return path3.join(stateDir(directory), GOAL_REPORT_DIR, `${safeID(sessionID)}-${safeID(job.name || job.id)}.md`);
 }
@@ -1375,21 +1294,8 @@ async function writeGoalReport(directory, sessionID, job) {
   await ensureDir(path3.dirname(target));
   await fs3.writeFile(target, goalReportText(job), "utf8");
 }
-function pickGoalJob(state, target = "") {
-  const goals = (state.jobs || []).filter(isGoalJob);
-  if (!goals.length)
-    return;
-  const text = String(target || "").trim();
-  if (!text || ["active", "current", "goal"].includes(text.toLowerCase()))
-    return goals.find((job) => job.goalStatus === "active" && job.enabled !== false) || goals[0];
-  return goals.find((job, index) => matchJob(job, text, index));
-}
-function parseGoalToolText(args, fields) {
-  const result = {};
-  for (const field of fields)
-    result[field] = String(args?.[field] || "").trim();
-  return result;
-}
+
+// src/source/runtime/goal-evidence.js
 function hasConcreteGoalEvidence(value) {
   const text = String(value || "").trim();
   if (text.length < 24)
@@ -1431,6 +1337,107 @@ function goalMadeMeaningfulProgress(beforeJob, afterJob) {
   if (after.lastVerifyAt > before.lastVerifyAt && after.lastVerifyCode === 0)
     return true;
   return false;
+}
+
+// src/source/runtime/goal-prompt.js
+import path4 from "path";
+var GOAL_PROMPT_PREFIX = "EXPERIMENTAL OPENCODE GOAL MODE ITERATION";
+async function buildGoalPrompt(directory, job) {
+  const sections = [];
+  sections.push(`Working directory:
+${path4.resolve(directory)}
+Keep every file operation inside this directory. Prefer workspace-relative paths such as "src/index.js"; never turn a relative path into a root path such as "/src/index.js".`);
+  const objective = String(job.action || "").trim();
+  if (objective)
+    sections.push(`Goal objective:
+${objective}`);
+  if (job.goalFile) {
+    const text = await readSmallTextFile(path4.resolve(directory, job.goalFile), 120000);
+    if (text.trim())
+      sections.push(`Goal file ${job.goalFile}:
+${text.trim()}`);
+    else
+      sections.push(`Goal file ${job.goalFile} was requested but could not be read. Continue from the inline goal objective.`);
+  }
+  if (job.promptFile) {
+    const text = await readSmallTextFile(path4.resolve(directory, job.promptFile), 120000);
+    if (text.trim())
+      sections.push(`Extra goal instructions from ${job.promptFile}:
+${text.trim()}`);
+  }
+  if (job.goalAcceptance?.length)
+    sections.push(`Acceptance criteria:
+` + job.goalAcceptance.map((item, index) => `${index + 1}. ${item}`).join(`
+`));
+  if (job.goalChecks?.length)
+    sections.push(`Verification commands that define useful evidence:
+` + job.goalChecks.map((item, index) => `${index + 1}. ${item}`).join(`
+`));
+  if (job.verifyCommand)
+    sections.push(`Post-turn verify command configured by the loop: ${job.verifyCommand}`);
+  if (job.lastGoalChecks?.length)
+    sections.push(`Latest goal check results:
+` + job.lastGoalChecks.map((item) => `- ${item.command}: exit ${item.code}`).join(`
+`));
+  if (job.lastVerifyFailure)
+    sections.push(`Previous verify/check failure summary:
+` + String(job.lastVerifyFailure).slice(0, 1600));
+  if (job.goalCompletionRejectedReason)
+    sections.push(`Previous completion attempt was rejected:
+${job.goalCompletionRejectedReason}`);
+  if ((job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0)
+    sections.push(`No-progress guard:
+${job.noProgressCount || 0}/${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS} recent turn(s) without recorded meaningful progress.`);
+  if (job.goalProgress?.length)
+    sections.push(`Recent goal progress:
+` + job.goalProgress.slice(-5).map((item) => `- ${item.time}: ${item.summary}`).join(`
+`));
+  for (const file of job.includeFiles || []) {
+    const text = await readSmallTextFile(path4.resolve(directory, file), 80000);
+    if (text.trim())
+      sections.push(`Context from ${file}:
+${text.trim().slice(0, 20000)}`);
+  }
+  return `${GOAL_PROMPT_PREFIX}.
+
+You are pursuing an experimental persistent goal for this OpenCode session. This is not a timer loop and not a one-shot prompt. Keep working toward the goal until it is completed, blocked, paused, cleared, or stopped by safety limits.
+
+Rules:
+- Work on the next smallest useful step toward the goal.
+- Prefer direct code changes, tests, typechecks, builds, and evidence over discussion.
+- Do not claim the goal is complete unless the acceptance criteria are satisfied and verification evidence supports it.
+- If verification commands are configured, do not call opencode_loop_goal_complete until the latest relevant checks have passed unless the user explicitly overrides the goal.
+- Completion evidence must be concrete: mention commands, files, checks, results, or code inspection details.
+- When the goal is complete, call the tool opencode_loop_goal_complete with a summary and evidence.
+- If you are truly blocked and need user input, call the tool opencode_loop_goal_blocked with the reason and what is needed.
+- If you made meaningful progress but the goal is not complete, call the tool opencode_loop_goal_progress with the summary and next step.
+- If you cannot make meaningful progress for this turn, call opencode_loop_goal_blocked instead of repeating the same attempt.
+- Do not call completion tools just to be polite; only call them when the state is real.
+- Do not ask the user questions unless blocked; make reasonable assumptions and continue.
+- Follow safety rules: no destructive commands, force pushes, production deploys, production database resets, or deleting user data.
+
+${sections.join(`
+
+---
+
+`)}`;
+}
+
+// src/source/runtime/goal-runtime.js
+function pickGoalJob(state, target = "") {
+  const goals = (state.jobs || []).filter(isGoalJob);
+  if (!goals.length)
+    return;
+  const text = String(target || "").trim();
+  if (!text || ["active", "current", "goal"].includes(text.toLowerCase()))
+    return goals.find((job) => job.goalStatus === "active" && job.enabled !== false) || goals[0];
+  return goals.find((job, index) => matchJob(job, text, index));
+}
+function parseGoalToolText(args, fields) {
+  const result = {};
+  for (const field of fields)
+    result[field] = String(args?.[field] || "").trim();
+  return result;
 }
 async function rejectGoalCompletion(directory, sessionID, state, job, reason) {
   job.goalCompletionRejectedAt = now();
@@ -1617,7 +1624,7 @@ function createGoalCommandHandlers(options = {}) {
 
 // src/source/opencode/loop-commands.js
 import { promises as fs4 } from "fs";
-import path4 from "path";
+import path5 from "path";
 var SERVICE2 = "opencode-loop";
 var DEFAULT_PROGRESS_MD = `# Progress
 
@@ -1715,7 +1722,7 @@ function createLoopCommandHandlers(options = {}) {
   async function logsLoop(directory, client, sessionID) {
     let text = "No loop log found.";
     try {
-      text = (await readFile(path4.join(stateDir(directory), "loop.log"), "utf8")).trim().split(/\r?\n/).slice(-80).join(`
+      text = (await readFile(path5.join(stateDir(directory), "loop.log"), "utf8")).trim().split(/\r?\n/).slice(-80).join(`
 `) || text;
     } catch {}
     await say2(client, sessionID, `OpenCode loop logs:
@@ -1775,7 +1782,7 @@ function createLoopCommandHandlers(options = {}) {
   }
   async function initLoop(directory, client, sessionID, args) {
     const target = String(args || "").trim() || "progress.md";
-    const full = path4.resolve(directory, target);
+    const full = path5.resolve(directory, target);
     if (await pathExists2(full)) {
       await toast2(client, `${target} already exists.`, "warning");
       return;
@@ -2288,7 +2295,7 @@ ${item.output}`).join(`
 
 // src/source/runtime/job-workspace.js
 import { promises as fs5 } from "fs";
-import path5 from "path";
+import path6 from "path";
 var MAX_SCAN_FILES = 200;
 var MAX_SCAN_BYTES = 2000000;
 function requireFunction6(value, name) {
@@ -2323,7 +2330,7 @@ function createJobWorkspaceRuntime(options = {}) {
       return await buildGoalPrompt2(directory, job);
     const sections = [];
     if (job.promptFile) {
-      const text = await readSmallTextFile2(path5.resolve(directory, job.promptFile));
+      const text = await readSmallTextFile2(path6.resolve(directory, job.promptFile));
       if (text.trim())
         sections.push(`Instructions from ${job.promptFile}:
 ${text.trim()}`);
@@ -2333,7 +2340,7 @@ ${text.trim()}`);
     if (job.action)
       sections.push(decoratePrompt(job));
     for (const file of job.includeFiles || []) {
-      const text = await readSmallTextFile2(path5.resolve(directory, file), 80000);
+      const text = await readSmallTextFile2(path6.resolve(directory, file), 80000);
       if (text.trim())
         sections.push(`Context from ${file}:
 ${text.trim().slice(0, 20000)}`);
@@ -2365,7 +2372,7 @@ ${text.trim().slice(0, 20000)}`);
     const snapshot = {};
     for (const file of files || []) {
       try {
-        const stat = await fs5.stat(path5.resolve(directory, file));
+        const stat = await fs5.stat(path6.resolve(directory, file));
         snapshot[file] = `${stat.mtimeMs}:${stat.size}`;
       } catch {
         snapshot[file] = "missing";
@@ -2396,9 +2403,9 @@ ${text.trim().slice(0, 20000)}`);
   async function untilReached(directory, job) {
     if (!job.until)
       return false;
-    const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path5.join(".opencode", "opencode-loop", "until.txt")];
+    const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path6.join(".opencode", "opencode-loop", "until.txt")];
     for (const file of files)
-      if (await fileContains(path5.resolve(directory, file), job.until))
+      if (await fileContains(path6.resolve(directory, file), job.until))
         return true;
     let scanned = 0;
     async function walk(current) {
@@ -2415,7 +2422,7 @@ ${text.trim().slice(0, 20000)}`);
           return false;
         if ([".git", "node_modules", "dist", "build", ".next", "coverage"].includes(entry.name))
           continue;
-        const full = path5.join(current, entry.name);
+        const full = path6.join(current, entry.name);
         if (entry.isDirectory()) {
           if (await walk(full))
             return true;
@@ -2439,13 +2446,13 @@ ${text.trim().slice(0, 20000)}`);
     if (!status.stdout.trim())
       return;
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const checkpointDir = path5.join(stateDir(directory), "checkpoints", safeID(sessionID));
+    const checkpointDir = path6.join(stateDir(directory), "checkpoints", safeID(sessionID));
     await ensureDir(checkpointDir);
     const diff = await runProcess2("git", ["diff", "--binary"], directory, 120000);
     const staged = await runProcess2("git", ["diff", "--cached", "--binary"], directory, 120000);
     const prefix = `${timestamp}-${safeID(job.name || job.id)}`;
-    await fs5.writeFile(path5.join(checkpointDir, `${prefix}.status.txt`), status.stdout + status.stderr);
-    await fs5.writeFile(path5.join(checkpointDir, `${prefix}.patch`), `${diff.stdout}
+    await fs5.writeFile(path6.join(checkpointDir, `${prefix}.status.txt`), status.stdout + status.stderr);
+    await fs5.writeFile(path6.join(checkpointDir, `${prefix}.patch`), `${diff.stdout}
 ${staged.stdout}`);
     if (job.gitCheckpoint) {
       await runProcess2("git", ["add", "-A"], directory, 120000);
@@ -2462,9 +2469,6 @@ ${staged.stdout}`);
     createCheckpoint
   };
 }
-
-// src/source/runtime/executor.js
-import path6 from "path";
 
 // src/source/runtime/session-status.js
 var DEFAULT_STALE_ACTIVE_RECOVERY_MS = 45000;
@@ -2826,10 +2830,206 @@ ${prompt}`;
   return { fireAction };
 }
 
+// src/source/runtime/run-finalization.js
+function requireFunction8(value, label) {
+  if (typeof value !== "function")
+    throw new TypeError(`createRunFinalizationRuntime requires ${label}`);
+  return value;
+}
+function createRunFinalizationRuntime(options = {}) {
+  const runGoalChecks = requireFunction8(options.runGoalChecks, "runGoalChecks");
+  const applyGoalNoProgressGuard = requireFunction8(options.applyGoalNoProgressGuard, "applyGoalNoProgressGuard");
+  const createCheckpoint = requireFunction8(options.createCheckpoint, "createCheckpoint");
+  const scheduleDueWork = requireFunction8(options.scheduleDueWork, "scheduleDueWork");
+  const now2 = typeof options.now === "function" ? options.now : now;
+  const writeState2 = typeof options.writeState === "function" ? options.writeState : writeState;
+  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
+  const runShellCommand2 = typeof options.runShellCommand === "function" ? options.runShellCommand : runShellCommand;
+  const notifyJob2 = typeof options.notifyJob === "function" ? options.notifyJob : notifyJob;
+  const toast2 = typeof options.toast === "function" ? options.toast : toast;
+  const writeGoalReport2 = typeof options.writeGoalReport === "function" ? options.writeGoalReport : writeGoalReport;
+  const dangerousShell2 = typeof options.dangerousShell === "function" ? options.dangerousShell : dangerousShell;
+  async function finalizeJob(directory, client, sessionID, state, job, previousJob) {
+    if (job.verifyCommand) {
+      const verify = await runShellCommand2(job.verifyCommand, directory, job.timeoutMs || 300000);
+      job.lastVerifyAt = now2();
+      job.lastVerifyCode = verify.code;
+      if (verify.code === 0) {
+        job.failureCount = 0;
+        job.lastVerifyFailure = "";
+        await toast2(client, "Loop verify passed: " + job.verifyCommand, "success");
+      } else {
+        job.failureCount = (job.failureCount || 0) + 1;
+        job.lastVerifyFailure = (job.verifyCommand + `
+exit=` + verify.code + `
+` + verify.stdout + `
+` + verify.stderr).slice(0, 4000);
+        await toast2(client, "Loop verify failed: " + job.verifyCommand, "warning");
+        if (job.pauseOnVerifyFail || job.maxFailures > 0 && job.failureCount >= job.maxFailures) {
+          job.paused = true;
+          await notifyJob2(directory, job, "verify_failed");
+        }
+      }
+      await appendLoopLog2(directory, "verify", {
+        sessionID,
+        job: job.name || job.id,
+        command: job.verifyCommand,
+        code: verify.code,
+        failures: job.failureCount || 0
+      });
+    }
+    if (job.postrunCommand) {
+      if (job.safe && dangerousShell2(job.postrunCommand)) {
+        await appendLoopLog2(directory, "postrun-blocked", {
+          sessionID,
+          job: job.name || job.id,
+          command: job.postrunCommand
+        });
+      } else {
+        const postrun = await runShellCommand2(job.postrunCommand, directory, job.timeoutMs || 300000);
+        job.lastPostrunCode = postrun.code;
+        job.lastPostrunAt = now2();
+        if (postrun.code !== 0) {
+          job.failureCount = (job.failureCount || 0) + 1;
+          job.lastPostrunFailure = (job.postrunCommand + `
+exit=` + postrun.code + `
+` + postrun.stdout + `
+` + postrun.stderr).slice(0, 4000);
+          if (job.maxFailures > 0 && job.failureCount >= job.maxFailures) {
+            job.paused = true;
+            await notifyJob2(directory, job, "postrun_failed");
+          }
+        }
+        await appendLoopLog2(directory, "postrun", {
+          sessionID,
+          job: job.name || job.id,
+          command: job.postrunCommand,
+          code: postrun.code
+        });
+      }
+    }
+    if (isGoalJob(job)) {
+      job = await runGoalChecks(directory, sessionID, job, client);
+      job = await applyGoalNoProgressGuard(directory, client, sessionID, job, previousJob);
+    }
+    state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate).filter((candidate) => candidate.enabled !== false || isGoalJob(candidate));
+    await writeState2(directory, sessionID, state);
+    if (isGoalJob(job))
+      await writeGoalReport2(directory, sessionID, job);
+    await createCheckpoint(directory, sessionID, job, client);
+    await scheduleDueWork(directory, client, sessionID);
+    return job;
+  }
+  return { finalizeJob };
+}
+
+// src/source/runtime/run-admission.js
+import path7 from "path";
+function requireFunction9(value, label) {
+  if (typeof value !== "function")
+    throw new TypeError(`createRunAdmissionRuntime requires ${label}`);
+  return value;
+}
+function createRunAdmissionRuntime(options = {}) {
+  const untilReached = requireFunction9(options.untilReached, "untilReached");
+  const scheduleDueWork = requireFunction9(options.scheduleDueWork, "scheduleDueWork");
+  const now2 = typeof options.now === "function" ? options.now : now;
+  const pathExists2 = typeof options.pathExists === "function" ? options.pathExists : pathExists;
+  const writeState2 = typeof options.writeState === "function" ? options.writeState : writeState;
+  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
+  const runShellCommand2 = typeof options.runShellCommand === "function" ? options.runShellCommand : runShellCommand;
+  const notifyJob2 = typeof options.notifyJob === "function" ? options.notifyJob : notifyJob;
+  const toast2 = typeof options.toast === "function" ? options.toast : toast;
+  const dangerousShell2 = typeof options.dangerousShell === "function" ? options.dangerousShell : dangerousShell;
+  function dueJobs(state, force = false) {
+    const current = now2();
+    const due = (state.jobs || []).filter((job) => {
+      if (isGoalJob(job) && ["completed", "blocked", "cleared"].includes(job.goalStatus))
+        return false;
+      if (!job.enabled || job.paused)
+        return false;
+      if (job.maxRuns > 0 && (job.runCount || 0) >= job.maxRuns)
+        return false;
+      if (job.maxRuntimeMs > 0 && current - Date.parse(job.createdAt || new Date().toISOString()) >= job.maxRuntimeMs)
+        return true;
+      if (Number(job.runNowRequestedAt || 0) > 0)
+        return true;
+      if (force)
+        return true;
+      if (job.watchPaths?.length)
+        return job.watchTriggered === true;
+      return job.intervalMs === 0 || !job.lastRunAt || current - job.lastRunAt >= job.intervalMs;
+    });
+    return due.sort((a, b) => Number(Number(b.runNowRequestedAt || 0) > 0) - Number(Number(a.runNowRequestedAt || 0) > 0));
+  }
+  async function reschedule(directory, client, sessionID) {
+    await scheduleDueWork(directory, client, sessionID);
+  }
+  async function stopAndRemove(directory, client, sessionID, state, job, reason, message, logEvent) {
+    state.jobs = (state.jobs || []).filter((candidate) => candidate.id !== job.id);
+    await writeState2(directory, sessionID, state);
+    await notifyJob2(directory, job, reason);
+    await toast2(client, message, "success");
+    if (logEvent)
+      await appendLoopLog2(directory, logEvent, { sessionID, job: job.name || job.id });
+    await reschedule(directory, client, sessionID);
+    return { admitted: false, reason };
+  }
+  async function admitJob(directory, client, sessionID, state, job) {
+    const runNowRequested = Number(job.runNowRequestedAt || 0) > 0;
+    if (job.maxRuntimeMs > 0 && now2() - Date.parse(job.createdAt || new Date().toISOString()) >= job.maxRuntimeMs) {
+      return await stopAndRemove(directory, client, sessionID, state, job, "max_runtime_reached", `Loop stopped by --max-runtime: ${job.name || job.id}`, "max-runtime");
+    }
+    if (job.stopFile && await pathExists2(path7.resolve(directory, job.stopFile))) {
+      return await stopAndRemove(directory, client, sessionID, state, job, "stop_file", "Loop stopped by --stop-file: " + job.stopFile);
+    }
+    if (await untilReached(directory, job)) {
+      return await stopAndRemove(directory, client, sessionID, state, job, "until_reached", `Loop stopped by --until: ${job.until}`);
+    }
+    if (job.preflightCommand) {
+      if (job.safe && dangerousShell2(job.preflightCommand)) {
+        if (runNowRequested)
+          delete job.runNowRequestedAt;
+        job.paused = true;
+        await writeState2(directory, sessionID, state);
+        await notifyJob2(directory, job, "preflight_blocked");
+        await toast2(client, "Preflight blocked in safe mode and loop paused: " + job.preflightCommand, "error");
+        await reschedule(directory, client, sessionID);
+        return { admitted: false, reason: "preflight_blocked" };
+      }
+      const preflight = await runShellCommand2(job.preflightCommand, directory, job.timeoutMs || 300000);
+      await appendLoopLog2(directory, "preflight", {
+        sessionID,
+        job: job.name || job.id,
+        command: job.preflightCommand,
+        code: preflight.code
+      });
+      if (preflight.code !== 0) {
+        if (runNowRequested)
+          delete job.runNowRequestedAt;
+        job.paused = true;
+        job.failureCount = (job.failureCount || 0) + 1;
+        job.lastPreflightFailure = (job.preflightCommand + `
+exit=` + preflight.code + `
+` + preflight.stdout + `
+` + preflight.stderr).slice(0, 4000);
+        state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
+        await writeState2(directory, sessionID, state);
+        await notifyJob2(directory, job, "preflight_failed");
+        await toast2(client, "Preflight failed and loop paused: " + job.preflightCommand, "warning");
+        await reschedule(directory, client, sessionID);
+        return { admitted: false, reason: "preflight_failed" };
+      }
+    }
+    return { admitted: true, job, runNowRequested };
+  }
+  return { dueJobs, admitJob };
+}
+
 // src/source/runtime/executor.js
 var DEFAULT_ACTIVE_GUARD_MS = 45000;
 var DEFAULT_BUSY_RETRY_MS2 = 5000;
-function requireFunction8(value, label) {
+function requireFunction10(value, label) {
   if (typeof value !== "function")
     throw new TypeError(`createLoopExecutor requires ${label}`);
   return value;
@@ -2838,19 +3038,18 @@ function createLoopExecutor(options = {}) {
   const workspace = options.workspace || {};
   const goalPolicy = options.goalPolicy || {};
   const scheduler = options.scheduler || {};
-  const buildPrompt = requireFunction8(workspace.buildPrompt, "workspace.buildPrompt");
-  const ensureBranch = requireFunction8(workspace.ensureBranch, "workspace.ensureBranch");
-  const watchChanged = requireFunction8(workspace.watchChanged, "workspace.watchChanged");
-  const untilReached = requireFunction8(workspace.untilReached, "workspace.untilReached");
-  const createCheckpoint = requireFunction8(workspace.createCheckpoint, "workspace.createCheckpoint");
-  const runGoalChecks = requireFunction8(goalPolicy.runGoalChecks, "goalPolicy.runGoalChecks");
-  const applyGoalNoProgressGuard = requireFunction8(goalPolicy.applyGoalNoProgressGuard, "goalPolicy.applyGoalNoProgressGuard");
-  const rememberSession = requireFunction8(scheduler.rememberSession, "scheduler.rememberSession");
-  const scheduleDueWork = requireFunction8(scheduler.scheduleDueWork, "scheduler.scheduleDueWork");
+  const buildPrompt = requireFunction10(workspace.buildPrompt, "workspace.buildPrompt");
+  const ensureBranch = requireFunction10(workspace.ensureBranch, "workspace.ensureBranch");
+  const watchChanged = requireFunction10(workspace.watchChanged, "workspace.watchChanged");
+  const untilReached = requireFunction10(workspace.untilReached, "workspace.untilReached");
+  const createCheckpoint = requireFunction10(workspace.createCheckpoint, "workspace.createCheckpoint");
+  const runGoalChecks = requireFunction10(goalPolicy.runGoalChecks, "goalPolicy.runGoalChecks");
+  const applyGoalNoProgressGuard = requireFunction10(goalPolicy.applyGoalNoProgressGuard, "goalPolicy.applyGoalNoProgressGuard");
+  const rememberSession = requireFunction10(scheduler.rememberSession, "scheduler.rememberSession");
+  const scheduleDueWork = requireFunction10(scheduler.scheduleDueWork, "scheduler.scheduleDueWork");
   const now2 = typeof options.now === "function" ? options.now : now;
   const readState2 = typeof options.readState === "function" ? options.readState : readState;
   const writeState2 = typeof options.writeState === "function" ? options.writeState : writeState;
-  const pathExists2 = typeof options.pathExists === "function" ? options.pathExists : pathExists;
   const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
   const runShellCommand2 = typeof options.runShellCommand === "function" ? options.runShellCommand : runShellCommand;
   const notifyJob2 = typeof options.notifyJob === "function" ? options.notifyJob : notifyJob;
@@ -2858,7 +3057,6 @@ function createLoopExecutor(options = {}) {
   const fireSdk2 = typeof options.fireSdk === "function" ? options.fireSdk : fireSdk;
   const log2 = typeof options.log === "function" ? options.log : log;
   const toast2 = typeof options.toast === "function" ? options.toast : toast;
-  const writeGoalReport2 = typeof options.writeGoalReport === "function" ? options.writeGoalReport : writeGoalReport;
   const dangerousShell2 = typeof options.dangerousShell === "function" ? options.dangerousShell : dangerousShell;
   const activeGuardMs = Number.isFinite(Number(options.activeGuardMs)) && Number(options.activeGuardMs) > 0 ? Number(options.activeGuardMs) : DEFAULT_ACTIVE_GUARD_MS;
   const busyRetryMs = Number.isFinite(Number(options.busyRetryMs)) && Number(options.busyRetryMs) > 0 ? Number(options.busyRetryMs) : DEFAULT_BUSY_RETRY_MS2;
@@ -2901,27 +3099,33 @@ function createLoopExecutor(options = {}) {
     guardLoopOwnedUserMessage: options.guardLoopOwnedUserMessage,
     dangerousShell: dangerousShell2
   });
-  function dueJobs(state, force = false) {
-    const current = now2();
-    const due = (state.jobs || []).filter((job) => {
-      if (isGoalJob(job) && ["completed", "blocked", "cleared"].includes(job.goalStatus))
-        return false;
-      if (!job.enabled || job.paused)
-        return false;
-      if (job.maxRuns > 0 && (job.runCount || 0) >= job.maxRuns)
-        return false;
-      if (job.maxRuntimeMs > 0 && current - Date.parse(job.createdAt || new Date().toISOString()) >= job.maxRuntimeMs)
-        return true;
-      if (Number(job.runNowRequestedAt || 0) > 0)
-        return true;
-      if (force)
-        return true;
-      if (job.watchPaths?.length)
-        return job.watchTriggered === true;
-      return job.intervalMs === 0 || !job.lastRunAt || current - job.lastRunAt >= job.intervalMs;
-    });
-    return due.sort((a, b) => Number(Number(b.runNowRequestedAt || 0) > 0) - Number(Number(a.runNowRequestedAt || 0) > 0));
-  }
+  const finalizationRuntime = createRunFinalizationRuntime({
+    runGoalChecks,
+    applyGoalNoProgressGuard,
+    createCheckpoint,
+    scheduleDueWork,
+    now: now2,
+    writeState: writeState2,
+    appendLoopLog: appendLoopLog2,
+    runShellCommand: runShellCommand2,
+    notifyJob: notifyJob2,
+    toast: toast2,
+    writeGoalReport: options.writeGoalReport,
+    dangerousShell: dangerousShell2
+  });
+  const admissionRuntime = createRunAdmissionRuntime({
+    untilReached,
+    scheduleDueWork,
+    now: now2,
+    pathExists: options.pathExists,
+    writeState: writeState2,
+    appendLoopLog: appendLoopLog2,
+    runShellCommand: runShellCommand2,
+    notifyJob: notifyJob2,
+    toast: toast2,
+    dangerousShell: dangerousShell2
+  });
+  const dueJobs = admissionRuntime.dueJobs;
   function clearActiveRun(sessionID) {
     const active = activeRuns.get(sessionID);
     if (active?.timer)
@@ -2994,74 +3198,7 @@ function createLoopExecutor(options = {}) {
         startedAt: active.startedAt
       });
     }
-    if (job.verifyCommand) {
-      const verify = await runShellCommand2(job.verifyCommand, directory, job.timeoutMs || 300000);
-      job.lastVerifyAt = now2();
-      job.lastVerifyCode = verify.code;
-      if (verify.code === 0) {
-        job.failureCount = 0;
-        job.lastVerifyFailure = "";
-        await toast2(client, "Loop verify passed: " + job.verifyCommand, "success");
-      } else {
-        job.failureCount = (job.failureCount || 0) + 1;
-        job.lastVerifyFailure = (job.verifyCommand + `
-exit=` + verify.code + `
-` + verify.stdout + `
-` + verify.stderr).slice(0, 4000);
-        await toast2(client, "Loop verify failed: " + job.verifyCommand, "warning");
-        if (job.pauseOnVerifyFail || job.maxFailures > 0 && job.failureCount >= job.maxFailures) {
-          job.paused = true;
-          await notifyJob2(directory, job, "verify_failed");
-        }
-      }
-      await appendLoopLog2(directory, "verify", {
-        sessionID,
-        job: job.name || job.id,
-        command: job.verifyCommand,
-        code: verify.code,
-        failures: job.failureCount || 0
-      });
-    }
-    if (job.postrunCommand) {
-      if (job.safe && dangerousShell2(job.postrunCommand)) {
-        await appendLoopLog2(directory, "postrun-blocked", {
-          sessionID,
-          job: job.name || job.id,
-          command: job.postrunCommand
-        });
-      } else {
-        const postrun = await runShellCommand2(job.postrunCommand, directory, job.timeoutMs || 300000);
-        job.lastPostrunCode = postrun.code;
-        job.lastPostrunAt = now2();
-        if (postrun.code !== 0) {
-          job.failureCount = (job.failureCount || 0) + 1;
-          job.lastPostrunFailure = (job.postrunCommand + `
-exit=` + postrun.code + `
-` + postrun.stdout + `
-` + postrun.stderr).slice(0, 4000);
-          if (job.maxFailures > 0 && job.failureCount >= job.maxFailures) {
-            job.paused = true;
-            await notifyJob2(directory, job, "postrun_failed");
-          }
-        }
-        await appendLoopLog2(directory, "postrun", {
-          sessionID,
-          job: job.name || job.id,
-          command: job.postrunCommand,
-          code: postrun.code
-        });
-      }
-    }
-    if (isGoalJob(job)) {
-      job = await runGoalChecks(directory, sessionID, job, client);
-      job = await applyGoalNoProgressGuard(directory, client, sessionID, job, active.job);
-    }
-    state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate).filter((candidate) => candidate.enabled !== false || isGoalJob(candidate));
-    await writeState2(directory, sessionID, state);
-    if (isGoalJob(job))
-      await writeGoalReport2(directory, sessionID, job);
-    await createCheckpoint(directory, sessionID, job, client);
-    await scheduleDueWork(directory, client, sessionID);
+    await finalizationRuntime.finalizeJob(directory, client, sessionID, state, job, active.job);
     return true;
   }
   const fireAction = actionDispatcher.fireAction;
@@ -3106,67 +3243,11 @@ exit=` + postrun.code + `
         return;
       }
       job = due[0];
-      const runNowRequested = Number(job.runNowRequestedAt || 0) > 0;
-      if (job.maxRuntimeMs > 0 && now2() - Date.parse(job.createdAt || new Date().toISOString()) >= job.maxRuntimeMs) {
-        state.jobs = (state.jobs || []).filter((candidate) => candidate.id !== job.id);
-        await writeState2(directory, sessionID, state);
-        await notifyJob2(directory, job, "max_runtime_reached");
-        await toast2(client, `Loop stopped by --max-runtime: ${job.name || job.id}`, "success");
-        await appendLoopLog2(directory, "max-runtime", { sessionID, job: job.name || job.id });
-        await reschedule();
+      const admission = await admissionRuntime.admitJob(directory, client, sessionID, state, job);
+      if (!admission.admitted)
         return;
-      }
-      if (job.stopFile && await pathExists2(path6.resolve(directory, job.stopFile))) {
-        state.jobs = (state.jobs || []).filter((candidate) => candidate.id !== job.id);
-        await writeState2(directory, sessionID, state);
-        await notifyJob2(directory, job, "stop_file");
-        await toast2(client, "Loop stopped by --stop-file: " + job.stopFile, "success");
-        await reschedule();
-        return;
-      }
-      if (await untilReached(directory, job)) {
-        state.jobs = (state.jobs || []).filter((candidate) => candidate.id !== job.id);
-        await writeState2(directory, sessionID, state);
-        await notifyJob2(directory, job, "until_reached");
-        await toast2(client, `Loop stopped by --until: ${job.until}`, "success");
-        await reschedule();
-        return;
-      }
-      if (job.preflightCommand) {
-        if (job.safe && dangerousShell2(job.preflightCommand)) {
-          if (runNowRequested)
-            delete job.runNowRequestedAt;
-          job.paused = true;
-          await writeState2(directory, sessionID, state);
-          await notifyJob2(directory, job, "preflight_blocked");
-          await toast2(client, "Preflight blocked in safe mode and loop paused: " + job.preflightCommand, "error");
-          await reschedule();
-          return;
-        }
-        const preflight = await runShellCommand2(job.preflightCommand, directory, job.timeoutMs || 300000);
-        await appendLoopLog2(directory, "preflight", {
-          sessionID,
-          job: job.name || job.id,
-          command: job.preflightCommand,
-          code: preflight.code
-        });
-        if (preflight.code !== 0) {
-          if (runNowRequested)
-            delete job.runNowRequestedAt;
-          job.paused = true;
-          job.failureCount = (job.failureCount || 0) + 1;
-          job.lastPreflightFailure = (job.preflightCommand + `
-exit=` + preflight.code + `
-` + preflight.stdout + `
-` + preflight.stderr).slice(0, 4000);
-          state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-          await writeState2(directory, sessionID, state);
-          await notifyJob2(directory, job, "preflight_failed");
-          await toast2(client, "Preflight failed and loop paused: " + job.preflightCommand, "warning");
-          await reschedule();
-          return;
-        }
-      }
+      job = admission.job;
+      const runNowRequested = admission.runNowRequested;
       job = await ensureBranch(directory, job, client, sessionID);
       const compactResult = await compactionRuntime.maybeCompact(directory, client, sessionID, job);
       job = compactResult.job;
@@ -3283,7 +3364,7 @@ exit=` + preflight.code + `
 // src/source/runtime/goal-steering.js
 var DEFAULT_STEERING_SUPPRESSION_MS = 5 * 60000;
 var DEFAULT_SEEN_USER_MESSAGE_MS = 10 * 60000;
-function requireFunction9(value, label) {
+function requireFunction11(value, label) {
   if (typeof value !== "function")
     throw new TypeError(`createGoalSteeringRuntime requires ${label}`);
   return value;
@@ -3327,8 +3408,8 @@ function activeGoalJobs(state) {
   });
 }
 function createGoalSteeringRuntime(options = {}) {
-  const getActiveRun = requireFunction9(options.getActiveRun, "getActiveRun");
-  const clearActiveRun = requireFunction9(options.clearActiveRun, "clearActiveRun");
+  const getActiveRun = requireFunction11(options.getActiveRun, "getActiveRun");
+  const clearActiveRun = requireFunction11(options.clearActiveRun, "clearActiveRun");
   const isLoopOwnedUserMessage = typeof options.isLoopOwnedUserMessage === "function" ? options.isLoopOwnedUserMessage : () => false;
   const readState2 = typeof options.readState === "function" ? options.readState : readState;
   const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
