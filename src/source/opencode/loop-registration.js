@@ -1,7 +1,9 @@
 import { parseLoopArgs as defaultParseLoopArgs } from "../core/args.js"
-import { jobLabel, isGoalJob } from "../core/jobs.js"
+import { actionKind, jobLabel, isGoalJob } from "../core/jobs.js"
+import { normalizeLoopScheduleArgs as defaultNormalizeLoopScheduleArgs } from "../core/schedule-syntax.js"
 import { readState as defaultReadState, writeState as defaultWriteState } from "../core/state.js"
 import { appendLoopLog as defaultAppendLoopLog } from "../core/process.js"
+import { dedicatedGoalOwnsContinuation, findDedicatedGoalForSession as defaultFindDedicatedGoalForSession } from "../runtime/companion-goal.js"
 import { normalizedModelRef as defaultNormalizedModelRef, getSessionExecutionContext as defaultGetSessionExecutionContext } from "./session-context.js"
 
 const DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180_000
@@ -32,17 +34,26 @@ export function createLoopRegistration(options = {}) {
   const toast = requireFunction(options.toast, "toast")
   const say = requireFunction(options.say, "say")
   const parseLoopArgs = typeof options.parseLoopArgs === "function" ? options.parseLoopArgs : defaultParseLoopArgs
+  const normalizeLoopScheduleArgs = typeof options.normalizeLoopScheduleArgs === "function" ? options.normalizeLoopScheduleArgs : defaultNormalizeLoopScheduleArgs
   const readState = typeof options.readState === "function" ? options.readState : defaultReadState
   const writeState = typeof options.writeState === "function" ? options.writeState : defaultWriteState
   const appendLoopLog = typeof options.appendLoopLog === "function" ? options.appendLoopLog : defaultAppendLoopLog
   const normalizedModelRef = typeof options.normalizedModelRef === "function" ? options.normalizedModelRef : defaultNormalizedModelRef
   const getSessionExecutionContext = typeof options.getSessionExecutionContext === "function" ? options.getSessionExecutionContext : defaultGetSessionExecutionContext
+  const findDedicatedGoalForSession = typeof options.findDedicatedGoalForSession === "function" ? options.findDedicatedGoalForSession : defaultFindDedicatedGoalForSession
   const configuredGuard = Number(options.defaultActiveGuardMs)
   const defaultActiveGuardMs = Number.isFinite(configuredGuard) && configuredGuard > 0 ? configuredGuard : FALLBACK_ACTIVE_GUARD_MS
 
   async function addLoop(directory, client, sessionID, args, defaults = {}) {
-    const parsed = parseLoopArgs(args, defaults)
+    const normalized = normalizeLoopScheduleArgs(args, defaults)
+    if (!normalized.ok) { await toast(client, normalized.error, "warning"); return }
+
+    const parsed = parseLoopArgs(normalized.args, normalized.defaults)
     if (!parsed.ok) { await toast(client, parsed.error, "warning"); return }
+    parsed.job.scheduleMode = normalized.scheduleMode
+    parsed.job.scheduleSyntax = normalized.scheduleSyntax
+    parsed.job.allowGoalOverlap = normalized.allowGoalOverlap === true
+
     const executionContext = getSessionExecutionContext(sessionID) || { agent: "build" }
     parsed.job.agent = defaults.agent || executionContext.agent || "build"
     parsed.job.model = normalizedModelRef(defaults.model) || executionContext.model
@@ -63,6 +74,21 @@ export function createLoopRegistration(options = {}) {
         ? DEFAULT_GOAL_ACTIVE_RECOVERY_MS
         : Math.max(defaultActiveGuardMs, Math.min(90_000, (parsed.job.intervalMs || 0) + 10_000))
     }
+
+    const promptProducing = actionKind(parsed.job.action, parsed.job) === "prompt"
+    if (promptProducing && !parsed.job.allowGoalOverlap) {
+      const dedicatedGoal = await findDedicatedGoalForSession(directory, sessionID)
+      if (dedicatedGoalOwnsContinuation(dedicatedGoal)) {
+        await appendLoopLog(directory, "goal-overlap-blocked", {
+          sessionID,
+          job: parsed.job.name || parsed.job.id,
+          goal: dedicatedGoal.id,
+        })
+        await toast(client, "Prompt loop not added: dedicated /goal already owns continuation in this session. Pause/finish the Goal, use another session, or pass --allow-goal-overlap intentionally.", "warning")
+        return
+      }
+    }
+
     if (parsed.job.dryRun) {
       await toast(client, `Loop dry run: ${jobLabel(parsed.job)}`, "info")
       await say(client, sessionID, "OpenCode loop dry run:\n```json\n" + JSON.stringify(parsed.job, null, 2) + "\n```")
@@ -93,7 +119,13 @@ export function createLoopRegistration(options = {}) {
     await scheduleDueWork(directory, client, sessionID)
     if (parsed.job.immediate) scheduleIdleWork(directory, client, sessionID)
     await toast(client, `${replaced ? "Loop replaced" : "Loop added"}: ${jobLabel(parsed.job)}`, "success")
-    await appendLoopLog(directory, replaced ? "replace" : "add", { sessionID, job: parsed.job.name || parsed.job.id, label: jobLabel(parsed.job) })
+    await appendLoopLog(directory, replaced ? "replace" : "add", {
+      sessionID,
+      job: parsed.job.name || parsed.job.id,
+      label: jobLabel(parsed.job),
+      scheduleMode: parsed.job.scheduleMode,
+      scheduleSyntax: parsed.job.scheduleSyntax,
+    })
   }
 
   return { addLoop }
