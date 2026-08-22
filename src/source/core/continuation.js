@@ -20,14 +20,16 @@ const COMPLETION_BOUNDED_PATTERNS = [
 ]
 
 const TERMINAL_COMPLETION_PATTERNS = [
-  /\bproje tamamland[ıi]\b/i,
+  // JS \b is ASCII-oriented and does not see Turkish dotless ı as a word
+  // character. Use an explicit following delimiter for Turkish terminal forms.
+  /proje tamamland[ıi](?=\s|[.,;:!—-]|$)/i,
   /\bproject (?:is )?(?:complete|completed|finished|done)\b/i,
   /\b(?:task|work) (?:is )?(?:complete|completed|finished|done)\b/i,
 ]
 
 const TERMINAL_NO_WORK_PATTERNS = [
-  /\byap[ıi]lacak (?:başka )?iş yok\b/i,
-  /\bbaşka (?:bir )?iş (?:kalmad[ıi]|yok)\b/i,
+  /yap[ıi]lacak (?:başka )?iş yok(?=\s|[.,;:!—-]|$)/i,
+  /başka (?:bir )?iş (?:kalmad[ıi]|yok)(?=\s|[.,;:!—-]|$)/i,
   /\bnothing (?:else )?left to do\b/i,
   /\bno (?:more|remaining) work\b/i,
   /\bno known (?:bugs|issues)\b/i,
@@ -36,11 +38,11 @@ const TERMINAL_NO_WORK_PATTERNS = [
 
 const NEXT_WORK_PATTERNS = [
   /\bnext(?: step| task)?\b/i,
-  /\bs[ıi]radaki\b/i,
-  /\bsonraki\b/i,
-  /\bkalan (?:iş|işler|todo|adım)\b/i,
+  /s[ıi]radaki(?=\s|[.,;:!—-]|$)/i,
+  /sonraki(?=\s|[.,;:!—-]|$)/i,
+  /kalan (?:iş|işler|todo|adım)(?=\s|[.,;:!—-]|$)/i,
   /\bremaining (?:work|task|todo|step)/i,
-  /\bdevam (?:edeceğim|ediyorum|etmek gerek)/i,
+  /devam (?:edeceğim|ediyorum|etmek gerek)(?=\s|[.,;:!—-]|$)/i,
 ]
 
 export function isContinuationShorthand(value) {
