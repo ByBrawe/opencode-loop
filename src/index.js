@@ -3309,6 +3309,12 @@ function createRunFinalizationRuntime(options = {}) {
   const dangerousShell2 = typeof options.dangerousShell === "function" ? options.dangerousShell : dangerousShell;
   const applyTerminalContinuationGuard2 = typeof options.applyTerminalContinuationGuard === "function" ? options.applyTerminalContinuationGuard : applyTerminalContinuationGuard;
   async function finalizeJob(directory, client, sessionID, state, job, previousJob) {
+    if (job.infrastructureFailureCount) {
+      job.infrastructureFailureCount = 0;
+      job.lastInfrastructureFailure = "";
+      job.lastInfrastructureError = "";
+      job.lastInfrastructureFailureAt = 0;
+    }
     if (job.verifyCommand) {
       const verify = await runShellCommand2(job.verifyCommand, directory, job.timeoutMs || 300000);
       job.lastVerifyAt = now2();
