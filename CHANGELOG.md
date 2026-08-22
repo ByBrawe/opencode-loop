@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.35
+
+- Treat OpenCode `session.status=retry` as authoritative provider ownership: retry and unreadable status can no longer age into idle and cause an overlapping Loop turn; a genuinely completed current assistant message can still release stale retry safely.
+- Recover transient Loop-owned network/provider failures with bounded exponential backoff (5s to 60s), refund failed infrastructure attempts from `runCount`/`lastRunAt`, re-enable jobs that only hit `--max-runs` because of the failed attempt, and keep infrastructure failures separate from ordinary `failureCount`.
+- Add a two-minute watchdog for an explicitly stuck OpenCode retry, scoped only to a Loop-owned active turn: abort that owned retry, refund the logical run, and reschedule with backoff without touching unrelated foreground/user work. Successful normal turns reset the consecutive network-backoff counter.
+- Preserve plain `/loop devam et` as intentionally unlimited, while explicit completion-bounded idle loops such as `bitene kadar`, `projeyi bitir`, and `until done` now auto-pause only after two consecutive current assistant replies both report verified completion and no remaining work. Replies naming next/remaining work reset the terminal signal.
+- Make Turkish terminal/no-work detection Unicode-safe, expand outage/terminal regressions, keep the generated single-file stable bundle synchronized with modular source, and document retry, backoff, watchdog, and completion-bounded scheduling behavior in `docs/SCHEDULING.md`.
+
 ## 0.5.34
 
 - Make plain `/loop <prompt>` the ergonomic unlimited idle-continuation form: when the assistant stops and the session is safely idle, Loop sends the prompt again. Add explicit `idle`, recurring `every <duration>`, and one-shot `after/in <duration>` schedule grammar while preserving legacy duration-first commands.
