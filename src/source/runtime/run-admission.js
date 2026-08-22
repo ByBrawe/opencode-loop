@@ -1,10 +1,10 @@
 import path from "node:path"
 import { now as defaultNow } from "../core/args.js"
-import { isGoalJob } from "../core/jobs.js"
 import { pathExists as defaultPathExists, writeState as defaultWriteState } from "../core/state.js"
 import { appendLoopLog as defaultAppendLoopLog, runShellCommand as defaultRunShellCommand, notifyJob as defaultNotifyJob } from "../core/process.js"
 import { toast as defaultToast } from "../opencode/host.js"
 import { dangerousShell as defaultDangerousShell } from "./job-workspace.js"
+import { dueJobs as sharedDueJobs } from "./schedule-policy.js"
 
 function requireFunction(value, label) {
   if (typeof value !== "function") throw new TypeError(`createRunAdmissionRuntime requires ${label}`)
@@ -25,18 +25,7 @@ export function createRunAdmissionRuntime(options = {}) {
   const dangerousShell = typeof options.dangerousShell === "function" ? options.dangerousShell : defaultDangerousShell
 
   function dueJobs(state, force = false) {
-    const current = now()
-    const due = (state.jobs || []).filter((job) => {
-      if (isGoalJob(job) && ["completed", "blocked", "cleared"].includes(job.goalStatus)) return false
-      if (!job.enabled || job.paused) return false
-      if (job.maxRuns > 0 && (job.runCount || 0) >= job.maxRuns) return false
-      if (job.maxRuntimeMs > 0 && current - Date.parse(job.createdAt || new Date().toISOString()) >= job.maxRuntimeMs) return true
-      if (Number(job.runNowRequestedAt || 0) > 0) return true
-      if (force) return true
-      if (job.watchPaths?.length) return job.watchTriggered === true
-      return job.intervalMs === 0 || !job.lastRunAt || current - job.lastRunAt >= job.intervalMs
-    })
-    return due.sort((a, b) => Number(Number(b.runNowRequestedAt || 0) > 0) - Number(Number(a.runNowRequestedAt || 0) > 0))
+    return sharedDueJobs(state, now(), force)
   }
 
   async function reschedule(directory, client, sessionID) {

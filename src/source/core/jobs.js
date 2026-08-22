@@ -1,4 +1,5 @@
 import { DEFAULT_GOAL_MAX_NO_PROGRESS, parseDuration, durationToText } from "./args.js"
+import { continuationProjectInstruction } from "./continuation.js"
 
 export function presetDefaults(name) {
   // parseLoopArgs owns duration/flag/action parsing. Presets only provide real
@@ -54,6 +55,8 @@ export function actionKind(action, job = {}) {
 
 export function decoratePrompt(job) {
   const additions = []
+  const continuation = continuationProjectInstruction(job.action)
+  if (continuation) additions.push(continuation)
   if (job.progressFile) additions.push(`Use ${job.progressFile} as the main progress/TODO state file. Read it before choosing the next task and update it after work.`)
   if (job.lastVerifyFailure) additions.push("Previous verify command failed. Fix this before moving on. Failure summary: " + String(job.lastVerifyFailure).slice(0, 1200))
   if (job.askNever) additions.push("Do not ask the user questions. Make reasonable assumptions and continue. Only write a short BLOCKED note if truly blocked.")

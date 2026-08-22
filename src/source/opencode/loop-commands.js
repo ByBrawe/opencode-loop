@@ -1,9 +1,11 @@
 import { promises as fs } from "node:fs"
 import path from "node:path"
-import { now as defaultNow, durationToText } from "../core/args.js"
+import { now as defaultNow } from "../core/args.js"
 import { jobLabel, matchJob, isGoalJob, goalStatusText } from "../core/jobs.js"
 import { stateDir, pathExists as defaultPathExists, readState as defaultReadState, writeState as defaultWriteState, removeState as defaultRemoveState } from "../core/state.js"
 import { appendLoopLog as defaultAppendLoopLog } from "../core/process.js"
+import { dedicatedGoalSummary, findDedicatedGoalForSession as defaultFindDedicatedGoalForSession } from "../runtime/companion-goal.js"
+import { describeJobScheduling, listPersistedLoopSessions as defaultListPersistedLoopSessions } from "../runtime/loop-diagnostics.js"
 
 const SERVICE = "opencode-loop"
 const DEFAULT_PROGRESS_MD = `# Progress
@@ -54,6 +56,8 @@ export function createLoopCommandHandlers(options = {}) {
   const appendLoopLog = typeof options.appendLoopLog === "function" ? options.appendLoopLog : defaultAppendLoopLog
   const readFile = typeof options.readFile === "function" ? options.readFile : (...args) => fs.readFile(...args)
   const writeFile = typeof options.writeFile === "function" ? options.writeFile : (...args) => fs.writeFile(...args)
+  const listPersistedLoopSessions = typeof options.listPersistedLoopSessions === "function" ? options.listPersistedLoopSessions : defaultListPersistedLoopSessions
+  const findDedicatedGoalForSession = typeof options.findDedicatedGoalForSession === "function" ? options.findDedicatedGoalForSession : defaultFindDedicatedGoalForSession
   const runtimeVersion = options.runtimeVersion || process.version
   const runtimePlatform = options.runtimePlatform || process.platform
 
@@ -88,21 +92,11 @@ export function createLoopCommandHandlers(options = {}) {
   async function statusLoop(directory, client, sessionID) {
     const state = await readState(directory, sessionID)
     const jobs = state.jobs || []
+    const current = now()
     const lines = jobs.length ? jobs.map((job, index) => {
-      const current = now()
-      const intervalMs = Number(job.intervalMs || 0)
-      const lastRunAt = Number(job.lastRunAt || 0)
-      const createdAt = Date.parse(job.createdAt || "")
-      const dueAt = Number(job.runNowRequestedAt || 0) > 0
-        ? current
-        : lastRunAt > 0
-          ? lastRunAt + intervalMs
-          : job.immediate === false && Number.isFinite(createdAt)
-            ? createdAt + intervalMs
-            : current
-      const dueIn = Math.max(0, dueAt - current)
+      const scheduling = describeJobScheduling(job, current)
       const flags = [isGoalJob(job) ? `goal:${goalStatusText(job)}` : undefined, job.paused ? "paused" : "active", Number(job.runNowRequestedAt || 0) > 0 ? "run-now" : undefined, job.safe ? "safe" : undefined, job.askNever ? "ask-never" : undefined, job.noOverlap ? "no-overlap" : undefined, job.checkpointOnly ? "checkpoint-only" : undefined, job.gitCheckpoint ? "git-checkpoint" : undefined].filter(Boolean).join(",")
-      return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${jobLabel(job)} | runs=${job.runCount || 0} | failures=${job.failureCount || 0} | due in ${durationToText(dueIn)} | ${flags}`
+      return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${jobLabel(job)} | schedule=${scheduling.schedule} | state=${scheduling.state} | runs=${job.runCount || 0} | failures=${job.failureCount || 0} | ${flags}`
     }) : ["No active loop jobs."]
     await toast(client, jobs.length ? `${jobs.length} loop job(s).` : "No active loop jobs.", jobs.length ? "info" : "warning")
     await say(client, sessionID, "OpenCode loop status:\n" + lines.join("\n"))
@@ -117,18 +111,20 @@ export function createLoopCommandHandlers(options = {}) {
   async function helpLoop(client, sessionID) {
     await say(client, sessionID, [
       "OpenCode Loop help:",
-      "/loop 0s <prompt>                                Claude Code style auto-continue",
-      "/loop 5m --ask-never --safe <prompt>              interval autonomous prompt loop",
-      "/loop-command 200m /compact                       OpenCode slash-command loop, waits for idle",
-      "/loop-ask 1h did you run tests and tsc --noEmit?   scheduled question/check prompt",
-      "/loop-shell 10m npm test                           shell loop, waits for idle",
-      "/loop-goal finish the feature and keep tests green  experimental persistent goal mode",
-      "/loop-goal --check \"npm run build\" --check \"npm test\" --complete-when-checks-pass ship it",
-      "/loop-goal status | pause | resume | clear          manage experimental goals",
-      "/loop 200m --command /compact                     same as command loop",
-      "/loop 0s --verify \"npm test\" <prompt>            verify after each assistant turn",
-      "/loop 0s --prompt-file loop-prompt.md             load prompt from a file",
-      "/loop 0s --max-runtime 6h --max-failures 3 <task> stop safely after limits",
+      "/loop continue the project                           auto-continue forever whenever the session becomes idle",
+      "/loop idle continue the project                      explicit form of the same idle loop",
+      "/loop every 5m continue the project                  recurring timer; first run after 5m, always waits for idle",
+      "/loop after 5m continue the project                  one-shot delayed prompt; runs once when 5m has passed and session is idle",
+      "/loop 5m continue the project                        legacy compact form: starts on next idle, then every 5m",
+      "/loop 5m --no-now continue the project               legacy recurring form with first run delayed 5m",
+      "/loop-command 200m /compact                          OpenCode slash-command loop, waits for idle",
+      "/loop-ask 1h did you run tests and tsc --noEmit?      scheduled question/check prompt",
+      "/loop-shell 10m npm test                              shell loop, waits for idle",
+      "/loop-goal finish the feature and keep tests green    experimental persistent goal mode",
+      "/loop 0s --verify \"npm test\" <prompt>               verify after each assistant turn",
+      "/loop --prompt-file loop-prompt.md                    idle loop loading its prompt from a file",
+      "/loop 0s --max-runtime 6h --max-failures 3 <task>     stop safely after limits",
+      "Prompt-producing /loop jobs are blocked while dedicated /goal owns the same session; use another session or --allow-goal-overlap only intentionally.",
       "/loop-doctor | /loop-init | /loop-export",
     ].join("\n"))
   }
@@ -154,17 +150,30 @@ export function createLoopCommandHandlers(options = {}) {
 
   async function doctorLoop(directory, client, sessionID) {
     const state = await readState(directory, sessionID)
-    await say(client, sessionID, [
+    const persisted = await listPersistedLoopSessions(directory, sessionID)
+    const otherSessions = persisted.filter((entry) => !entry.current && entry.enabled > 0)
+    const dedicatedGoal = await findDedicatedGoalForSession(directory, sessionID)
+    const lines = [
       "OpenCode Loop doctor:",
       `- plugin: ${SERVICE}`,
       `- project directory: ${directory}`,
       `- state directory: ${stateDir(directory)}`,
-      `- active jobs: ${(state.jobs || []).length}`,
+      `- current session: ${sessionID}`,
+      `- current-session jobs: ${(state.jobs || []).length}`,
+      `- dedicated /goal: ${dedicatedGoalSummary(dedicatedGoal)}`,
+      `- other persisted sessions with enabled jobs: ${otherSessions.length}`,
       `- node: ${runtimeVersion}`,
       `- platform: ${runtimePlatform}`,
-      "- smoke test: /loop 0s --max-runs 1 --dry-run continue from progress.md",
+      "- smoke test: /loop --max-runs 1 --dry-run continue from progress.md",
+      "- delayed smoke test: /loop after 5m --dry-run continue from progress.md",
+      "- recurring smoke test: /loop every 5m --dry-run continue from progress.md",
       "- experimental goal smoke test: /loop-goal --dry-run finish the current task and verify it",
-    ].join("\n"))
+    ]
+    for (const entry of otherSessions.slice(0, 8)) {
+      lines.push(`- other session ${entry.sessionID}: jobs=${entry.jobs}, enabled=${entry.enabled}, never-ran=${entry.neverRan}`)
+    }
+    if (otherSessions.length > 8) lines.push(`- ... ${otherSessions.length - 8} more persisted session(s)`)
+    await say(client, sessionID, lines.join("\n"))
   }
 
   async function initLoop(directory, client, sessionID, args) {

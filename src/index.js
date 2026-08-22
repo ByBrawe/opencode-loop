@@ -1021,6 +1021,27 @@ function commandArgsText(args) {
   return String(args);
 }
 
+// src/source/core/continuation.js
+var CONTINUATION_SHORTHANDS = new Set([
+  "continue",
+  "continue.",
+  "continue working",
+  "keep going",
+  "go on",
+  "devam",
+  "devam et",
+  "devam et.",
+  "devam et bakal\u0131m"
+]);
+function isContinuationShorthand(value) {
+  return CONTINUATION_SHORTHANDS.has(String(value || "").trim().toLowerCase().replace(/\s+/g, " "));
+}
+function continuationProjectInstruction(value) {
+  if (!isContinuationShorthand(value))
+    return "";
+  return "Treat this as continuation of the current project and conversation, not a fresh task. Inspect the repository state, relevant files, TODO/progress notes, recent changes, and git status as needed to identify the next unfinished step. Continue from existing work, do not redo completed work, and verify meaningful changes when practical.";
+}
+
 // src/source/core/jobs.js
 function presetDefaults(name) {
   if (name === "loop-compact")
@@ -1086,6 +1107,9 @@ function actionKind(action, job = {}) {
 }
 function decoratePrompt(job) {
   const additions = [];
+  const continuation = continuationProjectInstruction(job.action);
+  if (continuation)
+    additions.push(continuation);
   if (job.progressFile)
     additions.push(`Use ${job.progressFile} as the main progress/TODO state file. Read it before choosing the next task and update it after work.`);
   if (job.lastVerifyFailure)
@@ -1623,8 +1647,185 @@ function createGoalCommandHandlers(options = {}) {
 }
 
 // src/source/opencode/loop-commands.js
+import { promises as fs6 } from "fs";
+import path7 from "path";
+
+// src/source/runtime/companion-goal.js
 import { promises as fs4 } from "fs";
 import path5 from "path";
+function goalRoot(directory) {
+  return path5.join(directory, ".opencode", "goals");
+}
+async function findDedicatedGoalForSession(directory, sessionID) {
+  if (!directory || !sessionID)
+    return;
+  let names;
+  try {
+    names = await fs4.readdir(goalRoot(directory));
+  } catch (error) {
+    if (error?.code === "ENOENT")
+      return;
+    return;
+  }
+  for (const name of names) {
+    if (!name.endsWith(".json"))
+      continue;
+    try {
+      const value = JSON.parse(await fs4.readFile(path5.join(goalRoot(directory), name), "utf8"));
+      if (value?.sessionID === sessionID)
+        return value;
+    } catch {}
+  }
+  return;
+}
+function dedicatedGoalOwnsContinuation(goal) {
+  return goal?.status === "active";
+}
+function dedicatedGoalSummary(goal) {
+  if (!goal)
+    return "not detected";
+  const id = String(goal.id || "unknown").slice(0, 12);
+  const status = String(goal.status || "unknown");
+  return `${status} (${id})`;
+}
+
+// src/source/runtime/loop-diagnostics.js
+import { promises as fs5 } from "fs";
+import path6 from "path";
+
+// src/source/runtime/schedule-policy.js
+var TERMINAL_GOAL_STATUSES = new Set(["completed", "blocked", "cleared"]);
+function inferredScheduleMode(job) {
+  const explicit = String(job?.scheduleMode || "").toLowerCase();
+  if (["idle", "interval", "once", "watch"].includes(explicit))
+    return explicit;
+  if (job?.watchPaths?.length)
+    return "watch";
+  if (Number(job?.maxRuns || 0) === 1 && job?.immediate === false && Number(job?.intervalMs || 0) > 0)
+    return "once";
+  return Number(job?.intervalMs || 0) === 0 ? "idle" : "interval";
+}
+function jobRunnable(job) {
+  if (!job)
+    return false;
+  if (isGoalJob(job) && TERMINAL_GOAL_STATUSES.has(job.goalStatus))
+    return false;
+  if (!job.enabled || job.paused)
+    return false;
+  if (Number(job.maxRuns || 0) > 0 && Number(job.runCount || 0) >= Number(job.maxRuns || 0))
+    return false;
+  return true;
+}
+function jobDueAt(job, current = Date.now()) {
+  if (!jobRunnable(job))
+    return Infinity;
+  if (Number(job.runNowRequestedAt || 0) > 0)
+    return current;
+  const created = Date.parse(job.createdAt || "");
+  if (Number(job.maxRuntimeMs || 0) > 0 && Number.isFinite(created) && current - created >= Number(job.maxRuntimeMs || 0))
+    return current;
+  if (job.watchPaths?.length)
+    return job.watchTriggered === true ? current : Infinity;
+  const intervalMs = Number(job.intervalMs || 0);
+  if (intervalMs === 0)
+    return current;
+  const lastRunAt = Number(job.lastRunAt || 0);
+  if (!lastRunAt) {
+    if (job.immediate === false)
+      return (Number.isFinite(created) ? created : current) + intervalMs;
+    return current;
+  }
+  return lastRunAt + intervalMs;
+}
+function jobIsDue(job, current = Date.now(), force = false) {
+  if (!jobRunnable(job))
+    return false;
+  if (force)
+    return true;
+  return jobDueAt(job, current) <= current;
+}
+function dueJobs(state, current = Date.now(), force = false) {
+  return (state?.jobs || []).filter((job) => jobIsDue(job, current, force)).sort((a, b) => Number(Number(b.runNowRequestedAt || 0) > 0) - Number(Number(a.runNowRequestedAt || 0) > 0));
+}
+function nextDueDelay(state, current = Date.now()) {
+  let soonest = Infinity;
+  for (const job of state?.jobs || [])
+    soonest = Math.min(soonest, jobDueAt(job, current));
+  if (!Number.isFinite(soonest))
+    return Infinity;
+  return Math.max(0, soonest - current);
+}
+function scheduleDescription(job) {
+  const mode = inferredScheduleMode(job);
+  const intervalMs = Number(job?.intervalMs || 0);
+  if (mode === "idle")
+    return "every idle";
+  if (mode === "watch")
+    return `on watch: ${(job.watchPaths || []).join(", ")}`;
+  if (mode === "once")
+    return intervalMs > 0 ? `once after ${durationToText(intervalMs)}` : "once on next idle";
+  if (job?.immediate === false)
+    return `every ${durationToText(intervalMs)}, first after ${durationToText(intervalMs)}`;
+  return `every ${durationToText(intervalMs)}, starts on next idle`;
+}
+function scheduleState(job, current = Date.now()) {
+  if (!job?.enabled)
+    return "stopped";
+  if (job?.paused)
+    return "paused";
+  if (Number(job?.runNowRequestedAt || 0) > 0)
+    return "due now; waiting for idle";
+  const mode = inferredScheduleMode(job);
+  const dueAt = jobDueAt(job, current);
+  if (!Number.isFinite(dueAt))
+    return mode === "watch" ? "waiting for watched change" : "not scheduled";
+  if (dueAt <= current)
+    return mode === "idle" ? "waiting for idle" : "due; waiting for idle";
+  return `due in ${durationToText(dueAt - current)}`;
+}
+
+// src/source/runtime/loop-diagnostics.js
+function describeJobScheduling(job, current = Date.now()) {
+  return {
+    schedule: scheduleDescription(job),
+    state: scheduleState(job, current)
+  };
+}
+async function listPersistedLoopSessions(directory, currentSessionID) {
+  const root = stateDir(directory);
+  let names;
+  try {
+    names = await fs5.readdir(root);
+  } catch (error) {
+    if (error?.code === "ENOENT")
+      return [];
+    return [];
+  }
+  const sessions = [];
+  for (const name of names) {
+    if (!name.endsWith(".json"))
+      continue;
+    const sessionID = name.slice(0, -5);
+    try {
+      const parsed = JSON.parse(await fs5.readFile(path6.join(root, name), "utf8"));
+      const jobs = Array.isArray(parsed?.jobs) ? parsed.jobs : [];
+      const enabled = jobs.filter((job) => job?.enabled !== false && !job?.paused).length;
+      const neverRan = jobs.filter((job) => Number(job?.runCount || 0) === 0).length;
+      sessions.push({
+        sessionID,
+        current: sessionID === currentSessionID,
+        jobs: jobs.length,
+        enabled,
+        neverRan
+      });
+    } catch {
+      sessions.push({ sessionID, current: sessionID === currentSessionID, jobs: 0, enabled: 0, neverRan: 0, corrupt: true });
+    }
+  }
+  return sessions.sort((a, b) => Number(b.current) - Number(a.current) || b.enabled - a.enabled || a.sessionID.localeCompare(b.sessionID));
+}
+
+// src/source/opencode/loop-commands.js
 var SERVICE2 = "opencode-loop";
 var DEFAULT_PROGRESS_MD = `# Progress
 
@@ -1671,8 +1872,10 @@ function createLoopCommandHandlers(options = {}) {
   const removeState2 = typeof options.removeState === "function" ? options.removeState : removeState;
   const pathExists2 = typeof options.pathExists === "function" ? options.pathExists : pathExists;
   const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
-  const readFile = typeof options.readFile === "function" ? options.readFile : (...args) => fs4.readFile(...args);
-  const writeFile = typeof options.writeFile === "function" ? options.writeFile : (...args) => fs4.writeFile(...args);
+  const readFile = typeof options.readFile === "function" ? options.readFile : (...args) => fs6.readFile(...args);
+  const writeFile = typeof options.writeFile === "function" ? options.writeFile : (...args) => fs6.writeFile(...args);
+  const listPersistedLoopSessions2 = typeof options.listPersistedLoopSessions === "function" ? options.listPersistedLoopSessions : listPersistedLoopSessions;
+  const findDedicatedGoalForSession2 = typeof options.findDedicatedGoalForSession === "function" ? options.findDedicatedGoalForSession : findDedicatedGoalForSession;
   const runtimeVersion = options.runtimeVersion || process.version;
   const runtimePlatform = options.runtimePlatform || process.platform;
   async function stopLoop(directory, client, sessionID, args) {
@@ -1704,15 +1907,11 @@ function createLoopCommandHandlers(options = {}) {
   async function statusLoop(directory, client, sessionID) {
     const state = await readState2(directory, sessionID);
     const jobs = state.jobs || [];
+    const current = now2();
     const lines = jobs.length ? jobs.map((job, index) => {
-      const current = now2();
-      const intervalMs = Number(job.intervalMs || 0);
-      const lastRunAt = Number(job.lastRunAt || 0);
-      const createdAt = Date.parse(job.createdAt || "");
-      const dueAt = Number(job.runNowRequestedAt || 0) > 0 ? current : lastRunAt > 0 ? lastRunAt + intervalMs : job.immediate === false && Number.isFinite(createdAt) ? createdAt + intervalMs : current;
-      const dueIn = Math.max(0, dueAt - current);
+      const scheduling = describeJobScheduling(job, current);
       const flags = [isGoalJob(job) ? `goal:${goalStatusText(job)}` : undefined, job.paused ? "paused" : "active", Number(job.runNowRequestedAt || 0) > 0 ? "run-now" : undefined, job.safe ? "safe" : undefined, job.askNever ? "ask-never" : undefined, job.noOverlap ? "no-overlap" : undefined, job.checkpointOnly ? "checkpoint-only" : undefined, job.gitCheckpoint ? "git-checkpoint" : undefined].filter(Boolean).join(",");
-      return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${jobLabel(job)} | runs=${job.runCount || 0} | failures=${job.failureCount || 0} | due in ${durationToText(dueIn)} | ${flags}`;
+      return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${jobLabel(job)} | schedule=${scheduling.schedule} | state=${scheduling.state} | runs=${job.runCount || 0} | failures=${job.failureCount || 0} | ${flags}`;
     }) : ["No active loop jobs."];
     await toast2(client, jobs.length ? `${jobs.length} loop job(s).` : "No active loop jobs.", jobs.length ? "info" : "warning");
     await say2(client, sessionID, `OpenCode loop status:
@@ -1722,7 +1921,7 @@ function createLoopCommandHandlers(options = {}) {
   async function logsLoop(directory, client, sessionID) {
     let text = "No loop log found.";
     try {
-      text = (await readFile(path5.join(stateDir(directory), "loop.log"), "utf8")).trim().split(/\r?\n/).slice(-80).join(`
+      text = (await readFile(path7.join(stateDir(directory), "loop.log"), "utf8")).trim().split(/\r?\n/).slice(-80).join(`
 `) || text;
     } catch {}
     await say2(client, sessionID, `OpenCode loop logs:
@@ -1731,18 +1930,20 @@ function createLoopCommandHandlers(options = {}) {
   async function helpLoop(client, sessionID) {
     await say2(client, sessionID, [
       "OpenCode Loop help:",
-      "/loop 0s <prompt>                                Claude Code style auto-continue",
-      "/loop 5m --ask-never --safe <prompt>              interval autonomous prompt loop",
-      "/loop-command 200m /compact                       OpenCode slash-command loop, waits for idle",
-      "/loop-ask 1h did you run tests and tsc --noEmit?   scheduled question/check prompt",
-      "/loop-shell 10m npm test                           shell loop, waits for idle",
-      "/loop-goal finish the feature and keep tests green  experimental persistent goal mode",
-      '/loop-goal --check "npm run build" --check "npm test" --complete-when-checks-pass ship it',
-      "/loop-goal status | pause | resume | clear          manage experimental goals",
-      "/loop 200m --command /compact                     same as command loop",
-      '/loop 0s --verify "npm test" <prompt>            verify after each assistant turn',
-      "/loop 0s --prompt-file loop-prompt.md             load prompt from a file",
-      "/loop 0s --max-runtime 6h --max-failures 3 <task> stop safely after limits",
+      "/loop continue the project                           auto-continue forever whenever the session becomes idle",
+      "/loop idle continue the project                      explicit form of the same idle loop",
+      "/loop every 5m continue the project                  recurring timer; first run after 5m, always waits for idle",
+      "/loop after 5m continue the project                  one-shot delayed prompt; runs once when 5m has passed and session is idle",
+      "/loop 5m continue the project                        legacy compact form: starts on next idle, then every 5m",
+      "/loop 5m --no-now continue the project               legacy recurring form with first run delayed 5m",
+      "/loop-command 200m /compact                          OpenCode slash-command loop, waits for idle",
+      "/loop-ask 1h did you run tests and tsc --noEmit?      scheduled question/check prompt",
+      "/loop-shell 10m npm test                              shell loop, waits for idle",
+      "/loop-goal finish the feature and keep tests green    experimental persistent goal mode",
+      '/loop 0s --verify "npm test" <prompt>               verify after each assistant turn',
+      "/loop --prompt-file loop-prompt.md                    idle loop loading its prompt from a file",
+      "/loop 0s --max-runtime 6h --max-failures 3 <task>     stop safely after limits",
+      "Prompt-producing /loop jobs are blocked while dedicated /goal owns the same session; use another session or --allow-goal-overlap only intentionally.",
       "/loop-doctor | /loop-init | /loop-export"
     ].join(`
 `));
@@ -1767,22 +1968,36 @@ function createLoopCommandHandlers(options = {}) {
   }
   async function doctorLoop(directory, client, sessionID) {
     const state = await readState2(directory, sessionID);
-    await say2(client, sessionID, [
+    const persisted = await listPersistedLoopSessions2(directory, sessionID);
+    const otherSessions = persisted.filter((entry) => !entry.current && entry.enabled > 0);
+    const dedicatedGoal = await findDedicatedGoalForSession2(directory, sessionID);
+    const lines = [
       "OpenCode Loop doctor:",
       `- plugin: ${SERVICE2}`,
       `- project directory: ${directory}`,
       `- state directory: ${stateDir(directory)}`,
-      `- active jobs: ${(state.jobs || []).length}`,
+      `- current session: ${sessionID}`,
+      `- current-session jobs: ${(state.jobs || []).length}`,
+      `- dedicated /goal: ${dedicatedGoalSummary(dedicatedGoal)}`,
+      `- other persisted sessions with enabled jobs: ${otherSessions.length}`,
       `- node: ${runtimeVersion}`,
       `- platform: ${runtimePlatform}`,
-      "- smoke test: /loop 0s --max-runs 1 --dry-run continue from progress.md",
+      "- smoke test: /loop --max-runs 1 --dry-run continue from progress.md",
+      "- delayed smoke test: /loop after 5m --dry-run continue from progress.md",
+      "- recurring smoke test: /loop every 5m --dry-run continue from progress.md",
       "- experimental goal smoke test: /loop-goal --dry-run finish the current task and verify it"
-    ].join(`
+    ];
+    for (const entry of otherSessions.slice(0, 8)) {
+      lines.push(`- other session ${entry.sessionID}: jobs=${entry.jobs}, enabled=${entry.enabled}, never-ran=${entry.neverRan}`);
+    }
+    if (otherSessions.length > 8)
+      lines.push(`- ... ${otherSessions.length - 8} more persisted session(s)`);
+    await say2(client, sessionID, lines.join(`
 `));
   }
   async function initLoop(directory, client, sessionID, args) {
     const target = String(args || "").trim() || "progress.md";
-    const full = path5.resolve(directory, target);
+    const full = path7.resolve(directory, target);
     if (await pathExists2(full)) {
       await toast2(client, `${target} already exists.`, "warning");
       return;
@@ -1805,6 +2020,81 @@ function createLoopCommandHandlers(options = {}) {
     doctorLoop,
     initLoop,
     exportLoop
+  };
+}
+
+// src/source/core/schedule-syntax.js
+function removeBooleanFlag(input, flag) {
+  const pattern = new RegExp(`(^|\\s)${flag.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}(?=\\s|$)`, "i");
+  const found = pattern.test(input);
+  return {
+    found,
+    value: String(input || "").replace(pattern, " ").replace(/\s+/g, " ").trim()
+  };
+}
+function firstToken(input) {
+  const match = String(input || "").trim().match(/^(\S+)(?:\s+([\s\S]*))?$/);
+  return match ? { token: match[1], rest: String(match[2] || "").trim() } : { token: "", rest: "" };
+}
+function inferredMode(intervalMs, maxRuns) {
+  if (Number(maxRuns || 0) === 1 && Number(intervalMs || 0) > 0)
+    return "once";
+  return Number(intervalMs || 0) === 0 ? "idle" : "interval";
+}
+function normalizeLoopScheduleArgs(raw, defaults = {}) {
+  const overlap = removeBooleanFlag(String(raw || "").trim(), "--allow-goal-overlap");
+  let input = overlap.value;
+  const nextDefaults = { ...defaults };
+  let scheduleMode = defaults.scheduleMode;
+  let scheduleSyntax = "legacy";
+  const first = firstToken(input);
+  const keyword = first.token.toLowerCase();
+  if (keyword === "idle") {
+    nextDefaults.intervalMs = 0;
+    nextDefaults.immediate = true;
+    scheduleMode = "idle";
+    scheduleSyntax = "idle";
+    input = first.rest;
+  } else if (keyword === "every" || keyword === "after" || keyword === "in") {
+    const duration = firstToken(first.rest);
+    const intervalMs = parseDuration(duration.token);
+    if (intervalMs === null) {
+      return {
+        ok: false,
+        error: `Invalid ${keyword} schedule. Example: /loop ${keyword === "every" ? "every" : "after"} 5m continue the project`
+      };
+    }
+    nextDefaults.intervalMs = intervalMs;
+    nextDefaults.immediate = false;
+    input = duration.rest;
+    if (keyword === "every") {
+      scheduleMode = intervalMs === 0 ? "idle" : "interval";
+      scheduleSyntax = "every";
+    } else {
+      nextDefaults.maxRuns = 1;
+      scheduleMode = "once";
+      scheduleSyntax = "after";
+    }
+  } else {
+    const duration = parseDuration(first.token);
+    if (duration !== null) {
+      scheduleMode = duration === 0 ? "idle" : "interval";
+    } else if (nextDefaults.intervalMs === undefined || nextDefaults.intervalMs === null) {
+      nextDefaults.intervalMs = 0;
+      nextDefaults.immediate = nextDefaults.immediate ?? true;
+      scheduleMode = "idle";
+      scheduleSyntax = "idle-shorthand";
+    } else {
+      scheduleMode = scheduleMode || inferredMode(nextDefaults.intervalMs, nextDefaults.maxRuns);
+    }
+  }
+  return {
+    ok: true,
+    args: input,
+    defaults: nextDefaults,
+    scheduleMode: scheduleMode || inferredMode(nextDefaults.intervalMs, nextDefaults.maxRuns),
+    scheduleSyntax,
+    allowGoalOverlap: overlap.found || defaults.allowGoalOverlap === true
   };
 }
 
@@ -1831,18 +2121,33 @@ function createLoopRegistration(options = {}) {
   const toast2 = requireFunction4(options.toast, "toast");
   const say2 = requireFunction4(options.say, "say");
   const parseLoopArgs2 = typeof options.parseLoopArgs === "function" ? options.parseLoopArgs : parseLoopArgs;
+  const normalizeLoopScheduleArgs2 = typeof options.normalizeLoopScheduleArgs === "function" ? options.normalizeLoopScheduleArgs : normalizeLoopScheduleArgs;
   const readState2 = typeof options.readState === "function" ? options.readState : readState;
   const writeState2 = typeof options.writeState === "function" ? options.writeState : writeState;
   const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
   const normalizedModelRef2 = typeof options.normalizedModelRef === "function" ? options.normalizedModelRef : normalizedModelRef;
   const getSessionExecutionContext2 = typeof options.getSessionExecutionContext === "function" ? options.getSessionExecutionContext : getSessionExecutionContext;
+  const findDedicatedGoalForSession2 = typeof options.findDedicatedGoalForSession === "function" ? options.findDedicatedGoalForSession : findDedicatedGoalForSession;
   const configuredGuard = Number(options.defaultActiveGuardMs);
   const defaultActiveGuardMs = Number.isFinite(configuredGuard) && configuredGuard > 0 ? configuredGuard : FALLBACK_ACTIVE_GUARD_MS;
   async function addLoop(directory, client, sessionID, args, defaults = {}) {
-    const parsed = parseLoopArgs2(args, defaults);
+    const normalized = normalizeLoopScheduleArgs2(args, defaults);
+    if (!normalized.ok) {
+      await toast2(client, normalized.error, "warning");
+      return;
+    }
+    const parsed = parseLoopArgs2(normalized.args, normalized.defaults);
     if (!parsed.ok) {
       await toast2(client, parsed.error, "warning");
       return;
+    }
+    parsed.job.scheduleMode = normalized.scheduleMode;
+    parsed.job.scheduleSyntax = normalized.scheduleSyntax;
+    parsed.job.allowGoalOverlap = normalized.allowGoalOverlap === true;
+    if (normalized.scheduleSyntax === "after") {
+      parsed.job.immediate = false;
+      parsed.job.maxRuns = 1;
+      parsed.job.lastRunAt = Date.parse(parsed.job.createdAt || "") || Date.now();
     }
     const executionContext = getSessionExecutionContext2(sessionID) || { agent: "build" };
     parsed.job.agent = defaults.agent || executionContext.agent || "build";
@@ -1862,6 +2167,19 @@ function createLoopRegistration(options = {}) {
       parsed.job.watchSnapshot = await snapshotPaths(directory, parsed.job.watchPaths);
     if (!parsed.job.activeRecoveryMs) {
       parsed.job.activeRecoveryMs = isGoalJob(parsed.job) ? DEFAULT_GOAL_ACTIVE_RECOVERY_MS : Math.max(defaultActiveGuardMs, Math.min(90000, (parsed.job.intervalMs || 0) + 1e4));
+    }
+    const promptProducing = actionKind(parsed.job.action, parsed.job) === "prompt";
+    if (promptProducing && !parsed.job.allowGoalOverlap) {
+      const dedicatedGoal = await findDedicatedGoalForSession2(directory, sessionID);
+      if (dedicatedGoalOwnsContinuation(dedicatedGoal)) {
+        await appendLoopLog2(directory, "goal-overlap-blocked", {
+          sessionID,
+          job: parsed.job.name || parsed.job.id,
+          goal: dedicatedGoal.id
+        });
+        await toast2(client, "Prompt loop not added: dedicated /goal already owns continuation in this session. Pause/finish the Goal, use another session, or pass --allow-goal-overlap intentionally.", "warning");
+        return;
+      }
     }
     if (parsed.job.dryRun) {
       await toast2(client, `Loop dry run: ${jobLabel(parsed.job)}`, "info");
@@ -1890,7 +2208,13 @@ function createLoopRegistration(options = {}) {
     if (parsed.job.immediate)
       scheduleIdleWork(directory, client, sessionID);
     await toast2(client, `${replaced ? "Loop replaced" : "Loop added"}: ${jobLabel(parsed.job)}`, "success");
-    await appendLoopLog2(directory, replaced ? "replace" : "add", { sessionID, job: parsed.job.name || parsed.job.id, label: jobLabel(parsed.job) });
+    await appendLoopLog2(directory, replaced ? "replace" : "add", {
+      sessionID,
+      job: parsed.job.name || parsed.job.id,
+      label: jobLabel(parsed.job),
+      scheduleMode: parsed.job.scheduleMode,
+      scheduleSyntax: parsed.job.scheduleSyntax
+    });
   }
   return { addLoop };
 }
@@ -2007,6 +2331,37 @@ function clearSessionActivity(sessionID) {
   deleteSessionExecutionContext(sessionID);
 }
 
+// src/source/runtime/scheduler-diagnostics.js
+var DEFAULT_DEFERRAL_LOG_THROTTLE_MS = 30000;
+function createSchedulerDiagnostics(options = {}) {
+  const now2 = typeof options.now === "function" ? options.now : Date.now;
+  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : async () => {};
+  const configured = Number(options.throttleMs);
+  const throttleMs = Number.isFinite(configured) && configured >= 0 ? configured : DEFAULT_DEFERRAL_LOG_THROTTLE_MS;
+  const lastLogged = new Map;
+  async function logDeferral(directory, sessionID, reason, extra = {}) {
+    const key = `${sessionID || "unknown"}:${reason || "deferred"}:${extra.source || "runtime"}`;
+    const current = now2();
+    const previous = Number(lastLogged.get(key) || 0);
+    if (previous > 0 && current - previous < throttleMs)
+      return false;
+    lastLogged.set(key, current);
+    await appendLoopLog2(directory, "deferred", {
+      sessionID,
+      reason,
+      ...extra
+    });
+    return true;
+  }
+  function clearSession(sessionID) {
+    const prefix = `${sessionID || "unknown"}:`;
+    for (const key of lastLogged.keys())
+      if (key.startsWith(prefix))
+        lastLogged.delete(key);
+  }
+  return { logDeferral, clearSession };
+}
+
 // src/source/runtime/scheduler.js
 var DEFAULT_IDLE_DEBOUNCE_MS = 1200;
 var DEFAULT_BUSY_RETRY_MS = 5000;
@@ -2014,37 +2369,6 @@ var DEFAULT_MIN_DUE_TIMER_MS = 250;
 var DEFAULT_MAX_DUE_TIMER_MS = 2147000000;
 var DEFAULT_HEARTBEAT_MS = 2500;
 var DEFAULT_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
-function jobDueAt(job, current = now()) {
-  if (isGoalJob(job) && ["completed", "blocked", "cleared"].includes(job.goalStatus))
-    return Infinity;
-  if (!job.enabled || job.paused)
-    return Infinity;
-  if (job.maxRuns > 0 && (job.runCount || 0) >= job.maxRuns)
-    return Infinity;
-  if (Number(job.runNowRequestedAt || 0) > 0)
-    return current;
-  if (job.watchPaths?.length)
-    return Infinity;
-  const created = Date.parse(job.createdAt || "");
-  if (job.maxRuntimeMs > 0 && Number.isFinite(created) && current - created >= job.maxRuntimeMs)
-    return current;
-  if (job.intervalMs === 0)
-    return current;
-  if (!job.lastRunAt) {
-    if (job.immediate === false)
-      return (Number.isFinite(created) ? created : current) + (job.intervalMs || 0);
-    return current;
-  }
-  return job.lastRunAt + (job.intervalMs || 0);
-}
-function nextDueDelay(state, current = now()) {
-  let soonest = Infinity;
-  for (const job of state.jobs || [])
-    soonest = Math.min(soonest, jobDueAt(job, current));
-  if (!Number.isFinite(soonest))
-    return Infinity;
-  return Math.max(0, soonest - current);
-}
 function createSchedulerRuntime(options = {}) {
   const idleTimers = new Map;
   const dueTimers = new Map;
@@ -2072,6 +2396,7 @@ function createSchedulerRuntime(options = {}) {
     if (options.toast)
       await options.toast(client, message, level);
   };
+  const diagnostics = createSchedulerDiagnostics({ appendLoopLog: appendLog, now: clock, throttleMs: options.deferralLogThrottleMs });
   function stopHeartbeatIfIdle() {
     if (!knownSessions.size && heartbeatTimer) {
       clearIntervalFn(heartbeatTimer);
@@ -2119,11 +2444,13 @@ function createSchedulerRuntime(options = {}) {
       idleTimers.delete(sessionID);
       Promise.resolve().then(async () => {
         if (!await options.sessionIsIdle?.(client, sessionID, directory)) {
+          await diagnostics.logDeferral(directory, sessionID, "session-busy", { source: "idle", retryMs: busyRetryMs });
           await scheduleDueWork(directory, client, sessionID, busyRetryMs);
           return;
         }
         await options.finalizeActiveRun?.(directory, client, sessionID);
         if (!await options.sessionIsIdle?.(client, sessionID, directory)) {
+          await diagnostics.logDeferral(directory, sessionID, "session-busy-after-finalize", { source: "idle", retryMs: busyRetryMs });
           await scheduleDueWork(directory, client, sessionID, busyRetryMs);
           return;
         }
@@ -2172,11 +2499,13 @@ function createSchedulerRuntime(options = {}) {
       dueTimers.delete(sessionID);
       Promise.resolve().then(async () => {
         if (!await options.sessionIsIdle?.(client, sessionID, directory)) {
+          await diagnostics.logDeferral(directory, sessionID, "session-busy", { source: "due", retryMs: busyRetryMs });
           await scheduleDueWork(directory, client, sessionID, busyRetryMs);
           return;
         }
         await options.finalizeActiveRun?.(directory, client, sessionID);
         if (!await options.sessionIsIdle?.(client, sessionID, directory)) {
+          await diagnostics.logDeferral(directory, sessionID, "session-busy-after-finalize", { source: "due", retryMs: busyRetryMs });
           await scheduleDueWork(directory, client, sessionID, busyRetryMs);
           return;
         }
@@ -2196,6 +2525,7 @@ function createSchedulerRuntime(options = {}) {
     cancelIdleWork(sessionID);
     cancelDueWork(sessionID);
     stopWatchdog(sessionID);
+    diagnostics.clearSession(sessionID);
     knownSessions.delete(sessionID);
     stopHeartbeatIfIdle();
   }
@@ -2294,8 +2624,8 @@ ${item.output}`).join(`
 }
 
 // src/source/runtime/job-workspace.js
-import { promises as fs5 } from "fs";
-import path6 from "path";
+import { promises as fs7 } from "fs";
+import path8 from "path";
 var MAX_SCAN_FILES = 200;
 var MAX_SCAN_BYTES = 2000000;
 function requireFunction6(value, name) {
@@ -2330,7 +2660,7 @@ function createJobWorkspaceRuntime(options = {}) {
       return await buildGoalPrompt2(directory, job);
     const sections = [];
     if (job.promptFile) {
-      const text = await readSmallTextFile2(path6.resolve(directory, job.promptFile));
+      const text = await readSmallTextFile2(path8.resolve(directory, job.promptFile));
       if (text.trim())
         sections.push(`Instructions from ${job.promptFile}:
 ${text.trim()}`);
@@ -2340,7 +2670,7 @@ ${text.trim()}`);
     if (job.action)
       sections.push(decoratePrompt(job));
     for (const file of job.includeFiles || []) {
-      const text = await readSmallTextFile2(path6.resolve(directory, file), 80000);
+      const text = await readSmallTextFile2(path8.resolve(directory, file), 80000);
       if (text.trim())
         sections.push(`Context from ${file}:
 ${text.trim().slice(0, 20000)}`);
@@ -2372,7 +2702,7 @@ ${text.trim().slice(0, 20000)}`);
     const snapshot = {};
     for (const file of files || []) {
       try {
-        const stat = await fs5.stat(path6.resolve(directory, file));
+        const stat = await fs7.stat(path8.resolve(directory, file));
         snapshot[file] = `${stat.mtimeMs}:${stat.size}`;
       } catch {
         snapshot[file] = "missing";
@@ -2392,10 +2722,10 @@ ${text.trim().slice(0, 20000)}`);
   }
   async function fileContains(filePath, needle) {
     try {
-      const stat = await fs5.stat(filePath);
+      const stat = await fs7.stat(filePath);
       if (!stat.isFile() || stat.size > MAX_SCAN_BYTES)
         return false;
-      return (await fs5.readFile(filePath, "utf8")).includes(needle);
+      return (await fs7.readFile(filePath, "utf8")).includes(needle);
     } catch {
       return false;
     }
@@ -2403,9 +2733,9 @@ ${text.trim().slice(0, 20000)}`);
   async function untilReached(directory, job) {
     if (!job.until)
       return false;
-    const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path6.join(".opencode", "opencode-loop", "until.txt")];
+    const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path8.join(".opencode", "opencode-loop", "until.txt")];
     for (const file of files)
-      if (await fileContains(path6.resolve(directory, file), job.until))
+      if (await fileContains(path8.resolve(directory, file), job.until))
         return true;
     let scanned = 0;
     async function walk(current) {
@@ -2413,7 +2743,7 @@ ${text.trim().slice(0, 20000)}`);
         return false;
       let entries;
       try {
-        entries = await fs5.readdir(current, { withFileTypes: true });
+        entries = await fs7.readdir(current, { withFileTypes: true });
       } catch {
         return false;
       }
@@ -2422,7 +2752,7 @@ ${text.trim().slice(0, 20000)}`);
           return false;
         if ([".git", "node_modules", "dist", "build", ".next", "coverage"].includes(entry.name))
           continue;
-        const full = path6.join(current, entry.name);
+        const full = path8.join(current, entry.name);
         if (entry.isDirectory()) {
           if (await walk(full))
             return true;
@@ -2446,13 +2776,13 @@ ${text.trim().slice(0, 20000)}`);
     if (!status.stdout.trim())
       return;
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const checkpointDir = path6.join(stateDir(directory), "checkpoints", safeID(sessionID));
+    const checkpointDir = path8.join(stateDir(directory), "checkpoints", safeID(sessionID));
     await ensureDir(checkpointDir);
     const diff = await runProcess2("git", ["diff", "--binary"], directory, 120000);
     const staged = await runProcess2("git", ["diff", "--cached", "--binary"], directory, 120000);
     const prefix = `${timestamp}-${safeID(job.name || job.id)}`;
-    await fs5.writeFile(path6.join(checkpointDir, `${prefix}.status.txt`), status.stdout + status.stderr);
-    await fs5.writeFile(path6.join(checkpointDir, `${prefix}.patch`), `${diff.stdout}
+    await fs7.writeFile(path8.join(checkpointDir, `${prefix}.status.txt`), status.stdout + status.stderr);
+    await fs7.writeFile(path8.join(checkpointDir, `${prefix}.patch`), `${diff.stdout}
 ${staged.stdout}`);
     if (job.gitCheckpoint) {
       await runProcess2("git", ["add", "-A"], directory, 120000);
@@ -2591,6 +2921,25 @@ function createSessionStatusRuntime(options = {}) {
     const seenAt = sessionStatusSeenAt.get(sessionID) || 0;
     return cached === "idle" && seenAt > (active.startedAt || 0);
   }
+  async function recoverCompletedTailWithoutActiveRun(directory, client, sessionID, liveType, seenAt) {
+    if (activeRuns.has(sessionID))
+      return false;
+    if (liveType !== "busy" && liveType !== "retry")
+      return false;
+    if (!seenAt || now2() - seenAt < sessionStatusCacheMs)
+      return false;
+    const completion = await activeRunCompletionFromMessages2(directory, client, sessionID, { startedAt: 0 });
+    if (completion !== "completed")
+      return false;
+    markSessionStatus(sessionID, "idle");
+    await appendLoopLog2(directory, "status-message-idle-recovery", {
+      sessionID,
+      staleStatus: liveType,
+      statusSeenAt: seenAt,
+      staleForMs: Math.max(0, now2() - seenAt)
+    });
+    return true;
+  }
   async function sessionStatusType(client, sessionID, directory, options2 = {}) {
     if (hasActiveToolCalls(sessionID) || hasBusyDescendant(sessionID)) {
       markSessionStatus(sessionID, "busy");
@@ -2604,6 +2953,8 @@ function createSessionStatusRuntime(options = {}) {
       return cached;
     const live = await readLiveSessionStatus(client, sessionID, directory);
     if (live?.type) {
+      if (await recoverCompletedTailWithoutActiveRun(directory, client, sessionID, live.type, seenAt))
+        return "idle";
       if ((live.type === "busy" || live.type === "retry") && options2.recoverStaleActive !== false) {
         const active = activeRuns.get(sessionID);
         if (active) {
@@ -2924,7 +3275,7 @@ exit=` + postrun.code + `
 }
 
 // src/source/runtime/run-admission.js
-import path7 from "path";
+import path9 from "path";
 function requireFunction9(value, label) {
   if (typeof value !== "function")
     throw new TypeError(`createRunAdmissionRuntime requires ${label}`);
@@ -2941,26 +3292,8 @@ function createRunAdmissionRuntime(options = {}) {
   const notifyJob2 = typeof options.notifyJob === "function" ? options.notifyJob : notifyJob;
   const toast2 = typeof options.toast === "function" ? options.toast : toast;
   const dangerousShell2 = typeof options.dangerousShell === "function" ? options.dangerousShell : dangerousShell;
-  function dueJobs(state, force = false) {
-    const current = now2();
-    const due = (state.jobs || []).filter((job) => {
-      if (isGoalJob(job) && ["completed", "blocked", "cleared"].includes(job.goalStatus))
-        return false;
-      if (!job.enabled || job.paused)
-        return false;
-      if (job.maxRuns > 0 && (job.runCount || 0) >= job.maxRuns)
-        return false;
-      if (job.maxRuntimeMs > 0 && current - Date.parse(job.createdAt || new Date().toISOString()) >= job.maxRuntimeMs)
-        return true;
-      if (Number(job.runNowRequestedAt || 0) > 0)
-        return true;
-      if (force)
-        return true;
-      if (job.watchPaths?.length)
-        return job.watchTriggered === true;
-      return job.intervalMs === 0 || !job.lastRunAt || current - job.lastRunAt >= job.intervalMs;
-    });
-    return due.sort((a, b) => Number(Number(b.runNowRequestedAt || 0) > 0) - Number(Number(a.runNowRequestedAt || 0) > 0));
+  function dueJobs2(state, force = false) {
+    return dueJobs(state, now2(), force);
   }
   async function reschedule(directory, client, sessionID) {
     await scheduleDueWork(directory, client, sessionID);
@@ -2980,7 +3313,7 @@ function createRunAdmissionRuntime(options = {}) {
     if (job.maxRuntimeMs > 0 && now2() - Date.parse(job.createdAt || new Date().toISOString()) >= job.maxRuntimeMs) {
       return await stopAndRemove(directory, client, sessionID, state, job, "max_runtime_reached", `Loop stopped by --max-runtime: ${job.name || job.id}`, "max-runtime");
     }
-    if (job.stopFile && await pathExists2(path7.resolve(directory, job.stopFile))) {
+    if (job.stopFile && await pathExists2(path9.resolve(directory, job.stopFile))) {
       return await stopAndRemove(directory, client, sessionID, state, job, "stop_file", "Loop stopped by --stop-file: " + job.stopFile);
     }
     if (await untilReached(directory, job)) {
@@ -3023,7 +3356,7 @@ exit=` + preflight.code + `
     }
     return { admitted: true, job, runNowRequested };
   }
-  return { dueJobs, admitJob };
+  return { dueJobs: dueJobs2, admitJob };
 }
 
 // src/source/runtime/executor.js
@@ -3125,7 +3458,7 @@ function createLoopExecutor(options = {}) {
     toast: toast2,
     dangerousShell: dangerousShell2
   });
-  const dueJobs = admissionRuntime.dueJobs;
+  const dueJobs2 = admissionRuntime.dueJobs;
   function clearActiveRun(sessionID) {
     const active = activeRuns.get(sessionID);
     if (active?.timer)
@@ -3236,7 +3569,7 @@ function createLoopExecutor(options = {}) {
           candidate.watchTriggered = true;
         }
       }
-      const due = dueJobs(state, Boolean(runOptions.force));
+      const due = dueJobs2(state, Boolean(runOptions.force));
       if (!due.length) {
         await writeState2(directory, sessionID, state);
         await reschedule();
@@ -3343,7 +3676,7 @@ function createLoopExecutor(options = {}) {
     }
   }
   return {
-    dueJobs,
+    dueJobs: dueJobs2,
     clearActiveRun,
     disposeSession,
     recoverActiveDispatchFailure,

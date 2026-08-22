@@ -243,7 +243,7 @@ async function testParserAndPresets() {
     assert.match(preset.action, /Test command hint: npm run ci/)
 
     const toastCount = h.records.toasts.length
-    await h.command("loop", "nonsense")
+    await h.command("loop", "every nope continue")
     await h.command("loop", "5m")
     assert.equal(h.records.toasts.length, toastCount + 2)
     assert.ok(h.records.toasts.slice(-2).every((item) => item.variant === "warning"))

@@ -45,6 +45,9 @@ jobs:
       - name: Build a single-file stable plugin from source
         run: npm run build:plugin
 
+      - name: Require committed stable bundle to match modular source
+        run: git diff --exit-code -- src/index.js
+
       - name: Verify generated entry syntax and import
         run: |
           node --check src/index.js
