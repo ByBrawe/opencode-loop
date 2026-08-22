@@ -11,6 +11,7 @@ function harness(initialStates = {}, overrides = {}) {
   const messages = []
   const logs = []
   const contexts = new Map(Object.entries(overrides.contexts || {}))
+  const dedicatedGoals = new Map(Object.entries(overrides.dedicatedGoals || {}))
 
   const { addLoop } = createLoopRegistration({
     snapshotPaths: async (directory, files) => {
@@ -30,6 +31,7 @@ function harness(initialStates = {}, overrides = {}) {
     appendLoopLog: async (...args) => { logs.push(args) },
     normalizedModelRef: (value) => value ? `normalized:${value}` : undefined,
     getSessionExecutionContext: (sessionID) => contexts.get(sessionID),
+    findDedicatedGoalForSession: async (_directory, sessionID) => dedicatedGoals.get(sessionID),
     defaultActiveGuardMs: overrides.defaultActiveGuardMs ?? 45_000,
   })
 
@@ -50,7 +52,7 @@ assert.equal(sameLoopDefinition(null, {}), false)
   const sessionID = "invalid"
   const h = harness()
   const client = {}
-  await h.addLoop("/work", client, sessionID, "not-a-duration and no defaults")
+  await h.addLoop("/work", client, sessionID, "every nope continue")
   assert.equal(h.writes.length, 0)
   assert.equal(h.due.length, 0)
   assert.equal(h.idle.length, 0)
@@ -58,7 +60,59 @@ assert.equal(sameLoopDefinition(null, {}), false)
   assert.equal(h.toasts.length, 1)
   assert.equal(h.toasts[0][0], client)
   assert.equal(h.toasts[0][2], "warning")
-  assert.match(h.toasts[0][1], /Usage: \/loop/)
+  assert.match(h.toasts[0][1], /Invalid every schedule/)
+}
+
+{
+  const sessionID = "shorthand-idle"
+  const h = harness()
+  await h.addLoop("/work", {}, sessionID, "continue the project")
+  const job = h.states.get(sessionID).jobs[0]
+  assert.equal(job.action, "continue the project")
+  assert.equal(job.intervalMs, 0)
+  assert.equal(job.scheduleMode, "idle")
+  assert.equal(job.scheduleSyntax, "idle-shorthand")
+  assert.equal(job.immediate, true)
+  assert.equal(job.maxRuns, 0)
+  assert.equal(h.idle.length, 1)
+}
+
+{
+  const sessionID = "explicit-idle"
+  const h = harness()
+  await h.addLoop("/work", {}, sessionID, "idle continue forever")
+  const job = h.states.get(sessionID).jobs[0]
+  assert.equal(job.action, "continue forever")
+  assert.equal(job.intervalMs, 0)
+  assert.equal(job.scheduleMode, "idle")
+  assert.equal(job.scheduleSyntax, "idle")
+}
+
+{
+  const sessionID = "every"
+  const h = harness()
+  await h.addLoop("/work", {}, sessionID, "every 5m continue the project")
+  const job = h.states.get(sessionID).jobs[0]
+  assert.equal(job.intervalMs, 300_000)
+  assert.equal(job.scheduleMode, "interval")
+  assert.equal(job.scheduleSyntax, "every")
+  assert.equal(job.immediate, false)
+  assert.equal(job.maxRuns, 0)
+  assert.equal(h.idle.length, 0)
+  assert.equal(h.due.length, 1)
+}
+
+{
+  const sessionID = "after"
+  const h = harness()
+  await h.addLoop("/work", {}, sessionID, "after 5m continue once")
+  const job = h.states.get(sessionID).jobs[0]
+  assert.equal(job.intervalMs, 300_000)
+  assert.equal(job.scheduleMode, "once")
+  assert.equal(job.scheduleSyntax, "after")
+  assert.equal(job.immediate, false)
+  assert.equal(job.maxRuns, 1)
+  assert.equal(h.idle.length, 0)
 }
 
 {
@@ -73,6 +127,7 @@ assert.equal(sameLoopDefinition(null, {}), false)
   assert.equal(job.model, "ctx-model")
   assert.equal(job.activeRecoveryMs, 45_000)
   assert.equal(job.immediate, true)
+  assert.equal(job.scheduleMode, "idle")
   assert.equal(h.writes.length, 1)
   assert.deepEqual(h.due, [["/work", client, sessionID]])
   assert.deepEqual(h.idle, [["/work", client, sessionID]])
@@ -140,6 +195,25 @@ assert.equal(sameLoopDefinition(null, {}), false)
 }
 
 {
+  const sessionID = "dedicated-goal-conflict"
+  const h = harness({}, { dedicatedGoals: { [sessionID]: { id: "goal-123", status: "active", sessionID } } })
+  await h.addLoop("/work", {}, sessionID, "continue the same work")
+  assert.equal(h.writes.length, 0)
+  assert.equal(h.due.length, 0)
+  assert.equal(h.idle.length, 0)
+  assert.equal(h.logs[0][1], "goal-overlap-blocked")
+  assert.match(h.toasts[0][1], /dedicated \/goal already owns continuation/)
+}
+
+{
+  const sessionID = "dedicated-goal-override"
+  const h = harness({}, { dedicatedGoals: { [sessionID]: { id: "goal-123", status: "active", sessionID } } })
+  await h.addLoop("/work", {}, sessionID, "--allow-goal-overlap continue intentionally")
+  assert.equal(h.writes.length, 1)
+  assert.equal(h.states.get(sessionID).jobs[0].allowGoalOverlap, true)
+}
+
+{
   const sessionID = "long-interval"
   const h = harness()
   await h.addLoop("/work", {}, sessionID, "5m recurring work")
@@ -195,7 +269,7 @@ assert.equal(sameLoopDefinition(null, {}), false)
   const sessionID = "dry-run"
   const client = {}
   const h = harness()
-  await h.addLoop("/work", client, sessionID, "0s --dry-run inspect only")
+  await h.addLoop("/work", client, sessionID, "--dry-run inspect only")
   assert.equal(h.writes.length, 0)
   assert.equal(h.due.length, 0)
   assert.equal(h.idle.length, 0)
