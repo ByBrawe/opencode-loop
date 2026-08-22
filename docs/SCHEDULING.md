@@ -42,6 +42,21 @@ If the assistant finishes a turn, Loop sends the prompt again. If that next turn
 
 Short continuation prompts such as `continue`, `keep going`, and `devam et` receive extra project-continuation guidance. The agent is told to treat the turn as continuation of the existing conversation/repository, inspect relevant files/TODO/progress/git state as needed, choose the next unfinished step, and avoid redoing completed work.
 
+**Plain `/loop devam et` is intentionally infinite.** A model saying "done" does not silently change that contract.
+
+If you explicitly want **continue until the project is actually done**, say so:
+
+```text
+/loop devam et bitene kadar devam tamamen projeyi bitir
+```
+
+Completion-bounded idle loops add two safeguards:
+
+- before declaring terminal completion, the agent is instructed to perform a fresh verification pass;
+- Loop auto-pauses only after **two consecutive current assistant turns** both say the project/work is complete **and** that no work remains. A reply that names a next/remaining task resets the terminal signal.
+
+This avoids post-completion spam without weakening the deliberately infinite `/loop devam et` form.
+
 For a real project, a stronger version is:
 
 ```text
@@ -137,7 +152,7 @@ Watch jobs remain dormant until their watch condition is triggered, then use the
 Before dispatching a Loop-owned turn, the runtime checks:
 
 1. no Loop run is already being dispatched for the session;
-2. OpenCode is not reporting a live running turn that still has unfinished assistant output;
+2. OpenCode is not reporting a live running or retrying turn that still owns the session;
 3. no active tool call is known for the session;
 4. no busy descendant/subtask session is known;
 5. `noOverlap` / active-run guards allow another turn;
@@ -145,9 +160,43 @@ Before dispatching a Loop-owned turn, the runtime checks:
 
 If any of those checks fail, the job remains due and Loop retries later.
 
+## Network/provider outage recovery
+
+A provider/network outage is different from an ordinary stale `busy` acknowledgement.
+
+When OpenCode reports:
+
+```text
+session.status = retry
+```
+
+Loop treats the host as the current turn owner. It does **not** age that status into `idle`, and it does not inject another prompt on top of the retrying request.
+
+Likewise, if `session.status()` itself cannot be read because the network is down, Loop fails closed as busy/unknown rather than assuming idle.
+
+For Loop-owned turns:
+
+- transient errors such as `fetch failed`, connection loss/reset, DNS/transient socket failures, request timeouts, 429, and retryable 5xx/provider-unavailable errors are classified as infrastructure failures;
+- a failed infrastructure attempt does **not** consume the logical `runCount` or ordinary `failureCount`;
+- if that failed attempt had temporarily reached `--max-runs`, the job is re-enabled after the refund;
+- retries use exponential backoff (5s, 10s, 20s, 40s, capped at 60s);
+- if an explicit OpenCode `retry` remains stuck for 2 minutes, Loop aborts only the **Loop-owned active turn**, refunds that logical run, and returns it to backoff scheduling.
+
+The watchdog never aborts an unrelated foreground/user retry when no Loop-owned active run exists.
+
+Useful log events include:
+
+```text
+network-dispatch-error
+network-action-error
+provider-retry-recovery
+```
+
+This makes an outage visible without converting it into either a dead job or overlapping autonomous turns.
+
 ## Stale `busy` recovery
 
-Some OpenCode TUI builds can leave `session.status` at `busy` or `retry` after a plugin command acknowledgement even though the assistant message is already completed. This can otherwise produce the classic symptom:
+Some OpenCode TUI builds can leave `session.status` at `busy` after a plugin command acknowledgement even though the assistant message is already completed. This can otherwise produce the classic symptom:
 
 ```text
 Loop added
@@ -155,19 +204,19 @@ runCount = 0
 lastRunAt = 0
 ```
 
-The runtime now cross-checks stale live status with the chronological session tail **before the first Loop run too**.
+The runtime cross-checks stale `busy` with the chronological session tail **before the first Loop run too**.
 
 Recovery is conservative:
 
-- latest assistant tail has a real completion timestamp -> stale busy may be recovered to idle;
+- latest assistant tail has a real completion timestamp -> stale `busy` may be recovered to idle;
 - latest assistant tail is unfinished -> remain busy;
 - latest message is user/non-assistant -> remain busy;
 - active tool or busy child session -> remain busy;
-- unknown completion -> remain busy.
+- unknown completion -> remain busy;
+- provider `retry` -> **never** use stale-busy age recovery; wait for host completion/idle or the Loop-owned retry watchdog;
+- status API read failed -> remain conservative; do not infer idle.
 
-So Loop can recover a stale host status without treating a genuinely running turn as finished.
-
-A recovery is written to `loop.log` as:
+A stale-busy recovery is written to `loop.log` as:
 
 ```text
 status-message-idle-recovery
@@ -175,7 +224,7 @@ status-message-idle-recovery
 
 ## Busy deferral logging
 
-When a due job cannot run because the session is still busy, Loop now emits throttled diagnostics instead of silently leaving only the original `add` line.
+When a due job cannot run because the session is still busy, Loop emits throttled diagnostics instead of silently leaving only the original `add` line.
 
 Typical event:
 
@@ -193,7 +242,7 @@ Inspect recent events with:
 
 ## `/loop-status`
 
-Status now separates the schedule definition from its current state.
+Status separates the schedule definition from its current state.
 
 Examples:
 
@@ -203,7 +252,7 @@ schedule=every 5m, first after 5m | state=due in 3m
 schedule=once after 5m | state=due; waiting for idle
 ```
 
-This distinction is important: **due** is a timing fact; **waiting for idle** is an admission/safety fact.
+This distinction is important: **due** is a timing fact; **waiting for idle/retry** is an admission/safety fact.
 
 ## `/loop-doctor` and session-bound jobs
 
@@ -272,6 +321,12 @@ After the project state is established, a short continuation loop is enough:
 ```
 
 Because `devam et` is recognized as continuation shorthand, later turns are instructed to resume the existing project rather than start a new interpretation from scratch.
+
+If the desired contract is to stop when the project is demonstrably complete, make that explicit instead:
+
+```text
+/loop --safe --ask-never --progress-file progress.md devam et bitene kadar; projeyi bitir
+```
 
 ## Stopping and limits
 
