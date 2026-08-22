@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.34
+
+- Make plain `/loop <prompt>` the ergonomic unlimited idle-continuation form: when the assistant stops and the session is safely idle, Loop sends the prompt again. Add explicit `idle`, recurring `every <duration>`, and one-shot `after/in <duration>` schedule grammar while preserving legacy duration-first commands.
+- Treat short continuation prompts such as `continue`, `keep going`, and `devam et` as continuation of the current repository/conversation, with guidance to inspect relevant files, TODO/progress state, recent changes, and git status before choosing the next unfinished step.
+- Fix the pre-first-run stale OpenCode `busy/retry` failure mode that could leave an enabled immediate Loop at `runCount=0`: recover only when the latest assistant tail is actually completed and no active tool or busy child session exists.
+- Add throttled busy-deferral logging, schedule/state detail in `/loop-status`, and cross-session persisted-job diagnostics in `/loop-doctor` so due work explains why it is waiting instead of leaving only an `add` log record.
+- Prevent prompt-producing Loop jobs from competing with an active dedicated `/goal` continuation owner in the same session by default; advanced users can opt in explicitly with `--allow-goal-overlap`.
+- Centralize due/admission semantics in a shared schedule-policy runtime and split schedule syntax, continuation guidance, scheduler diagnostics, companion-Goal detection, and Loop diagnostics into focused modules. Keep the committed single-file stable bundle synchronized and add a permanent Bundle Gate check that fails when `src/index.js` is stale.
+- Rewrite the scheduling documentation, add `docs/SCHEDULING.md`, and extend real OpenCode host coverage so Ubuntu and Windows prove a durationless `/loop --max-runs 3 devam et` performs exactly three autonomous turns and stops at the configured limit.
+
 ## 0.5.33
 
 - Complete the post-0.5.32 stable V1 source decomposition by extracting action dispatch, run admission, and post-turn finalization from the executor into focused runtime modules while preserving scheduler behavior and dependency-injection compatibility.
