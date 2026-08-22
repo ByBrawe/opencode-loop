@@ -31,6 +31,17 @@ export function createRunFinalizationRuntime(options = {}) {
     : defaultApplyTerminalContinuationGuard
 
   async function finalizeJob(directory, client, sessionID, state, job, previousJob) {
+    // Infrastructure backoff is consecutive, not lifetime. Reaching normal
+    // finalization proves a real Loop-owned turn completed, so the next future
+    // outage should restart from the shortest backoff rather than inheriting an
+    // old 60s cap from unrelated historical network failures.
+    if (job.infrastructureFailureCount) {
+      job.infrastructureFailureCount = 0
+      job.lastInfrastructureFailure = ""
+      job.lastInfrastructureError = ""
+      job.lastInfrastructureFailureAt = 0
+    }
+
     if (job.verifyCommand) {
       const verify = await runShellCommand(job.verifyCommand, directory, job.timeoutMs || 300_000)
       job.lastVerifyAt = now()
