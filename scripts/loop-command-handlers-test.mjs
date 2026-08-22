@@ -53,6 +53,8 @@ function harness(initialStates = {}, overrides = {}) {
     appendLoopLog: async (...args) => { logs.push(args) },
     readFile: overrides.readFile || (async () => { throw new Error("missing") }),
     writeFile: async (...args) => { fileWrites.push(args) },
+    listPersistedLoopSessions: overrides.listPersistedLoopSessions || (async () => []),
+    findDedicatedGoalForSession: overrides.findDedicatedGoalForSession || (async () => undefined),
     runtimeVersion: "v-test",
     runtimePlatform: "test-platform",
   })
@@ -148,7 +150,9 @@ assert.throws(() => createLoopCommandHandlers({ clearActiveRun() {} }), /cancelD
   const text = h.messages[0][2]
   assert.match(text, /OpenCode loop status:/)
   assert.match(text, /1\. dev \(dev\): dev: 10s \[prompt\] -> Work on dev/)
-  assert.match(text, /runs=3 \| failures=1 \| due in 5s/)
+  assert.match(text, /schedule=every 10s, starts on next idle/)
+  assert.match(text, /state=due in 5s/)
+  assert.match(text, /runs=3 \| failures=1/)
   assert.match(text, /active,safe,ask-never,no-overlap/)
   assert.match(text, /goal:blocked,paused,checkpoint-only,git-checkpoint/)
 }
@@ -166,7 +170,19 @@ assert.throws(() => createLoopCommandHandlers({ clearActiveRun() {} }), /cancelD
     },
   }, { now: () => 10_000 })
   await h.handlers.statusLoop("/work", {}, sessionID)
-  assert.match(h.messages[0][2], /due in 5s/, "--no-now status must count the first interval from createdAt")
+  assert.match(h.messages[0][2], /state=due in 5s/, "--no-now status must count the first interval from createdAt")
+}
+
+{
+  const sessionID = "status-idle"
+  const h = harness({
+    [sessionID]: {
+      jobs: [loopJob("continue", { intervalMs: 0, lastRunAt: 0, scheduleMode: "idle", action: "continue" })],
+    },
+  })
+  await h.handlers.statusLoop("/work", {}, sessionID)
+  assert.match(h.messages[0][2], /schedule=every idle/)
+  assert.match(h.messages[0][2], /state=waiting for idle/)
 }
 
 {
@@ -199,6 +215,9 @@ assert.throws(() => createLoopCommandHandlers({ clearActiveRun() {} }), /cancelD
   await h.handlers.helpLoop({}, "help")
   const text = h.messages[0][2]
   assert.match(text, /OpenCode Loop help:/)
+  assert.match(text, /\/loop continue the project/)
+  assert.match(text, /\/loop every 5m continue the project/)
+  assert.match(text, /\/loop after 5m continue the project/)
   assert.match(text, /\/loop-goal finish the feature/)
   assert.match(text, /\/loop-doctor \| \/loop-init \| \/loop-export/)
 }
@@ -231,13 +250,23 @@ assert.throws(() => createLoopCommandHandlers({ clearActiveRun() {} }), /cancelD
 
 {
   const sessionID = "doctor"
-  const h = harness({ [sessionID]: { jobs: [loopJob("a"), loopJob("b")] } })
+  const h = harness({ [sessionID]: { jobs: [loopJob("a"), loopJob("b")] } }, {
+    listPersistedLoopSessions: async () => [
+      { sessionID, current: true, jobs: 2, enabled: 2, neverRan: 0 },
+      { sessionID: "other-session", current: false, jobs: 1, enabled: 1, neverRan: 1 },
+    ],
+    findDedicatedGoalForSession: async () => ({ id: "goal-abcdef123456", status: "active" }),
+  })
   await h.handlers.doctorLoop("/repo", {}, sessionID)
   const text = h.messages[0][2]
   assert.match(text, /OpenCode Loop doctor:/)
   assert.match(text, /- plugin: opencode-loop/)
   assert.match(text, /- project directory: \/repo/)
-  assert.match(text, /- active jobs: 2/)
+  assert.match(text, /- current session: doctor/)
+  assert.match(text, /- current-session jobs: 2/)
+  assert.match(text, /- dedicated \/goal: active/)
+  assert.match(text, /- other persisted sessions with enabled jobs: 1/)
+  assert.match(text, /other session other-session: jobs=1, enabled=1, never-ran=1/)
   assert.match(text, /- node: v-test/)
   assert.match(text, /- platform: test-platform/)
   assert.match(text, /experimental goal smoke test/)
