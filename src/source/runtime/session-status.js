@@ -130,6 +130,20 @@ export function createSessionStatusRuntime(options = {}) {
     return cached === "idle" && seenAt > (active.startedAt || 0)
   }
 
+  async function recoverCompletedTailWithoutActiveRun(directory, client, sessionID, liveType, seenAt) {
+    if (activeRuns.has(sessionID)) return false
+    if (liveType !== "busy" && liveType !== "retry") return false
+    const completion = await activeRunCompletionFromMessages(directory, client, sessionID, { startedAt: seenAt || 0 })
+    if (completion !== "completed") return false
+    markSessionStatus(sessionID, "idle")
+    await appendLoopLog(directory, "status-message-idle-recovery", {
+      sessionID,
+      staleStatus: liveType,
+      statusSeenAt: seenAt || 0,
+    })
+    return true
+  }
+
   async function sessionStatusType(client, sessionID, directory, options = {}) {
     // OpenCode can briefly report an idle session while a long-running tool or
     // subtask is still executing. Tool lifecycle hooks are the more specific
@@ -152,10 +166,15 @@ export function createSessionStatusRuntime(options = {}) {
 
     const live = await readLiveSessionStatus(client, sessionID, directory)
     if (live?.type) {
-      // Some OpenCode 1.15.x TUI builds can leave session.status at busy after a
-      // plugin-injected turn until the next user command touches the session.
-      // When the only reason we still think the session is busy is our own stale
-      // active-run guard, recover instead of waiting for another manual command.
+      // Some OpenCode 1.15.x/1.18.x TUI builds can leave session.status at busy
+      // after a plugin command acknowledgement. If no Loop run exists yet, a
+      // completed assistant tail is a stronger signal than stale live status.
+      // A genuinely running user/assistant turn has no completed tail and is never
+      // force-recovered by this path.
+      if (await recoverCompletedTailWithoutActiveRun(directory, client, sessionID, live.type, seenAt)) return "idle"
+
+      // When a Loop-owned turn exists, use its exact start boundary so an older
+      // completed assistant message can never finalize a newer active run.
       if ((live.type === "busy" || live.type === "retry") && options.recoverStaleActive !== false) {
         const active = activeRuns.get(sessionID)
         if (active) {
