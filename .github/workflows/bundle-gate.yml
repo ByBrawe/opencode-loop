@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   bundled-host:
@@ -25,8 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.head_ref }}
-          persist-credentials: true
+          persist-credentials: false
 
       - uses: actions/setup-node@v6
         with:
@@ -45,20 +44,6 @@ jobs:
 
       - name: Build a single-file stable plugin from source
         run: npm run build:plugin
-
-      - name: One-shot sync generated stable bundle to feature branch
-        if: matrix.os == 'ubuntu-latest'
-        shell: bash
-        run: |
-          if git diff --quiet -- src/index.js; then
-            echo "Stable bundle already matches modular source."
-            exit 0
-          fi
-          git add src/index.js
-          git config user.name "OpenCode Loop CI"
-          git config user.email "opencode-loop-ci@example.invalid"
-          git commit -m "build: sync network recovery stable bundle"
-          git push origin HEAD:${{ github.head_ref }}
 
       - name: Require committed stable bundle to match modular source
         run: git diff --exit-code -- src/index.js
