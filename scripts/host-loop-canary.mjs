@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const isWindows = process.platform === "win32"
-const LOOP_OBJECTIVE = "real host loop canary"
+const LOOP_OBJECTIVE = "devam et"
 const RUN_NOW_NATURAL_OBJECTIVE = "real host loop-now natural canary"
 const RUN_NOW_TARGET_OBJECTIVE = "real host loop-now target canary"
 
@@ -332,7 +332,9 @@ async function main() {
       signal: AbortSignal.timeout(timeoutMs),
     })
 
-    const command = sendCommand("loop", `0s --max-runs 3 ${LOOP_OBJECTIVE}`).catch((error) => {
+    // No duration token on purpose: this proves `/loop devam et` is the real idle-loop
+    // shorthand on a live OpenCode host, not only a parser-unit-test behavior.
+    const command = sendCommand("loop", `--max-runs 3 ${LOOP_OBJECTIVE}`).catch((error) => {
       commandError = error
       return null
     })
@@ -356,7 +358,10 @@ async function main() {
     try { persisted = JSON.parse(await readFile(stateFile, "utf8")) } catch {}
     if (persisted?.jobs?.length) {
       const loop = persisted.jobs.find((item) => item.name === "default" || item.action === LOOP_OBJECTIVE)
-      if (loop) assert.ok((loop.runCount || 0) >= 3, `persisted Loop run count was lower than provider turn count: ${JSON.stringify(loop)}`)
+      if (loop) {
+        assert.equal(loop.scheduleMode, "idle", `durationless continuation must persist as idle mode: ${JSON.stringify(loop)}`)
+        assert.ok((loop.runCount || 0) >= 3, `persisted Loop run count was lower than provider turn count: ${JSON.stringify(loop)}`)
+      }
     }
 
     await sendCommand("loop", `10m --no-now --name natural --multi --max-runs 1 ${RUN_NOW_NATURAL_OBJECTIVE}`)
