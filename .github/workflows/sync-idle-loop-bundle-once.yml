@@ -1,0 +1,54 @@
+name: One-shot idle Loop bundle sync
+
+on:
+  push:
+    branches:
+      - fix/idle-loop-scheduling
+    paths:
+      - .github/workflows/sync-idle-loop-bundle-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.repository == 'ByBrawe/opencode-loop' && github.ref == 'refs/heads/fix/idle-loop-scheduling'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: true
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+      - run: npm ci
+      - name: Build committed stable bundle
+        run: npm run build:plugin
+      - name: Require bundle-only generated diff
+        shell: bash
+        run: |
+          CHANGED="$(git diff --name-only)"
+          if [ -z "$CHANGED" ]; then
+            echo "Generated bundle is already synchronized."
+            exit 0
+          fi
+          if [ "$CHANGED" != "src/index.js" ]; then
+            echo "Refusing to commit unexpected generated changes:"
+            printf '%s\n' "$CHANGED"
+            exit 1
+          fi
+      - name: Commit synchronized bundle
+        shell: bash
+        run: |
+          if git diff --quiet -- src/index.js; then
+            exit 0
+          fi
+          git config user.name "OpenCode Loop CI"
+          git config user.email "opencode-loop-ci@example.invalid"
+          git add src/index.js
+          git commit -m "build: sync idle Loop stable bundle"
+          git push origin HEAD:fix/idle-loop-scheduling
