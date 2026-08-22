@@ -133,13 +133,17 @@ export function createSessionStatusRuntime(options = {}) {
   async function recoverCompletedTailWithoutActiveRun(directory, client, sessionID, liveType, seenAt) {
     if (activeRuns.has(sessionID)) return false
     if (liveType !== "busy" && liveType !== "retry") return false
-    const completion = await activeRunCompletionFromMessages(directory, client, sessionID, { startedAt: seenAt || 0 })
+    // Never override the first fresh busy observation. Waiting at least one cache
+    // window gives the host time to expose a new user/assistant turn if it is real.
+    if (!seenAt || now() - seenAt < sessionStatusCacheMs) return false
+    const completion = await activeRunCompletionFromMessages(directory, client, sessionID, { startedAt: 0 })
     if (completion !== "completed") return false
     markSessionStatus(sessionID, "idle")
     await appendLoopLog(directory, "status-message-idle-recovery", {
       sessionID,
       staleStatus: liveType,
-      statusSeenAt: seenAt || 0,
+      statusSeenAt: seenAt,
+      staleForMs: Math.max(0, now() - seenAt),
     })
     return true
   }
@@ -168,8 +172,9 @@ export function createSessionStatusRuntime(options = {}) {
     if (live?.type) {
       // Some OpenCode 1.15.x/1.18.x TUI builds can leave session.status at busy
       // after a plugin command acknowledgement. If no Loop run exists yet, a
-      // completed assistant tail is a stronger signal than stale live status.
-      // A genuinely running user/assistant turn has no completed tail and is never
+      // completed assistant tail plus an already-stale busy observation is a
+      // stronger signal than the unchanged live status. A genuinely running turn
+      // has an unfinished assistant tail (or latest user message) and is never
       // force-recovered by this path.
       if (await recoverCompletedTailWithoutActiveRun(directory, client, sessionID, live.type, seenAt)) return "idle"
 
