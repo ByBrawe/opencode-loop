@@ -1,6 +1,10 @@
 import { now } from "../core/args.js"
 import { isGoalJob } from "../core/jobs.js"
 import { readState } from "../core/state.js"
+import { createSchedulerDiagnostics } from "./scheduler-diagnostics.js"
+import { jobDueAt, nextDueDelay } from "./schedule-policy.js"
+
+export { jobDueAt, nextDueDelay }
 
 const DEFAULT_IDLE_DEBOUNCE_MS = 1_200
 const DEFAULT_BUSY_RETRY_MS = 5_000
@@ -8,29 +12,6 @@ const DEFAULT_MIN_DUE_TIMER_MS = 250
 const DEFAULT_MAX_DUE_TIMER_MS = 2_147_000_000
 const DEFAULT_HEARTBEAT_MS = 2_500
 const DEFAULT_SESSION_TTL_MS = 12 * 60 * 60 * 1000
-
-export function jobDueAt(job, current = now()) {
-  if (isGoalJob(job) && ["completed", "blocked", "cleared"].includes(job.goalStatus)) return Infinity
-  if (!job.enabled || job.paused) return Infinity
-  if (job.maxRuns > 0 && (job.runCount || 0) >= job.maxRuns) return Infinity
-  if (Number(job.runNowRequestedAt || 0) > 0) return current
-  if (job.watchPaths?.length) return Infinity
-  const created = Date.parse(job.createdAt || "")
-  if (job.maxRuntimeMs > 0 && Number.isFinite(created) && current - created >= job.maxRuntimeMs) return current
-  if (job.intervalMs === 0) return current
-  if (!job.lastRunAt) {
-    if (job.immediate === false) return (Number.isFinite(created) ? created : current) + (job.intervalMs || 0)
-    return current
-  }
-  return job.lastRunAt + (job.intervalMs || 0)
-}
-
-export function nextDueDelay(state, current = now()) {
-  let soonest = Infinity
-  for (const job of state.jobs || []) soonest = Math.min(soonest, jobDueAt(job, current))
-  if (!Number.isFinite(soonest)) return Infinity
-  return Math.max(0, soonest - current)
-}
 
 export function createSchedulerRuntime(options = {}) {
   const idleTimers = new Map()
@@ -55,6 +36,7 @@ export function createSchedulerRuntime(options = {}) {
   const errorMessage = (error) => options.errorMessage ? options.errorMessage(error) : (error instanceof Error ? error.message : String(error || "unknown error"))
   const appendLog = async (directory, event, extra) => { if (options.appendLoopLog) await options.appendLoopLog(directory, event, extra) }
   const toast = async (client, message, level) => { if (options.toast) await options.toast(client, message, level) }
+  const diagnostics = createSchedulerDiagnostics({ appendLoopLog: appendLog, now: clock, throttleMs: options.deferralLogThrottleMs })
 
   function stopHeartbeatIfIdle() {
     if (!knownSessions.size && heartbeatTimer) {
@@ -107,11 +89,13 @@ export function createSchedulerRuntime(options = {}) {
       Promise.resolve()
         .then(async () => {
           if (!await options.sessionIsIdle?.(client, sessionID, directory)) {
+            await diagnostics.logDeferral(directory, sessionID, "session-busy", { source: "idle", retryMs: busyRetryMs })
             await scheduleDueWork(directory, client, sessionID, busyRetryMs)
             return
           }
           await options.finalizeActiveRun?.(directory, client, sessionID)
           if (!await options.sessionIsIdle?.(client, sessionID, directory)) {
+            await diagnostics.logDeferral(directory, sessionID, "session-busy-after-finalize", { source: "idle", retryMs: busyRetryMs })
             await scheduleDueWork(directory, client, sessionID, busyRetryMs)
             return
           }
@@ -164,11 +148,13 @@ export function createSchedulerRuntime(options = {}) {
       Promise.resolve()
         .then(async () => {
           if (!await options.sessionIsIdle?.(client, sessionID, directory)) {
+            await diagnostics.logDeferral(directory, sessionID, "session-busy", { source: "due", retryMs: busyRetryMs })
             await scheduleDueWork(directory, client, sessionID, busyRetryMs)
             return
           }
           await options.finalizeActiveRun?.(directory, client, sessionID)
           if (!await options.sessionIsIdle?.(client, sessionID, directory)) {
+            await diagnostics.logDeferral(directory, sessionID, "session-busy-after-finalize", { source: "due", retryMs: busyRetryMs })
             await scheduleDueWork(directory, client, sessionID, busyRetryMs)
             return
           }
@@ -193,6 +179,7 @@ export function createSchedulerRuntime(options = {}) {
     cancelIdleWork(sessionID)
     cancelDueWork(sessionID)
     stopWatchdog(sessionID)
+    diagnostics.clearSession(sessionID)
     knownSessions.delete(sessionID)
     stopHeartbeatIfIdle()
   }
