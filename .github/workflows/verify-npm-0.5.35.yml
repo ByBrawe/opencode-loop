@@ -1,0 +1,51 @@
+name: Verify published Loop 0.5.35
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/verify-npm-0.5.35.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+      - name: Verify exact version, latest tag, bins, and clean consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED="0.5.35"
+          VERSION=""
+          LATEST=""
+          BIN_INSTALLER=""
+          BIN_DAEMON=""
+          for attempt in $(seq 1 36); do
+            VERSION="$(npm view "@bybrawe/opencode-loop@$EXPECTED" version --registry=https://registry.npmjs.org 2>/dev/null || true)"
+            LATEST="$(npm view "@bybrawe/opencode-loop@latest" version --registry=https://registry.npmjs.org 2>/dev/null || true)"
+            BIN_INSTALLER="$(npm view "@bybrawe/opencode-loop@$EXPECTED" bin.opencode-loop --registry=https://registry.npmjs.org 2>/dev/null || true)"
+            BIN_DAEMON="$(npm view "@bybrawe/opencode-loop@$EXPECTED" bin.opencode-loopd --registry=https://registry.npmjs.org 2>/dev/null || true)"
+            echo "attempt=$attempt exact=$VERSION latest=$LATEST installer=$BIN_INSTALLER daemon=$BIN_DAEMON"
+            if [ "$VERSION" = "$EXPECTED" ] && [ "$LATEST" = "$EXPECTED" ] && [ "$BIN_INSTALLER" = "scripts/install-with-goals.mjs" ] && [ "$BIN_DAEMON" = "scripts/loopd.mjs" ]; then
+              break
+            fi
+            sleep 5
+          done
+          test "$VERSION" = "$EXPECTED"
+          test "$LATEST" = "$EXPECTED"
+          test "$BIN_INSTALLER" = "scripts/install-with-goals.mjs"
+          test "$BIN_DAEMON" = "scripts/loopd.mjs"
+
+          VERIFY_DIR="$(mktemp -d)"
+          trap 'rm -rf "$VERIFY_DIR"' EXIT
+          cd "$VERIFY_DIR"
+          INSTALLED_VERSION="$(npm exec --yes --package="@bybrawe/opencode-loop@$EXPECTED" -- opencode-loop --version)"
+          echo "clean_consumer_version=$INSTALLED_VERSION"
+          test "$INSTALLED_VERSION" = "$EXPECTED"
