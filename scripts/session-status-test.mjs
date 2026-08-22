@@ -158,15 +158,29 @@ try {
   }
 
   {
-    const sessionID = "stale-recovery"
+    const sessionID = "retry-remains-owned"
     track(sessionID)
     runtime.clearSessionStatus(sessionID)
     activeRuns.set(sessionID, { jobId: "job-2", job: { id: "job-2" }, startedAt: 1_000 })
     completion = "unknown"
+    const beforeLogs = logs.length
     const client = { session: { status: async () => ({ data: { [sessionID]: { type: "retry" } } }) } }
-    assert.equal(await runtime.sessionStatusType(client, sessionID, "/repo"), "idle")
-    assert.deepEqual(logs.at(-1), ["/repo", "status-stale-recovery", { sessionID, job: "job-2", startedAt: 1_000 }])
+    assert.equal(await runtime.sessionStatusType(client, sessionID, "/repo"), "retry")
+    assert.equal(logs.length, beforeLogs, "unknown retry must not use stale-busy recovery")
     activeRuns.delete(sessionID)
+  }
+
+  {
+    const sessionID = "retry-message-complete"
+    track(sessionID)
+    runtime.clearSessionStatus(sessionID)
+    activeRuns.set(sessionID, { jobId: "job-retry-complete", job: { id: "job-retry-complete", name: "retry-complete" }, startedAt: 1_000 })
+    completion = "completed"
+    const client = { session: { status: async () => ({ data: { [sessionID]: { type: "retry" } } }) } }
+    assert.equal(await runtime.sessionStatusType(client, sessionID, "/repo"), "idle", "a genuinely completed current assistant turn may release stale retry")
+    assert.deepEqual(logs.at(-1), ["/repo", "status-message-complete-recovery", { sessionID, job: "retry-complete", startedAt: 1_000 }])
+    activeRuns.delete(sessionID)
+    completion = "unknown"
   }
 
   {
@@ -178,7 +192,7 @@ try {
     assert.equal(await runtime.sessionStatusType(client, sessionID, "/repo"), "busy")
     activeRuns.set(sessionID, { jobId: "stale", job: {}, startedAt: clock - 60_000 })
     runtime.clearSessionStatus(sessionID)
-    assert.equal(await runtime.sessionStatusType(client, sessionID, "/repo"), "idle")
+    assert.equal(await runtime.sessionStatusType(client, sessionID, "/repo"), "busy", "status transport failure must fail closed even for an old active run")
     activeRuns.delete(sessionID)
   }
 

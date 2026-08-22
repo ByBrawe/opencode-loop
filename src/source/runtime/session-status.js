@@ -78,7 +78,9 @@ export function createSessionStatusRuntime(options = {}) {
     const argsList = []
     if (directory) argsList.push({ query: { directory } }, { directory }, { workspace: directory })
     argsList.push({})
+    let attempted = false
     for (const args of argsList) {
+      attempted = true
       try {
         const result = await statusMethod.call(client.session, args)
         const error = sdkError(result)
@@ -91,8 +93,6 @@ export function createSessionStatusRuntime(options = {}) {
           if (typeof observedType !== "string") continue
           markSessionStatus(observedSessionID, observedType, observedAt)
         }
-        // OpenCode's status list contains active sessions; idle sessions are
-        // normally omitted. Clear a completed descendant that was previously busy.
         for (const childID of sessionParents.keys()) {
           if (!isDescendantSession(childID, sessionID) || data[childID]) continue
           markSessionStatus(childID, "idle", observedAt)
@@ -104,7 +104,7 @@ export function createSessionStatusRuntime(options = {}) {
         return { type: "idle", source: "sdk" }
       } catch {}
     }
-    return undefined
+    return attempted ? { type: "unknown", source: "sdk-error" } : undefined
   }
 
   async function canFinalizeActiveRun(directory, client, sessionID, active, options = {}) {
@@ -117,24 +117,29 @@ export function createSessionStatusRuntime(options = {}) {
     if (completion === "completed") return true
     if (!options.requireIdle) return completion === "unknown" && staleActiveRun(sessionID)
 
+    const cached = sessionStatuses.get(sessionID)
+    const seenAt = sessionStatusSeenAt.get(sessionID) || 0
+    const cachedIdleAfterRun = cached === "idle" && seenAt > (active.startedAt || 0)
     const live = await readLiveSessionStatus(client, sessionID, directory)
     if (live?.type === "idle") return true
+    if (live?.type === "unknown" && cachedIdleAfterRun) {
+      // A concrete idle observed after this active run is sufficient to finalize
+      // that run even if a later status read fails. This does not authorize a
+      // new prompt by itself; admission applies its own current status policy.
+      return true
+    }
     if (live?.type) {
-      if ((live.type === "busy" || live.type === "retry") && options.forceStale && completion === "unknown" && staleActiveRun(sessionID)) return true
+      if (live.type === "busy" && options.forceStale && completion === "unknown" && staleActiveRun(sessionID)) return true
       return false
     }
 
     if (options.forceStale && completion === "unknown" && staleActiveRun(sessionID)) return true
-    const cached = sessionStatuses.get(sessionID)
-    const seenAt = sessionStatusSeenAt.get(sessionID) || 0
-    return cached === "idle" && seenAt > (active.startedAt || 0)
+    return cachedIdleAfterRun
   }
 
   async function recoverCompletedTailWithoutActiveRun(directory, client, sessionID, liveType, seenAt) {
     if (activeRuns.has(sessionID)) return false
-    if (liveType !== "busy" && liveType !== "retry") return false
-    // Never override the first fresh busy observation. Waiting at least one cache
-    // window gives the host time to expose a new user/assistant turn if it is real.
+    if (liveType !== "busy") return false
     if (!seenAt || now() - seenAt < sessionStatusCacheMs) return false
     const completion = await activeRunCompletionFromMessages(directory, client, sessionID, { startedAt: 0 })
     if (completion !== "completed") return false
@@ -149,9 +154,6 @@ export function createSessionStatusRuntime(options = {}) {
   }
 
   async function sessionStatusType(client, sessionID, directory, options = {}) {
-    // OpenCode can briefly report an idle session while a long-running tool or
-    // subtask is still executing. Tool lifecycle hooks are the more specific
-    // signal here, so never enqueue another turn until every active call ends.
     if (hasActiveToolCalls(sessionID) || hasBusyDescendant(sessionID)) {
       markSessionStatus(sessionID, "busy")
       return "busy"
@@ -159,38 +161,35 @@ export function createSessionStatusRuntime(options = {}) {
 
     const cached = sessionStatuses.get(sessionID)
     const seenAt = sessionStatusSeenAt.get(sessionID) || 0
-
-    // Idle is safe to trust until OpenCode tells us otherwise. Busy/retry is only
-    // trusted briefly: OpenCode custom commands such as /loop-status create their
-    // own short assistant turn, and some TUI builds do not always emit the final
-    // idle event after that turn. If we cache busy forever, due loop work can get
-    // stuck at "due in every idle" until the user types another command.
     if (cached === "idle") return cached
     if (cached && now() - seenAt < sessionStatusCacheMs) return cached
 
     const live = await readLiveSessionStatus(client, sessionID, directory)
+    if (live?.type === "unknown") {
+      const conservative = cached === "retry" ? "retry" : "busy"
+      markSessionStatus(sessionID, conservative)
+      return conservative
+    }
     if (live?.type) {
-      // Some OpenCode 1.15.x/1.18.x TUI builds can leave session.status at busy
-      // after a plugin command acknowledgement. If no Loop run exists yet, a
-      // completed assistant tail plus an already-stale busy observation is a
-      // stronger signal than the unchanged live status. A genuinely running turn
-      // has an unfinished assistant tail (or latest user message) and is never
-      // force-recovered by this path.
       if (await recoverCompletedTailWithoutActiveRun(directory, client, sessionID, live.type, seenAt)) return "idle"
 
-      // When a Loop-owned turn exists, use its exact start boundary so an older
-      // completed assistant message can never finalize a newer active run.
       if ((live.type === "busy" || live.type === "retry") && options.recoverStaleActive !== false) {
         const active = activeRuns.get(sessionID)
         if (active) {
           const completion = await activeRunCompletionFromMessages(directory, client, sessionID, active)
-          if (completion === "completed" || (completion === "unknown" && staleActiveRun(sessionID))) {
+          if (completion === "completed" || (live.type === "busy" && completion === "unknown" && staleActiveRun(sessionID))) {
             markSessionStatus(sessionID, "idle")
-            await appendLoopLog(directory, completion === "completed" ? "status-message-complete-recovery" : "status-stale-recovery", {
+            const logDetails = {
               sessionID,
               job: active.job?.name || active.jobId,
               startedAt: active.startedAt,
-            })
+              ...(completion === "completed" ? {} : { staleStatus: live.type }),
+            }
+            await appendLoopLog(
+              directory,
+              completion === "completed" ? "status-message-complete-recovery" : "status-stale-recovery",
+              logDetails,
+            )
             return "idle"
           }
         }

@@ -5,6 +5,7 @@ import { appendLoopLog as defaultAppendLoopLog, runShellCommand as defaultRunShe
 import { toast as defaultToast } from "../opencode/host.js"
 import { writeGoalReport as defaultWriteGoalReport } from "./goal-runtime.js"
 import { dangerousShell as defaultDangerousShell } from "./job-workspace.js"
+import { applyTerminalContinuationGuard as defaultApplyTerminalContinuationGuard } from "./terminal-guard.js"
 
 function requireFunction(value, label) {
   if (typeof value !== "function") throw new TypeError(`createRunFinalizationRuntime requires ${label}`)
@@ -25,8 +26,22 @@ export function createRunFinalizationRuntime(options = {}) {
   const toast = typeof options.toast === "function" ? options.toast : defaultToast
   const writeGoalReport = typeof options.writeGoalReport === "function" ? options.writeGoalReport : defaultWriteGoalReport
   const dangerousShell = typeof options.dangerousShell === "function" ? options.dangerousShell : defaultDangerousShell
+  const applyTerminalContinuationGuard = typeof options.applyTerminalContinuationGuard === "function"
+    ? options.applyTerminalContinuationGuard
+    : defaultApplyTerminalContinuationGuard
 
   async function finalizeJob(directory, client, sessionID, state, job, previousJob) {
+    // Infrastructure backoff is consecutive, not lifetime. Reaching normal
+    // finalization proves a real Loop-owned turn completed, so the next future
+    // outage should restart from the shortest backoff rather than inheriting an
+    // old 60s cap from unrelated historical network failures.
+    if (job.infrastructureFailureCount) {
+      job.infrastructureFailureCount = 0
+      job.lastInfrastructureFailure = ""
+      job.lastInfrastructureError = ""
+      job.lastInfrastructureFailureAt = 0
+    }
+
     if (job.verifyCommand) {
       const verify = await runShellCommand(job.verifyCommand, directory, job.timeoutMs || 300_000)
       job.lastVerifyAt = now()
@@ -84,6 +99,19 @@ export function createRunFinalizationRuntime(options = {}) {
     if (isGoalJob(job)) {
       job = await runGoalChecks(directory, sessionID, job, client)
       job = await applyGoalNoProgressGuard(directory, client, sessionID, job, previousJob)
+    }
+
+    const terminal = await applyTerminalContinuationGuard(directory, client, sessionID, job)
+    job = terminal.job
+    if (terminal.pausedNow) {
+      await appendLoopLog(directory, "terminal-no-work", {
+        sessionID,
+        job: job.name || job.id,
+        count: job.terminalNoWorkCount,
+        summary: String(terminal.text || "").slice(0, 1000),
+      })
+      await notifyJob(directory, job, "terminal_no_work")
+      await toast(client, "Loop paused: completion-bounded task reported complete with no work remaining twice.", "success")
     }
 
     state.jobs = (state.jobs || [])

@@ -10,9 +10,12 @@ import { createCompactionRuntime } from "./compaction.js"
 import { createActionDispatcher } from "./action-dispatch.js"
 import { createRunFinalizationRuntime } from "./run-finalization.js"
 import { createRunAdmissionRuntime } from "./run-admission.js"
+import { isTransientNetworkError, networkRetryDelayMs, refundInfrastructureRun } from "./network-recovery.js"
 
 const DEFAULT_ACTIVE_GUARD_MS = 45_000
 const DEFAULT_BUSY_RETRY_MS = 5_000
+const DEFAULT_PROVIDER_RETRY_WATCHDOG_MS = 2 * 60_000
+const DEFAULT_NETWORK_RETRY_MAX_MS = 60_000
 
 function requireFunction(value, label) {
   if (typeof value !== "function") throw new TypeError(`createLoopExecutor requires ${label}`)
@@ -51,9 +54,16 @@ export function createLoopExecutor(options = {}) {
   const busyRetryMs = Number.isFinite(Number(options.busyRetryMs)) && Number(options.busyRetryMs) > 0
     ? Number(options.busyRetryMs)
     : DEFAULT_BUSY_RETRY_MS
+  const providerRetryWatchdogMs = Number.isFinite(Number(options.providerRetryWatchdogMs)) && Number(options.providerRetryWatchdogMs) > 0
+    ? Number(options.providerRetryWatchdogMs)
+    : DEFAULT_PROVIDER_RETRY_WATCHDOG_MS
+  const networkRetryMaxMs = Number.isFinite(Number(options.networkRetryMaxMs)) && Number(options.networkRetryMaxMs) > 0
+    ? Number(options.networkRetryMaxMs)
+    : DEFAULT_NETWORK_RETRY_MAX_MS
 
   const activeRuns = new Map()
   const runLocks = new Map()
+  const retryRuns = new Map()
 
   const statusRuntime = createSessionStatusRuntime({
     activeRuns,
@@ -67,6 +77,7 @@ export function createLoopExecutor(options = {}) {
     updateSessionStatusFromEvent,
     staleActiveRun,
     canFinalizeActiveRun,
+    sessionStatusType,
     sessionIsIdle,
     markSessionStatus,
     clearSessionStatus,
@@ -129,6 +140,7 @@ export function createLoopExecutor(options = {}) {
     if (active?.timer) clearTimeout(active.timer)
     compactionRuntime.clearForActiveRun(sessionID, active)
     activeRuns.delete(sessionID)
+    retryRuns.delete(sessionID)
   }
 
   function disposeSession(sessionID) {
@@ -138,32 +150,116 @@ export function createLoopExecutor(options = {}) {
     clearSessionStatus(sessionID)
   }
 
+  async function persistInfrastructureRefund(directory, sessionID, active, input = {}) {
+    const state = await readState(directory, sessionID)
+    const job = (state.jobs || []).find((candidate) => candidate.id === active.jobId)
+    if (!job) return { job: undefined, delayMs: busyRetryMs }
+    refundInfrastructureRun(job, {
+      runCount: active.job?.runCount,
+      previousLastRunAt: active.previousLastRunAt,
+      disabledByMaxRuns: active.disabledByMaxRuns,
+    }, {
+      reason: input.reason,
+      error: input.error,
+      now: now(),
+    })
+    state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate)
+    await writeState(directory, sessionID, state)
+    const delayMs = networkRetryDelayMs(job.infrastructureFailureCount || 1, busyRetryMs, networkRetryMaxMs)
+    return { job, delayMs }
+  }
+
   async function recoverActiveDispatchFailure(directory, client, sessionID, jobId, runToken, error) {
     const active = activeRuns.get(sessionID)
     if (!active || active.jobId !== jobId || active.runToken !== runToken) return false
 
+    const transient = isTransientNetworkError(error)
+    const snapshot = active
     clearActiveRun(sessionID)
     clearSessionStatus(sessionID)
 
     const message = errorMessage(error)
-    const state = await readState(directory, sessionID)
-    const job = (state.jobs || []).find((candidate) => candidate.id === jobId)
+    let state = await readState(directory, sessionID)
+    let job = (state.jobs || []).find((candidate) => candidate.id === jobId)
+    let retryDelay = busyRetryMs
     if (job) {
-      job.failureCount = (job.failureCount || 0) + 1
-      job.lastFailureReason = "dispatch_failed"
-      job.lastDispatchFailure = message.slice(0, 4000)
-      job.lastDispatchFailureAt = now()
-      if (job.maxFailures > 0 && job.failureCount >= job.maxFailures) {
-        job.paused = true
-        await notifyJob(directory, job, "dispatch_failed")
+      if (transient) {
+        const refunded = await persistInfrastructureRefund(directory, sessionID, snapshot, {
+          reason: "dispatch_failed_transient",
+          error,
+        })
+        job = refunded.job
+        retryDelay = refunded.delayMs
+        state = await readState(directory, sessionID)
+      } else {
+        job.failureCount = (job.failureCount || 0) + 1
+        job.lastFailureReason = "dispatch_failed"
+        job.lastDispatchFailure = message.slice(0, 4000)
+        job.lastDispatchFailureAt = now()
+        if (job.maxFailures > 0 && job.failureCount >= job.maxFailures) {
+          job.paused = true
+          await notifyJob(directory, job, "dispatch_failed")
+        }
+        state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate)
+        await writeState(directory, sessionID, state)
       }
-      state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate)
-      await writeState(directory, sessionID, state)
     }
 
-    await appendLoopLog(directory, "dispatch-error", { sessionID, job: job?.name || jobId, error: message })
-    await toast(client, `Loop dispatch failed${job?.paused ? " and paused" : ""}: ${message}`, job?.paused ? "error" : "warning")
-    await scheduleDueWork(directory, client, sessionID, busyRetryMs)
+    await appendLoopLog(directory, transient ? "network-dispatch-error" : "dispatch-error", {
+      sessionID,
+      job: job?.name || jobId,
+      error: message,
+      ...(transient ? { retryInMs: retryDelay } : {}),
+    })
+    if (transient) {
+      await toast(client, `Loop network dispatch failed; retrying when the session recovers: ${message}`, "warning")
+    } else {
+      await toast(client, `Loop dispatch failed${job?.paused ? " and paused" : ""}: ${message}`, job?.paused ? "error" : "warning")
+    }
+    await scheduleDueWork(directory, client, sessionID, retryDelay)
+    return true
+  }
+
+  async function recoverStuckProviderRetry(directory, client, sessionID) {
+    const active = activeRuns.get(sessionID)
+    if (!active || active.compactionOnly) {
+      retryRuns.delete(sessionID)
+      return false
+    }
+    const current = retryRuns.get(sessionID)
+    if (!current || current.runToken !== active.runToken) {
+      retryRuns.set(sessionID, { runToken: active.runToken, since: now() })
+      return false
+    }
+    if (now() - current.since < providerRetryWatchdogMs) return false
+
+    const snapshot = active
+    try {
+      if (client?.session?.abort) {
+        await fireSdk(
+          client,
+          "session.abort provider retry watchdog",
+          client.session.abort.bind(client.session),
+          { path: { id: sessionID }, body: {} },
+          { path: { sessionID }, body: {} },
+          { sessionID },
+        )
+      }
+    } catch {}
+    clearActiveRun(sessionID)
+    clearSessionStatus(sessionID)
+    const refunded = await persistInfrastructureRefund(directory, sessionID, snapshot, {
+      reason: "provider_retry_watchdog",
+      error: `OpenCode session.status stayed retry for ${providerRetryWatchdogMs}ms`,
+    })
+    await appendLoopLog(directory, "provider-retry-recovery", {
+      sessionID,
+      job: refunded.job?.name || snapshot.jobId,
+      retryForMs: now() - current.since,
+      retryInMs: refunded.delayMs,
+    })
+    await toast(client, "Loop provider retry exceeded the watchdog; the Loop-owned turn was released and will retry with backoff.", "warning")
+    await scheduleDueWork(directory, client, sessionID, refunded.delayMs)
     return true
   }
 
@@ -217,13 +313,22 @@ export function createLoopExecutor(options = {}) {
     }
     runLocks.set(sessionID, now())
     let job
+    let previousLastRunAt = 0
+    let disabledByMaxRuns = false
     try {
       await finalizeActiveRun(directory, client, sessionID, { requireIdle: true, forceStale: true })
-      if (!await sessionIsIdle(client, sessionID, directory)) {
+      const statusType = await sessionStatusType(client, sessionID, directory)
+      if (statusType !== "idle") {
+        if (statusType === "retry") {
+          if (await recoverStuckProviderRetry(directory, client, sessionID)) return
+        } else {
+          retryRuns.delete(sessionID)
+        }
         if (runOptions.force) await toast(client, "Loop queued: session is busy; it will run on the next idle check.", "info")
         await reschedule(busyRetryMs)
         return
       }
+      retryRuns.delete(sessionID)
 
       const active = activeRuns.get(sessionID)
       const activeAge = active ? now() - (active.startedAt || 0) : 0
@@ -286,9 +391,11 @@ export function createLoopExecutor(options = {}) {
 
       if (runNowRequested) delete job.runNowRequestedAt
       job.watchTriggered = false
+      previousLastRunAt = Number(job.lastRunAt || 0)
       job.lastRunAt = now()
       job.runCount = (job.runCount || 0) + 1
-      if (job.maxRuns > 0 && job.runCount >= job.maxRuns) {
+      disabledByMaxRuns = job.maxRuns > 0 && job.runCount >= job.maxRuns
+      if (disabledByMaxRuns) {
         job.enabled = false
         await notifyJob(directory, job, "max_runs_reached")
       }
@@ -337,6 +444,8 @@ export function createLoopExecutor(options = {}) {
           timer,
           runToken,
           compactionAction: result.compaction === true,
+          previousLastRunAt,
+          disabledByMaxRuns,
         })
         if (result.compaction && compactionRuntime.isCompleted(sessionID, job.id)) {
           await compactionRuntime.finalize(directory, client, sessionID)
@@ -352,6 +461,24 @@ export function createLoopExecutor(options = {}) {
         await reschedule(busyRetryMs)
       } catch (error) {
         clearActiveRun(sessionID)
+        if (isTransientNetworkError(error) && job) {
+          const stateAfterFailure = await readState(directory, sessionID)
+          const persisted = (stateAfterFailure.jobs || []).find((candidate) => candidate.id === job.id)
+          if (persisted) {
+            refundInfrastructureRun(persisted, {
+              runCount: job.runCount,
+              previousLastRunAt,
+              disabledByMaxRuns,
+            }, { reason: "action_dispatch_transient", error, now: now() })
+            stateAfterFailure.jobs = (stateAfterFailure.jobs || []).map((candidate) => candidate.id === persisted.id ? persisted : candidate)
+            await writeState(directory, sessionID, stateAfterFailure)
+            const delayMs = networkRetryDelayMs(persisted.infrastructureFailureCount || 1, busyRetryMs, networkRetryMaxMs)
+            await appendLoopLog(directory, "network-action-error", { sessionID, job: persisted.name || persisted.id, error: errorMessage(error), retryInMs: delayMs })
+            await toast(client, "Loop action hit a transient network failure; the logical run was refunded and will retry.", "warning")
+            await reschedule(delayMs)
+            return
+          }
+        }
         await toast(client, `Loop job failed: ${error instanceof Error ? error.message : String(error)}`, "error")
         await appendLoopLog(directory, "error", {
           sessionID,
@@ -370,9 +497,11 @@ export function createLoopExecutor(options = {}) {
     clearActiveRun,
     disposeSession,
     recoverActiveDispatchFailure,
+    recoverStuckProviderRetry,
     finalizeActiveRun,
     fireAction,
     maybeRunDueJobs,
+    sessionStatusType,
     sessionIsIdle,
     updateSessionStatusFromEvent,
     markSessionStatus,
