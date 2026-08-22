@@ -1033,13 +1033,55 @@ var CONTINUATION_SHORTHANDS = new Set([
   "devam et.",
   "devam et bakal\u0131m"
 ]);
+var COMPLETION_BOUNDED_PATTERNS = [
+  /\bbitene kadar\b/i,
+  /\b(?:tamamen|komple) projeyi bitir\b/i,
+  /\bi\u015Fi bitir\b/i,
+  /\buntil (?:it(?:'s| is) )?(?:done|complete|completed|finished)\b/i,
+  /\bfinish (?:the )?(?:project|task|work)\b/i,
+  /\bkeep going until\b/i
+];
+var TERMINAL_COMPLETION_PATTERNS = [
+  /proje tamamland[\u0131i](?=\s|[.,;:!\u2014-]|$)/i,
+  /\bproject (?:is )?(?:complete|completed|finished|done)\b/i,
+  /\b(?:task|work) (?:is )?(?:complete|completed|finished|done)\b/i
+];
+var TERMINAL_NO_WORK_PATTERNS = [
+  /yap[\u0131i]lacak (?:ba\u015Fka )?i\u015F yok(?=\s|[.,;:!\u2014-]|$)/i,
+  /ba\u015Fka (?:bir )?i\u015F (?:kalmad[\u0131i]|yok)(?=\s|[.,;:!\u2014-]|$)/i,
+  /\bnothing (?:else )?left to do\b/i,
+  /\bno (?:more|remaining) work\b/i,
+  /\bno known (?:bugs|issues)\b/i,
+  /\bzero known (?:bugs|issues)\b/i
+];
+var NEXT_WORK_PATTERNS = [
+  /\bnext(?: step| task)?\b/i,
+  /s[\u0131i]radaki(?=\s|[.,;:!\u2014-]|$)/i,
+  /sonraki(?=\s|[.,;:!\u2014-]|$)/i,
+  /kalan (?:i\u015F|i\u015Fler|todo|ad\u0131m)(?=\s|[.,;:!\u2014-]|$)/i,
+  /\bremaining (?:work|task|todo|step)/i,
+  /devam (?:edece\u011Fim|ediyorum|etmek gerek)(?=\s|[.,;:!\u2014-]|$)/i
+];
 function isContinuationShorthand(value) {
   return CONTINUATION_SHORTHANDS.has(String(value || "").trim().toLowerCase().replace(/\s+/g, " "));
 }
+function isCompletionBoundedContinuation(value) {
+  const text = String(value || "").trim();
+  return COMPLETION_BOUNDED_PATTERNS.some((pattern) => pattern.test(text));
+}
+function isTerminalNoWorkReply(value) {
+  const text = String(value || "").trim();
+  if (!text || NEXT_WORK_PATTERNS.some((pattern) => pattern.test(text)))
+    return false;
+  const completed = TERMINAL_COMPLETION_PATTERNS.some((pattern) => pattern.test(text));
+  const noWork = TERMINAL_NO_WORK_PATTERNS.some((pattern) => pattern.test(text));
+  return completed && noWork;
+}
 function continuationProjectInstruction(value) {
-  if (!isContinuationShorthand(value))
+  if (!isContinuationShorthand(value) && !isCompletionBoundedContinuation(value))
     return "";
-  return "Treat this as continuation of the current project and conversation, not a fresh task. Inspect the repository state, relevant files, TODO/progress notes, recent changes, and git status as needed to identify the next unfinished step. Continue from existing work, do not redo completed work, and verify meaningful changes when practical.";
+  const finish = isCompletionBoundedContinuation(value) ? " If you believe the project is finished, perform a fresh verification pass before declaring completion; report both that the project is complete and that no work remains only when you have concrete current evidence." : "";
+  return `Treat this as continuation of the current project and conversation, not a fresh task. Inspect the repository state, relevant files, TODO/progress notes, recent changes, and git status as needed to identify the next unfinished step. Continue from existing work, do not redo completed work, and verify meaningful changes when practical.${finish}`;
 }
 
 // src/source/core/jobs.js
@@ -2865,7 +2907,9 @@ function createSessionStatusRuntime(options = {}) {
     if (directory)
       argsList.push({ query: { directory } }, { directory }, { workspace: directory });
     argsList.push({});
+    let attempted = false;
     for (const args of argsList) {
+      attempted = true;
       try {
         const result = await statusMethod.call(client.session, args);
         const error = sdkError(result);
@@ -2895,7 +2939,7 @@ function createSessionStatusRuntime(options = {}) {
         return { type: "idle", source: "sdk" };
       } catch {}
     }
-    return;
+    return attempted ? { type: "unknown", source: "sdk-error" } : undefined;
   }
   async function canFinalizeActiveRun(directory, client, sessionID, active, options2 = {}) {
     if (hasActiveToolCalls(sessionID) || hasBusyDescendant(sessionID))
@@ -2907,24 +2951,28 @@ function createSessionStatusRuntime(options = {}) {
       return true;
     if (!options2.requireIdle)
       return completion === "unknown" && staleActiveRun(sessionID);
+    const cached = sessionStatuses.get(sessionID);
+    const seenAt = sessionStatusSeenAt.get(sessionID) || 0;
+    const cachedIdleAfterRun = cached === "idle" && seenAt > (active.startedAt || 0);
     const live = await readLiveSessionStatus(client, sessionID, directory);
     if (live?.type === "idle")
       return true;
+    if (live?.type === "unknown" && cachedIdleAfterRun) {
+      return true;
+    }
     if (live?.type) {
-      if ((live.type === "busy" || live.type === "retry") && options2.forceStale && completion === "unknown" && staleActiveRun(sessionID))
+      if (live.type === "busy" && options2.forceStale && completion === "unknown" && staleActiveRun(sessionID))
         return true;
       return false;
     }
     if (options2.forceStale && completion === "unknown" && staleActiveRun(sessionID))
       return true;
-    const cached = sessionStatuses.get(sessionID);
-    const seenAt = sessionStatusSeenAt.get(sessionID) || 0;
-    return cached === "idle" && seenAt > (active.startedAt || 0);
+    return cachedIdleAfterRun;
   }
   async function recoverCompletedTailWithoutActiveRun(directory, client, sessionID, liveType, seenAt) {
     if (activeRuns.has(sessionID))
       return false;
-    if (liveType !== "busy" && liveType !== "retry")
+    if (liveType !== "busy")
       return false;
     if (!seenAt || now2() - seenAt < sessionStatusCacheMs)
       return false;
@@ -2952,6 +3000,11 @@ function createSessionStatusRuntime(options = {}) {
     if (cached && now2() - seenAt < sessionStatusCacheMs)
       return cached;
     const live = await readLiveSessionStatus(client, sessionID, directory);
+    if (live?.type === "unknown") {
+      const conservative = cached === "retry" ? "retry" : "busy";
+      markSessionStatus(sessionID, conservative);
+      return conservative;
+    }
     if (live?.type) {
       if (await recoverCompletedTailWithoutActiveRun(directory, client, sessionID, live.type, seenAt))
         return "idle";
@@ -2959,13 +3012,15 @@ function createSessionStatusRuntime(options = {}) {
         const active = activeRuns.get(sessionID);
         if (active) {
           const completion = await activeRunCompletionFromMessages2(directory, client, sessionID, active);
-          if (completion === "completed" || completion === "unknown" && staleActiveRun(sessionID)) {
+          if (completion === "completed" || live.type === "busy" && completion === "unknown" && staleActiveRun(sessionID)) {
             markSessionStatus(sessionID, "idle");
-            await appendLoopLog2(directory, completion === "completed" ? "status-message-complete-recovery" : "status-stale-recovery", {
+            const logDetails = {
               sessionID,
               job: active.job?.name || active.jobId,
-              startedAt: active.startedAt
-            });
+              startedAt: active.startedAt,
+              ...completion === "completed" ? {} : { staleStatus: live.type }
+            };
+            await appendLoopLog2(directory, completion === "completed" ? "status-message-complete-recovery" : "status-stale-recovery", logDetails);
             return "idle";
           }
         }
@@ -3181,6 +3236,58 @@ ${prompt}`;
   return { fireAction };
 }
 
+// src/source/runtime/terminal-guard.js
+function messageText(message) {
+  const parts = Array.isArray(message?.parts) ? message.parts : [];
+  const fromParts = parts.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join(`
+`).trim();
+  if (fromParts)
+    return fromParts;
+  const info = message?.info || message || {};
+  for (const value of [info.text, info.content, info.summary]) {
+    if (typeof value === "string" && value.trim())
+      return value.trim();
+  }
+  return "";
+}
+async function applyTerminalContinuationGuard(directory, client, sessionID, job, options = {}) {
+  if (job?.scheduleMode !== "idle" || !isCompletionBoundedContinuation(job?.action)) {
+    return { job, terminal: false, pausedNow: false };
+  }
+  const messages = await readRecentSessionMessages(client, sessionID, directory, options.messageLimit || 8);
+  if (!messages)
+    return { job, terminal: false, pausedNow: false };
+  const tail = orderedSessionMessages(messages).at(-1);
+  const info = tail?.info || tail || {};
+  if (info.role !== "assistant")
+    return { job, terminal: false, pausedNow: false };
+  const completed = Number(info?.time?.completed || 0);
+  const created = Number(info?.time?.created || 0);
+  const runStarted = Number(job?.lastRunAt || 0);
+  if (!Number.isFinite(completed) || completed <= 0)
+    return { job, terminal: false, pausedNow: false };
+  if (runStarted > 0 && completed < runStarted && (!Number.isFinite(created) || created < runStarted)) {
+    return { job, terminal: false, pausedNow: false };
+  }
+  const text = messageText(tail);
+  const terminal = isTerminalNoWorkReply(text);
+  if (!terminal) {
+    if (job.terminalNoWorkCount)
+      job.terminalNoWorkCount = 0;
+    return { job, terminal: false, pausedNow: false, text };
+  }
+  job.terminalNoWorkCount = (job.terminalNoWorkCount || 0) + 1;
+  job.lastTerminalNoWorkAt = Date.now();
+  job.lastTerminalNoWorkSummary = text.slice(0, 1000);
+  const threshold = Math.max(2, Number(options.threshold) || 2);
+  const pausedNow = job.terminalNoWorkCount >= threshold && !job.paused;
+  if (pausedNow) {
+    job.paused = true;
+    job.lastFailureReason = "terminal_no_work";
+  }
+  return { job, terminal: true, pausedNow, text };
+}
+
 // src/source/runtime/run-finalization.js
 function requireFunction8(value, label) {
   if (typeof value !== "function")
@@ -3200,6 +3307,7 @@ function createRunFinalizationRuntime(options = {}) {
   const toast2 = typeof options.toast === "function" ? options.toast : toast;
   const writeGoalReport2 = typeof options.writeGoalReport === "function" ? options.writeGoalReport : writeGoalReport;
   const dangerousShell2 = typeof options.dangerousShell === "function" ? options.dangerousShell : dangerousShell;
+  const applyTerminalContinuationGuard2 = typeof options.applyTerminalContinuationGuard === "function" ? options.applyTerminalContinuationGuard : applyTerminalContinuationGuard;
   async function finalizeJob(directory, client, sessionID, state, job, previousJob) {
     if (job.verifyCommand) {
       const verify = await runShellCommand2(job.verifyCommand, directory, job.timeoutMs || 300000);
@@ -3262,6 +3370,18 @@ exit=` + postrun.code + `
     if (isGoalJob(job)) {
       job = await runGoalChecks(directory, sessionID, job, client);
       job = await applyGoalNoProgressGuard(directory, client, sessionID, job, previousJob);
+    }
+    const terminal = await applyTerminalContinuationGuard2(directory, client, sessionID, job);
+    job = terminal.job;
+    if (terminal.pausedNow) {
+      await appendLoopLog2(directory, "terminal-no-work", {
+        sessionID,
+        job: job.name || job.id,
+        count: job.terminalNoWorkCount,
+        summary: String(terminal.text || "").slice(0, 1000)
+      });
+      await notifyJob2(directory, job, "terminal_no_work");
+      await toast2(client, "Loop paused: completion-bounded task reported complete with no work remaining twice.", "success");
     }
     state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate).filter((candidate) => candidate.enabled !== false || isGoalJob(candidate));
     await writeState2(directory, sessionID, state);
@@ -3359,9 +3479,58 @@ exit=` + preflight.code + `
   return { dueJobs: dueJobs2, admitJob };
 }
 
+// src/source/runtime/network-recovery.js
+var TRANSIENT_NETWORK_PATTERNS = [
+  /\b(?:408|425|429|500|502|503|504|524)\b/i,
+  /rate[\s_-]?limit|too many requests|overloaded|service[\s_-]?unavailable|provider[_ -]?unavailable/i,
+  /terminated|fetch failed|failed to fetch|network[\s_-]?error|network connection lost/i,
+  /connection (?:error|refused|lost)|socket (?:hang up|connection was closed)|reset before headers/i,
+  /\b(?:enotfound|eai_again|econnrefused|econnreset|etimedout|ehostunreach|enetunreach|epipe)\b/i,
+  /\b(?:request|response|connection|network|stream|read) (?:timeout|timed out|time out)\b/i,
+  /\btimeout(?:error)?\b/i
+];
+function errorText(value) {
+  if (value instanceof Error)
+    return `${value.name}: ${value.message}`;
+  if (typeof value === "string")
+    return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+function isTransientNetworkError(value) {
+  const text = errorText(value);
+  return TRANSIENT_NETWORK_PATTERNS.some((pattern) => pattern.test(text));
+}
+function networkRetryDelayMs(attempt, baseMs = 5000, maxMs = 60000) {
+  const safeAttempt = Math.max(1, Math.floor(Number(attempt) || 1));
+  const safeBase = Math.max(1, Math.floor(Number(baseMs) || 5000));
+  const safeMax = Math.max(safeBase, Math.floor(Number(maxMs) || 60000));
+  return Math.min(safeMax, safeBase * 2 ** Math.min(8, safeAttempt - 1));
+}
+function refundInfrastructureRun(job, snapshot = {}, input = {}) {
+  const chargedCount = Number(snapshot.runCount ?? job.runCount ?? 0);
+  const currentCount = Number(job.runCount || 0);
+  if (chargedCount > 0 && currentCount >= chargedCount)
+    job.runCount = Math.max(0, currentCount - 1);
+  if (Number.isFinite(Number(snapshot.previousLastRunAt)))
+    job.lastRunAt = Number(snapshot.previousLastRunAt);
+  if (snapshot.disabledByMaxRuns && job.maxRuns > 0 && job.runCount < job.maxRuns)
+    job.enabled = true;
+  job.infrastructureFailureCount = (job.infrastructureFailureCount || 0) + 1;
+  job.lastInfrastructureFailure = String(input.reason || "transient_network_failure").slice(0, 120);
+  job.lastInfrastructureError = errorText(input.error).slice(0, 4000);
+  job.lastInfrastructureFailureAt = Number(input.now || Date.now());
+  return job;
+}
+
 // src/source/runtime/executor.js
 var DEFAULT_ACTIVE_GUARD_MS = 45000;
 var DEFAULT_BUSY_RETRY_MS2 = 5000;
+var DEFAULT_PROVIDER_RETRY_WATCHDOG_MS = 2 * 60000;
+var DEFAULT_NETWORK_RETRY_MAX_MS = 60000;
 function requireFunction10(value, label) {
   if (typeof value !== "function")
     throw new TypeError(`createLoopExecutor requires ${label}`);
@@ -3393,8 +3562,11 @@ function createLoopExecutor(options = {}) {
   const dangerousShell2 = typeof options.dangerousShell === "function" ? options.dangerousShell : dangerousShell;
   const activeGuardMs = Number.isFinite(Number(options.activeGuardMs)) && Number(options.activeGuardMs) > 0 ? Number(options.activeGuardMs) : DEFAULT_ACTIVE_GUARD_MS;
   const busyRetryMs = Number.isFinite(Number(options.busyRetryMs)) && Number(options.busyRetryMs) > 0 ? Number(options.busyRetryMs) : DEFAULT_BUSY_RETRY_MS2;
+  const providerRetryWatchdogMs = Number.isFinite(Number(options.providerRetryWatchdogMs)) && Number(options.providerRetryWatchdogMs) > 0 ? Number(options.providerRetryWatchdogMs) : DEFAULT_PROVIDER_RETRY_WATCHDOG_MS;
+  const networkRetryMaxMs = Number.isFinite(Number(options.networkRetryMaxMs)) && Number(options.networkRetryMaxMs) > 0 ? Number(options.networkRetryMaxMs) : DEFAULT_NETWORK_RETRY_MAX_MS;
   const activeRuns = new Map;
   const runLocks = new Map;
+  const retryRuns = new Map;
   const statusRuntime = createSessionStatusRuntime({
     activeRuns,
     appendLoopLog: appendLoopLog2,
@@ -3407,6 +3579,7 @@ function createLoopExecutor(options = {}) {
     updateSessionStatusFromEvent,
     staleActiveRun,
     canFinalizeActiveRun,
+    sessionStatusType,
     sessionIsIdle,
     markSessionStatus,
     clearSessionStatus
@@ -3465,6 +3638,7 @@ function createLoopExecutor(options = {}) {
       clearTimeout(active.timer);
     compactionRuntime.clearForActiveRun(sessionID, active);
     activeRuns.delete(sessionID);
+    retryRuns.delete(sessionID);
   }
   function disposeSession(sessionID) {
     clearActiveRun(sessionID);
@@ -3472,30 +3646,106 @@ function createLoopExecutor(options = {}) {
     compactionRuntime.clear(sessionID);
     clearSessionStatus(sessionID);
   }
+  async function persistInfrastructureRefund(directory, sessionID, active, input = {}) {
+    const state = await readState2(directory, sessionID);
+    const job = (state.jobs || []).find((candidate) => candidate.id === active.jobId);
+    if (!job)
+      return { job: undefined, delayMs: busyRetryMs };
+    refundInfrastructureRun(job, {
+      runCount: active.job?.runCount,
+      previousLastRunAt: active.previousLastRunAt,
+      disabledByMaxRuns: active.disabledByMaxRuns
+    }, {
+      reason: input.reason,
+      error: input.error,
+      now: now2()
+    });
+    state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
+    await writeState2(directory, sessionID, state);
+    const delayMs = networkRetryDelayMs(job.infrastructureFailureCount || 1, busyRetryMs, networkRetryMaxMs);
+    return { job, delayMs };
+  }
   async function recoverActiveDispatchFailure(directory, client, sessionID, jobId, runToken, error) {
     const active = activeRuns.get(sessionID);
     if (!active || active.jobId !== jobId || active.runToken !== runToken)
       return false;
+    const transient = isTransientNetworkError(error);
+    const snapshot = active;
     clearActiveRun(sessionID);
     clearSessionStatus(sessionID);
     const message = errorMessage(error);
-    const state = await readState2(directory, sessionID);
-    const job = (state.jobs || []).find((candidate) => candidate.id === jobId);
+    let state = await readState2(directory, sessionID);
+    let job = (state.jobs || []).find((candidate) => candidate.id === jobId);
+    let retryDelay = busyRetryMs;
     if (job) {
-      job.failureCount = (job.failureCount || 0) + 1;
-      job.lastFailureReason = "dispatch_failed";
-      job.lastDispatchFailure = message.slice(0, 4000);
-      job.lastDispatchFailureAt = now2();
-      if (job.maxFailures > 0 && job.failureCount >= job.maxFailures) {
-        job.paused = true;
-        await notifyJob2(directory, job, "dispatch_failed");
+      if (transient) {
+        const refunded = await persistInfrastructureRefund(directory, sessionID, snapshot, {
+          reason: "dispatch_failed_transient",
+          error
+        });
+        job = refunded.job;
+        retryDelay = refunded.delayMs;
+        state = await readState2(directory, sessionID);
+      } else {
+        job.failureCount = (job.failureCount || 0) + 1;
+        job.lastFailureReason = "dispatch_failed";
+        job.lastDispatchFailure = message.slice(0, 4000);
+        job.lastDispatchFailureAt = now2();
+        if (job.maxFailures > 0 && job.failureCount >= job.maxFailures) {
+          job.paused = true;
+          await notifyJob2(directory, job, "dispatch_failed");
+        }
+        state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
+        await writeState2(directory, sessionID, state);
       }
-      state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-      await writeState2(directory, sessionID, state);
     }
-    await appendLoopLog2(directory, "dispatch-error", { sessionID, job: job?.name || jobId, error: message });
-    await toast2(client, `Loop dispatch failed${job?.paused ? " and paused" : ""}: ${message}`, job?.paused ? "error" : "warning");
-    await scheduleDueWork(directory, client, sessionID, busyRetryMs);
+    await appendLoopLog2(directory, transient ? "network-dispatch-error" : "dispatch-error", {
+      sessionID,
+      job: job?.name || jobId,
+      error: message,
+      ...transient ? { retryInMs: retryDelay } : {}
+    });
+    if (transient) {
+      await toast2(client, `Loop network dispatch failed; retrying when the session recovers: ${message}`, "warning");
+    } else {
+      await toast2(client, `Loop dispatch failed${job?.paused ? " and paused" : ""}: ${message}`, job?.paused ? "error" : "warning");
+    }
+    await scheduleDueWork(directory, client, sessionID, retryDelay);
+    return true;
+  }
+  async function recoverStuckProviderRetry(directory, client, sessionID) {
+    const active = activeRuns.get(sessionID);
+    if (!active || active.compactionOnly) {
+      retryRuns.delete(sessionID);
+      return false;
+    }
+    const current = retryRuns.get(sessionID);
+    if (!current || current.runToken !== active.runToken) {
+      retryRuns.set(sessionID, { runToken: active.runToken, since: now2() });
+      return false;
+    }
+    if (now2() - current.since < providerRetryWatchdogMs)
+      return false;
+    const snapshot = active;
+    try {
+      if (client?.session?.abort) {
+        await fireSdk2(client, "session.abort provider retry watchdog", client.session.abort.bind(client.session), { path: { id: sessionID }, body: {} }, { path: { sessionID }, body: {} }, { sessionID });
+      }
+    } catch {}
+    clearActiveRun(sessionID);
+    clearSessionStatus(sessionID);
+    const refunded = await persistInfrastructureRefund(directory, sessionID, snapshot, {
+      reason: "provider_retry_watchdog",
+      error: `OpenCode session.status stayed retry for ${providerRetryWatchdogMs}ms`
+    });
+    await appendLoopLog2(directory, "provider-retry-recovery", {
+      sessionID,
+      job: refunded.job?.name || snapshot.jobId,
+      retryForMs: now2() - current.since,
+      retryInMs: refunded.delayMs
+    });
+    await toast2(client, "Loop provider retry exceeded the watchdog; the Loop-owned turn was released and will retry with backoff.", "warning");
+    await scheduleDueWork(directory, client, sessionID, refunded.delayMs);
     return true;
   }
   async function finalizeActiveRun(directory, client, sessionID, finalizeOptions = {}) {
@@ -3546,14 +3796,24 @@ function createLoopExecutor(options = {}) {
     }
     runLocks.set(sessionID, now2());
     let job;
+    let previousLastRunAt = 0;
+    let disabledByMaxRuns = false;
     try {
       await finalizeActiveRun(directory, client, sessionID, { requireIdle: true, forceStale: true });
-      if (!await sessionIsIdle(client, sessionID, directory)) {
+      const statusType = await sessionStatusType(client, sessionID, directory);
+      if (statusType !== "idle") {
+        if (statusType === "retry") {
+          if (await recoverStuckProviderRetry(directory, client, sessionID))
+            return;
+        } else {
+          retryRuns.delete(sessionID);
+        }
         if (runOptions.force)
           await toast2(client, "Loop queued: session is busy; it will run on the next idle check.", "info");
         await reschedule(busyRetryMs);
         return;
       }
+      retryRuns.delete(sessionID);
       const active = activeRuns.get(sessionID);
       const activeAge = active ? now2() - (active.startedAt || 0) : 0;
       const activeGuard = active?.job?.timeoutMs || active?.job?.activeRecoveryMs || activeGuardMs;
@@ -3607,9 +3867,11 @@ function createLoopExecutor(options = {}) {
       if (runNowRequested)
         delete job.runNowRequestedAt;
       job.watchTriggered = false;
+      previousLastRunAt = Number(job.lastRunAt || 0);
       job.lastRunAt = now2();
       job.runCount = (job.runCount || 0) + 1;
-      if (job.maxRuns > 0 && job.runCount >= job.maxRuns) {
+      disabledByMaxRuns = job.maxRuns > 0 && job.runCount >= job.maxRuns;
+      if (disabledByMaxRuns) {
         job.enabled = false;
         await notifyJob2(directory, job, "max_runs_reached");
       }
@@ -3648,7 +3910,9 @@ function createLoopExecutor(options = {}) {
           startedAt: now2(),
           timer,
           runToken,
-          compactionAction: result.compaction === true
+          compactionAction: result.compaction === true,
+          previousLastRunAt,
+          disabledByMaxRuns
         });
         if (result.compaction && compactionRuntime.isCompleted(sessionID, job.id)) {
           await compactionRuntime.finalize(directory, client, sessionID);
@@ -3663,6 +3927,24 @@ function createLoopExecutor(options = {}) {
         await reschedule(busyRetryMs);
       } catch (error) {
         clearActiveRun(sessionID);
+        if (isTransientNetworkError(error) && job) {
+          const stateAfterFailure = await readState2(directory, sessionID);
+          const persisted = (stateAfterFailure.jobs || []).find((candidate) => candidate.id === job.id);
+          if (persisted) {
+            refundInfrastructureRun(persisted, {
+              runCount: job.runCount,
+              previousLastRunAt,
+              disabledByMaxRuns
+            }, { reason: "action_dispatch_transient", error, now: now2() });
+            stateAfterFailure.jobs = (stateAfterFailure.jobs || []).map((candidate) => candidate.id === persisted.id ? persisted : candidate);
+            await writeState2(directory, sessionID, stateAfterFailure);
+            const delayMs = networkRetryDelayMs(persisted.infrastructureFailureCount || 1, busyRetryMs, networkRetryMaxMs);
+            await appendLoopLog2(directory, "network-action-error", { sessionID, job: persisted.name || persisted.id, error: errorMessage(error), retryInMs: delayMs });
+            await toast2(client, "Loop action hit a transient network failure; the logical run was refunded and will retry.", "warning");
+            await reschedule(delayMs);
+            return;
+          }
+        }
         await toast2(client, `Loop job failed: ${error instanceof Error ? error.message : String(error)}`, "error");
         await appendLoopLog2(directory, "error", {
           sessionID,
@@ -3680,9 +3962,11 @@ function createLoopExecutor(options = {}) {
     clearActiveRun,
     disposeSession,
     recoverActiveDispatchFailure,
+    recoverStuckProviderRetry,
     finalizeActiveRun,
     fireAction,
     maybeRunDueJobs,
+    sessionStatusType,
     sessionIsIdle,
     updateSessionStatusFromEvent,
     markSessionStatus,
