@@ -117,17 +117,24 @@ export function createSessionStatusRuntime(options = {}) {
     if (completion === "completed") return true
     if (!options.requireIdle) return completion === "unknown" && staleActiveRun(sessionID)
 
+    const cached = sessionStatuses.get(sessionID)
+    const seenAt = sessionStatusSeenAt.get(sessionID) || 0
+    const cachedIdleAfterRun = cached === "idle" && seenAt > (active.startedAt || 0)
     const live = await readLiveSessionStatus(client, sessionID, directory)
     if (live?.type === "idle") return true
+    if (live?.type === "unknown" && cachedIdleAfterRun) {
+      // A concrete idle observed after this active run is sufficient to finalize
+      // that run even if a later status read fails. This does not authorize a
+      // new prompt by itself; admission applies its own current status policy.
+      return true
+    }
     if (live?.type) {
       if (live.type === "busy" && options.forceStale && completion === "unknown" && staleActiveRun(sessionID)) return true
       return false
     }
 
     if (options.forceStale && completion === "unknown" && staleActiveRun(sessionID)) return true
-    const cached = sessionStatuses.get(sessionID)
-    const seenAt = sessionStatusSeenAt.get(sessionID) || 0
-    return cached === "idle" && seenAt > (active.startedAt || 0)
+    return cachedIdleAfterRun
   }
 
   async function recoverCompletedTailWithoutActiveRun(directory, client, sessionID, liveType, seenAt) {
