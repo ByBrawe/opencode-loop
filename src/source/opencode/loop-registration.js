@@ -53,6 +53,11 @@ export function createLoopRegistration(options = {}) {
     parsed.job.scheduleMode = normalized.scheduleMode
     parsed.job.scheduleSyntax = normalized.scheduleSyntax
     parsed.job.allowGoalOverlap = normalized.allowGoalOverlap === true
+    if (normalized.scheduleSyntax === "after") {
+      parsed.job.immediate = false
+      parsed.job.maxRuns = 1
+      parsed.job.lastRunAt = Date.parse(parsed.job.createdAt || "") || Date.now()
+    }
 
     const executionContext = getSessionExecutionContext(sessionID) || { agent: "build" }
     parsed.job.agent = defaults.agent || executionContext.agent || "build"
