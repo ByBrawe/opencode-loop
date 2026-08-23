@@ -1,0 +1,56 @@
+name: Dedicated Goal Coexistence
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: goal-coexistence-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  current-releases:
+    name: Loop 0.5.35 + Goal 1.3.27 (${{ matrix.os }})
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: npm ci
+
+      - name: Install current OpenCode and released Goal
+        run: npm install --no-save --package-lock=false opencode-ai@latest @bybrawe/opencode-goal@1.3.27
+
+      - name: Show integration versions
+        run: |
+          node -p "require('./package.json').version"
+          npx --no-install opencode --version
+          node -p "require('./node_modules/@bybrawe/opencode-goal/package.json').version"
+
+      - name: Check coexistence canary syntax
+        run: node --check scripts/host-goal-coexistence-canary.mjs
+
+      - name: Require one autonomous owner
+        run: node scripts/host-goal-coexistence-canary.mjs
+        env:
+          OPENCODE_PRINT_LOGS: "1"
+          OPENCODE_LOG_LEVEL: DEBUG
