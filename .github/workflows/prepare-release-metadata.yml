@@ -56,9 +56,12 @@ jobs:
 
           const readmePath = "README.md"
           const readme = fs.readFileSync(readmePath, "utf8")
-          const marker = /\*\*Current release: `[^`]+`\.\*\*/
-          if (!marker.test(readme)) throw new Error("README current release marker not found")
-          fs.writeFileSync(readmePath, readme.replace(marker, `**Current release: \`${version}\`.**`))
+          const marker = /((?:>\s*)?)\*\*Current(?: stable)? release: `[^`]+`\.\*\*/
+          if (!marker.test(readme)) throw new Error("README current stable release marker not found")
+          fs.writeFileSync(
+            readmePath,
+            readme.replace(marker, (_match, prefix = "") => `${prefix}**Current stable release: \`${version}\`.**`),
+          )
           NODE
 
       - name: Prepend changelog notes
