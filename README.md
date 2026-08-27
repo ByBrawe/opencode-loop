@@ -4,7 +4,7 @@
 
 OpenCode Loop adds `/loop`, scheduled prompt/command/shell jobs, compact scheduling, verification/checkpoints, and the `opencode-loopd` background daemon.
 
-> **Current stable release: `0.5.35`.**
+> **Current stable release: `0.5.36`.**
 
 ## Install or update
 
