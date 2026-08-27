@@ -801,11 +801,25 @@ function orderedSessionMessages(messages) {
     return { message, index, created: Number.isFinite(created) ? created : 0 };
   }).sort((a, b) => a.created - b.created || a.index - b.index).map((entry) => entry.message);
 }
+function assistantMessageHasMeaningfulActivity(message) {
+  const parts = Array.isArray(message?.parts) ? message.parts : [];
+  for (const part of parts) {
+    if (!part || typeof part !== "object")
+      continue;
+    if (part.type === "text" && typeof part.text === "string" && part.text.trim())
+      return true;
+    if (["tool", "file", "patch", "artifact"].includes(String(part.type || "")))
+      return true;
+  }
+  const info = message?.info || message || {};
+  return [info.text, info.content, info.summary].some((value) => typeof value === "string" && value.trim());
+}
 async function activeRunCompletionFromMessages(directory, client, sessionID, active) {
   const messages = await readRecentSessionMessages(client, sessionID, directory);
   if (!messages)
     return "unknown";
-  const tail = orderedSessionMessages(messages).at(-1);
+  const ordered = orderedSessionMessages(messages);
+  const tail = ordered.at(-1);
   const info = tail?.info || tail;
   if (!info || info.role !== "assistant")
     return "incomplete";
@@ -816,7 +830,17 @@ async function activeRunCompletionFromMessages(directory, client, sessionID, act
   const startedAt = Number(active?.startedAt || 0);
   if (startedAt > 0 && completed < startedAt && (!Number.isFinite(created) || created < startedAt))
     return "incomplete";
-  return "completed";
+  const relevant = ordered.filter((message) => {
+    const candidate = message?.info || message || {};
+    if (candidate.role !== "assistant")
+      return false;
+    if (startedAt <= 0)
+      return true;
+    const candidateCreated = Number(candidate?.time?.created || 0);
+    const candidateCompleted = Number(candidate?.time?.completed || 0);
+    return candidateCreated >= startedAt || candidateCompleted >= startedAt;
+  });
+  return relevant.some(assistantMessageHasMeaningfulActivity) ? "completed" : "empty";
 }
 async function resolveCompactionModel(directory, client, sessionID, preferredModel) {
   const preferred = normalizedModelRef(preferredModel);
@@ -2853,6 +2877,9 @@ function nonNegativeNumber(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? number : fallback;
 }
+function settledAssistantCompletion(value) {
+  return value === "completed" || value === "empty";
+}
 function createSessionStatusRuntime(options = {}) {
   const activeRuns = options.activeRuns;
   if (!(activeRuns instanceof Map))
@@ -2947,7 +2974,7 @@ function createSessionStatusRuntime(options = {}) {
     if (!options2.requireIdle && !options2.forceStale)
       return true;
     const completion = options2.forceStale ? await activeRunCompletionFromMessages2(directory, client, sessionID, active) : undefined;
-    if (completion === "completed")
+    if (settledAssistantCompletion(completion))
       return true;
     if (!options2.requireIdle)
       return completion === "unknown" && staleActiveRun(sessionID);
@@ -2977,7 +3004,7 @@ function createSessionStatusRuntime(options = {}) {
     if (!seenAt || now2() - seenAt < sessionStatusCacheMs)
       return false;
     const completion = await activeRunCompletionFromMessages2(directory, client, sessionID, { startedAt: 0 });
-    if (completion !== "completed")
+    if (!settledAssistantCompletion(completion))
       return false;
     markSessionStatus(sessionID, "idle");
     await appendLoopLog2(directory, "status-message-idle-recovery", {
@@ -3012,7 +3039,7 @@ function createSessionStatusRuntime(options = {}) {
         const active = activeRuns.get(sessionID);
         if (active) {
           const completion = await activeRunCompletionFromMessages2(directory, client, sessionID, active);
-          if (completion === "completed" || live.type === "busy" && completion === "unknown" && staleActiveRun(sessionID)) {
+          if (settledAssistantCompletion(completion) || live.type === "busy" && completion === "unknown" && staleActiveRun(sessionID)) {
             markSessionStatus(sessionID, "idle");
             const logDetails = {
               sessionID,
@@ -3020,7 +3047,8 @@ function createSessionStatusRuntime(options = {}) {
               startedAt: active.startedAt,
               ...completion === "completed" ? {} : { staleStatus: live.type }
             };
-            await appendLoopLog2(directory, completion === "completed" ? "status-message-complete-recovery" : "status-stale-recovery", logDetails);
+            const recoveryEvent = completion === "empty" ? "status-message-empty-recovery" : completion === "completed" ? "status-message-complete-recovery" : "status-stale-recovery";
+            await appendLoopLog2(directory, recoveryEvent, logDetails);
             return "idle";
           }
         }
@@ -3042,6 +3070,7 @@ function createSessionStatusRuntime(options = {}) {
     staleActiveRun,
     canFinalizeActiveRun,
     readLiveSessionStatus,
+    activeRunCompletion: activeRunCompletionFromMessages2,
     sessionStatusType,
     sessionIsIdle
   };
@@ -3532,6 +3561,50 @@ function refundInfrastructureRun(job, snapshot = {}, input = {}) {
   return job;
 }
 
+// src/source/runtime/empty-turn.js
+var DEFAULT_MAX_EMPTY_TURNS = 2;
+function guardsEmptyAssistantTurn(job) {
+  const kind = actionKind(job?.action, job || {});
+  return kind === "prompt" || kind === "goal";
+}
+function emptyTurnLimit(job) {
+  const configured = Number(job?.maxEmptyTurns || 0);
+  if (Number.isFinite(configured) && configured > 0)
+    return Math.max(1, Math.floor(configured));
+  return DEFAULT_MAX_EMPTY_TURNS;
+}
+function refundEmptyAssistantTurn(job, active = {}, timestamp = Date.now()) {
+  const chargedCount = Number(active?.job?.runCount ?? job?.runCount ?? 0);
+  const currentCount = Number(job?.runCount || 0);
+  if (chargedCount > 0 && currentCount >= chargedCount)
+    job.runCount = Math.max(0, currentCount - 1);
+  if (Number.isFinite(Number(active?.previousLastRunAt)))
+    job.lastRunAt = Number(active.previousLastRunAt);
+  if (active?.disabledByMaxRuns && Number(job?.maxRuns || 0) > 0 && Number(job?.runCount || 0) < Number(job.maxRuns)) {
+    job.enabled = true;
+  }
+  job.emptyTurnCount = Number(job.emptyTurnCount || 0) + 1;
+  job.lastEmptyTurnAt = Number(timestamp) || Date.now();
+  job.lastFailureReason = "empty_turn";
+  const limit = emptyTurnLimit(job);
+  const paused = job.emptyTurnCount >= limit;
+  if (paused) {
+    job.paused = true;
+    delete job.runNowRequestedAt;
+  } else {
+    job.runNowRequestedAt = Math.max(1, Number(timestamp) || Date.now());
+  }
+  return { job, paused, count: job.emptyTurnCount, limit };
+}
+function clearEmptyAssistantTurnStreak(job) {
+  if (!job)
+    return job;
+  job.emptyTurnCount = 0;
+  if (job.lastFailureReason === "empty_turn")
+    delete job.lastFailureReason;
+  return job;
+}
+
 // src/source/runtime/executor.js
 var DEFAULT_ACTIVE_GUARD_MS = 45000;
 var DEFAULT_BUSY_RETRY_MS2 = 5000;
@@ -3585,6 +3658,7 @@ function createLoopExecutor(options = {}) {
     updateSessionStatusFromEvent,
     staleActiveRun,
     canFinalizeActiveRun,
+    activeRunCompletion,
     sessionStatusType,
     sessionIsIdle,
     markSessionStatus,
@@ -3760,6 +3834,7 @@ function createLoopExecutor(options = {}) {
       return;
     if (!await canFinalizeActiveRun(directory, client, sessionID, active, finalizeOptions))
       return false;
+    const completion = await activeRunCompletion(directory, client, sessionID, active);
     const recoveredStale = staleActiveRun(sessionID);
     if (active.compactionOnly) {
       const pending = compactionRuntime.getPending(sessionID);
@@ -3780,6 +3855,30 @@ function createLoopExecutor(options = {}) {
     if (!job)
       return;
     job.lastFinishedAt = now2();
+    if (completion === "empty" && guardsEmptyAssistantTurn(job)) {
+      const empty = refundEmptyAssistantTurn(job, active, now2());
+      state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
+      await writeState2(directory, sessionID, state);
+      await appendLoopLog2(directory, "empty-assistant-turn", {
+        sessionID,
+        job: job.name || job.id,
+        count: empty.count,
+        limit: empty.limit,
+        paused: empty.paused,
+        refunded: true
+      });
+      if (empty.paused) {
+        await notifyJob2(directory, job, "empty_turn");
+        await toast2(client, "Loop paused after " + empty.count + " consecutive completed assistant turns with no visible output or tool activity. Resume after changing the model/prompt or use /loop-resume.", "warning");
+        await scheduleDueWork(directory, client, sessionID);
+      } else {
+        await toast2(client, "Loop received an empty completed assistant turn; the logical run was refunded and will retry once.", "warning");
+        await scheduleDueWork(directory, client, sessionID, busyRetryMs);
+      }
+      return true;
+    }
+    if (completion === "completed")
+      clearEmptyAssistantTurnStreak(job);
     if (recoveredStale) {
       await appendLoopLog2(directory, "active-stale-recovery", {
         sessionID,

@@ -11,6 +11,7 @@ import { createActionDispatcher } from "./action-dispatch.js"
 import { createRunFinalizationRuntime } from "./run-finalization.js"
 import { createRunAdmissionRuntime } from "./run-admission.js"
 import { isTransientNetworkError, networkRetryDelayMs, refundInfrastructureRun } from "./network-recovery.js"
+import { guardsEmptyAssistantTurn, refundEmptyAssistantTurn, clearEmptyAssistantTurnStreak } from "./empty-turn.js"
 
 const DEFAULT_ACTIVE_GUARD_MS = 45_000
 const DEFAULT_BUSY_RETRY_MS = 5_000
@@ -77,6 +78,7 @@ export function createLoopExecutor(options = {}) {
     updateSessionStatusFromEvent,
     staleActiveRun,
     canFinalizeActiveRun,
+    activeRunCompletion,
     sessionStatusType,
     sessionIsIdle,
     markSessionStatus,
@@ -267,6 +269,7 @@ export function createLoopExecutor(options = {}) {
     const active = activeRuns.get(sessionID)
     if (!active) return
     if (!await canFinalizeActiveRun(directory, client, sessionID, active, finalizeOptions)) return false
+    const completion = await activeRunCompletion(directory, client, sessionID, active)
     const recoveredStale = staleActiveRun(sessionID)
     if (active.compactionOnly) {
       const pending = compactionRuntime.getPending(sessionID)
@@ -287,6 +290,31 @@ export function createLoopExecutor(options = {}) {
     let job = (state.jobs || []).find((candidate) => candidate.id === active.jobId)
     if (!job) return
     job.lastFinishedAt = now()
+
+    if (completion === "empty" && guardsEmptyAssistantTurn(job)) {
+      const empty = refundEmptyAssistantTurn(job, active, now())
+      state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate)
+      await writeState(directory, sessionID, state)
+      await appendLoopLog(directory, "empty-assistant-turn", {
+        sessionID,
+        job: job.name || job.id,
+        count: empty.count,
+        limit: empty.limit,
+        paused: empty.paused,
+        refunded: true,
+      })
+      if (empty.paused) {
+        await notifyJob(directory, job, "empty_turn")
+        await toast(client, "Loop paused after " + empty.count + " consecutive completed assistant turns with no visible output or tool activity. Resume after changing the model/prompt or use /loop-resume.", "warning")
+        await scheduleDueWork(directory, client, sessionID)
+      } else {
+        await toast(client, "Loop received an empty completed assistant turn; the logical run was refunded and will retry once.", "warning")
+        await scheduleDueWork(directory, client, sessionID, busyRetryMs)
+      }
+      return true
+    }
+
+    if (completion === "completed") clearEmptyAssistantTurnStreak(job)
     if (recoveredStale) {
       await appendLoopLog(directory, "active-stale-recovery", {
         sessionID,

@@ -24,6 +24,10 @@ function nonNegativeNumber(value, fallback) {
   return Number.isFinite(number) && number >= 0 ? number : fallback
 }
 
+function settledAssistantCompletion(value) {
+  return value === "completed" || value === "empty"
+}
+
 export function createSessionStatusRuntime(options = {}) {
   const activeRuns = options.activeRuns
   if (!(activeRuns instanceof Map)) throw new TypeError("createSessionStatusRuntime requires activeRuns Map")
@@ -114,7 +118,7 @@ export function createSessionStatusRuntime(options = {}) {
     const completion = options.forceStale
       ? await activeRunCompletionFromMessages(directory, client, sessionID, active)
       : undefined
-    if (completion === "completed") return true
+    if (settledAssistantCompletion(completion)) return true
     if (!options.requireIdle) return completion === "unknown" && staleActiveRun(sessionID)
 
     const cached = sessionStatuses.get(sessionID)
@@ -142,7 +146,7 @@ export function createSessionStatusRuntime(options = {}) {
     if (liveType !== "busy") return false
     if (!seenAt || now() - seenAt < sessionStatusCacheMs) return false
     const completion = await activeRunCompletionFromMessages(directory, client, sessionID, { startedAt: 0 })
-    if (completion !== "completed") return false
+    if (!settledAssistantCompletion(completion)) return false
     markSessionStatus(sessionID, "idle")
     await appendLoopLog(directory, "status-message-idle-recovery", {
       sessionID,
@@ -177,7 +181,7 @@ export function createSessionStatusRuntime(options = {}) {
         const active = activeRuns.get(sessionID)
         if (active) {
           const completion = await activeRunCompletionFromMessages(directory, client, sessionID, active)
-          if (completion === "completed" || (live.type === "busy" && completion === "unknown" && staleActiveRun(sessionID))) {
+          if (settledAssistantCompletion(completion) || (live.type === "busy" && completion === "unknown" && staleActiveRun(sessionID))) {
             markSessionStatus(sessionID, "idle")
             const logDetails = {
               sessionID,
@@ -185,11 +189,12 @@ export function createSessionStatusRuntime(options = {}) {
               startedAt: active.startedAt,
               ...(completion === "completed" ? {} : { staleStatus: live.type }),
             }
-            await appendLoopLog(
-              directory,
-              completion === "completed" ? "status-message-complete-recovery" : "status-stale-recovery",
-              logDetails,
-            )
+            const recoveryEvent = completion === "empty"
+              ? "status-message-empty-recovery"
+              : completion === "completed"
+                ? "status-message-complete-recovery"
+                : "status-stale-recovery"
+            await appendLoopLog(directory, recoveryEvent, logDetails)
             return "idle"
           }
         }
@@ -214,6 +219,7 @@ export function createSessionStatusRuntime(options = {}) {
     staleActiveRun,
     canFinalizeActiveRun,
     readLiveSessionStatus,
+    activeRunCompletion: activeRunCompletionFromMessages,
     sessionStatusType,
     sessionIsIdle,
   }

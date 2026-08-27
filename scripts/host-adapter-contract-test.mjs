@@ -61,7 +61,7 @@ assert.equal(compactTuiCommandName("other"), undefined)
     "/tmp", messagesClient([{ info: { role: "assistant", time: { created: 50, completed: 90 } } }]), "old", { startedAt: 100 },
   ), "incomplete")
   assert.equal(await activeRunCompletionFromMessages(
-    "/tmp", messagesClient([{ info: { role: "assistant", time: { created: 110, completed: 120 } } }]), "done", { startedAt: 100 },
+    "/tmp", messagesClient([{ info: { role: "assistant", text: "done", time: { created: 110, completed: 120 } } }]), "done", { startedAt: 100 },
   ), "completed")
 }
 
@@ -118,7 +118,7 @@ assert.equal(compactTuiCommandName("other"), undefined)
     session: {
       messages: async (args) => {
         calls.push(["messages", args])
-        return { data: [{ info: { role: "assistant", time: { created: 10, completed: 20 } } }] }
+        return { data: [{ info: { role: "assistant", text: "adapter completed", time: { created: 10, completed: 20 } } }] }
       },
     },
   }

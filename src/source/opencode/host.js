@@ -54,10 +54,22 @@ export function orderedSessionMessages(messages) {
     .map((entry) => entry.message)
 }
 
+export function assistantMessageHasMeaningfulActivity(message) {
+  const parts = Array.isArray(message?.parts) ? message.parts : []
+  for (const part of parts) {
+    if (!part || typeof part !== "object") continue
+    if (part.type === "text" && typeof part.text === "string" && part.text.trim()) return true
+    if (["tool", "file", "patch", "artifact"].includes(String(part.type || ""))) return true
+  }
+  const info = message?.info || message || {}
+  return [info.text, info.content, info.summary].some((value) => typeof value === "string" && value.trim())
+}
+
 export async function activeRunCompletionFromMessages(directory, client, sessionID, active) {
   const messages = await readRecentSessionMessages(client, sessionID, directory)
   if (!messages) return "unknown"
-  const tail = orderedSessionMessages(messages).at(-1)
+  const ordered = orderedSessionMessages(messages)
+  const tail = ordered.at(-1)
   const info = tail?.info || tail
   if (!info || info.role !== "assistant") return "incomplete"
   const completed = Number(info?.time?.completed || 0)
@@ -65,7 +77,16 @@ export async function activeRunCompletionFromMessages(directory, client, session
   if (!Number.isFinite(completed) || completed <= 0) return "incomplete"
   const startedAt = Number(active?.startedAt || 0)
   if (startedAt > 0 && completed < startedAt && (!Number.isFinite(created) || created < startedAt)) return "incomplete"
-  return "completed"
+
+  const relevant = ordered.filter((message) => {
+    const candidate = message?.info || message || {}
+    if (candidate.role !== "assistant") return false
+    if (startedAt <= 0) return true
+    const candidateCreated = Number(candidate?.time?.created || 0)
+    const candidateCompleted = Number(candidate?.time?.completed || 0)
+    return candidateCreated >= startedAt || candidateCompleted >= startedAt
+  })
+  return relevant.some(assistantMessageHasMeaningfulActivity) ? "completed" : "empty"
 }
 
 export async function resolveCompactionModel(directory, client, sessionID, preferredModel) {
