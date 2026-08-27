@@ -1,0 +1,44 @@
+name: Run empty-turn implementation
+
+on:
+  push:
+    branches: [fix/empty-assistant-turn-loop]
+    paths:
+      - .github/workflows/run-empty-turn-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/empty-assistant-turn-loop
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: npm install
+      - name: Apply empty-turn runtime patch
+        run: node scripts/ci-apply-empty-turn-fix.cjs
+      - name: Validate full source suite
+        run: |
+          npm run check
+          npm test
+      - name: Regenerate and validate committed bundle
+        run: |
+          npm run build:plugin
+          node --check src/index.js
+          node scripts/empty-turn-recovery-test.mjs
+      - name: Commit verified product changes
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/source/opencode/host.js src/source/runtime/session-status.js src/source/runtime/executor.js src/source/runtime/empty-turn.js scripts/empty-turn-recovery-test.mjs package.json src/index.js
+          git commit -m "fix: stop empty assistant turn loops"
+          git push origin HEAD:fix/empty-assistant-turn-loop
