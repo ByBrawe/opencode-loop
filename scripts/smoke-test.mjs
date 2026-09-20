@@ -86,6 +86,27 @@ try {
     "opencode_loop_goal_progress",
   ])
 
+  const dedicatedGoalRoot = path.join(directory, ".opencode", "goals")
+  await fs.mkdir(dedicatedGoalRoot, { recursive: true })
+  await fs.writeFile(path.join(dedicatedGoalRoot, "dedicated.json"), JSON.stringify({
+    schemaVersion: 1,
+    id: "dedicated-goal",
+    sessionID,
+    status: "active",
+  }), "utf8")
+  for (const [name, args] of [
+    ["opencode_loop_goal_blocked", { reason: "Need deploy", needed: "User deploy" }],
+    ["opencode_loop_goal_progress", { summary: "Checked status", next: "Continue" }],
+    ["opencode_loop_goal_complete", { summary: "Done", evidence: "tests passed" }],
+  ]) {
+    const guarded = await hooks.tool[name].execute(args, { directory, sessionID })
+    assert.equal(guarded.title, "Dedicated Goal owns lifecycle")
+    assert.match(guarded.output, /opencode_loop_goal_\*/)
+    assert.match(guarded.output, /opencode_goal_wait_for_user/)
+    assert.match(guarded.output, /opencode_goal_blocked/)
+  }
+  await fs.rm(dedicatedGoalRoot, { recursive: true, force: true })
+
   const output = { parts: [{ type: "text", text: "original command body" }] }
   await hooks["command.execute.before"]({
     command: "loop-goal",
