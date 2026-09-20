@@ -14,6 +14,11 @@ assert.match(workflow, /COMMIT_SHA="\$GITHUB_SHA"/, "release tag must target the
 assert.match(workflow, /group:\s*npm-release/, "npm publication must be serialized")
 assert.match(workflow, /cancel-in-progress:\s*false/, "a newer release must not cancel an in-flight publication")
 
+assert.match(workflow, /Decide whether npm publish is needed/, "release reruns must detect an already-published immutable version")
+assert.match(workflow, /steps\.npm-state\.outputs\.publish == 'true'/, "npm publish must be idempotently gated")
+assert.match(workflow, /for attempt in \{1\.\.60\}/, "registry verification must allow bounded multi-minute propagation")
+assert.match(workflow, /--registry=https:\/\/registry\.npmjs\.org/, "registry checks must target the authoritative npm registry")
+
 const publishIndex = workflow.indexOf("npm publish --access public")
 const verifyIndex = workflow.indexOf("Verify published version is readable from npm")
 const tagIndex = workflow.indexOf("Create tag and GitHub release")
