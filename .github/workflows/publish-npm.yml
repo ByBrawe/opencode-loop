@@ -71,7 +71,24 @@ jobs:
 
       - run: npm pack --dry-run
 
-      - run: npm publish --access public
+      - name: Decide whether npm publish is needed
+        id: npm-state
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          PACKAGE_NAME="$(node -p "require('./package.json').name")"
+          PUBLISHED_VERSION="$(npm view "$PACKAGE_NAME@$RELEASE_VERSION" version --registry=https://registry.npmjs.org 2>/dev/null || true)"
+          if [[ "$PUBLISHED_VERSION" == "$RELEASE_VERSION" ]]; then
+            echo "$PACKAGE_NAME@$RELEASE_VERSION is already visible on npm; skipping duplicate publish."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish package to npm
+        if: steps.npm-state.outputs.publish == 'true'
+        run: npm publish --access public
 
       - name: Verify published version is readable from npm
         shell: bash
@@ -79,16 +96,16 @@ jobs:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
           PACKAGE_NAME="$(node -p "require('./package.json').name")"
-          for attempt in {1..18}; do
-            PUBLISHED_VERSION="$(npm view "$PACKAGE_NAME@$RELEASE_VERSION" version 2>/dev/null || true)"
+          for attempt in {1..60}; do
+            PUBLISHED_VERSION="$(npm view "$PACKAGE_NAME@$RELEASE_VERSION" version --registry=https://registry.npmjs.org 2>/dev/null || true)"
             if [[ "$PUBLISHED_VERSION" == "$RELEASE_VERSION" ]]; then
               echo "Verified $PACKAGE_NAME@$RELEASE_VERSION on npm."
               exit 0
             fi
-            echo "npm registry has not exposed $PACKAGE_NAME@$RELEASE_VERSION yet (attempt $attempt/18); retrying..."
-            sleep 5
+            echo "npm registry has not exposed $PACKAGE_NAME@$RELEASE_VERSION yet (attempt $attempt/60); retrying..."
+            sleep 10
           done
-          echo "Published version $PACKAGE_NAME@$RELEASE_VERSION was not readable from npm after retries." >&2
+          echo "Published version $PACKAGE_NAME@$RELEASE_VERSION was not readable from npm after bounded propagation retries." >&2
           exit 1
 
       - name: Create tag and GitHub release
