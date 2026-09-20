@@ -17,6 +17,7 @@ import { createGoalExecutionPolicy } from "./runtime/goal-policy.js"
 import { createJobWorkspaceRuntime, dangerousShell } from "./runtime/job-workspace.js"
 import { createLoopExecutor } from "./runtime/executor.js"
 import { createGoalSteeringRuntime } from "./runtime/goal-steering.js"
+import { findDedicatedGoalForSession } from "./runtime/companion-goal.js"
 
 const DEFAULT_ACTIVE_GUARD_MS = 45_000
 
@@ -162,44 +163,66 @@ function steeringToolRejection(sessionID) {
   }
 }
 
+async function dedicatedGoalToolRejection(directory, sessionID) {
+  const goal = await findDedicatedGoalForSession(directory, sessionID)
+  if (!goal || goal.status === "completed") return undefined
+  return {
+    title: "Dedicated Goal owns lifecycle",
+    output: [
+      `A dedicated OpenCode Goal is persisted for this session (status=${String(goal.status || "unknown")}).`,
+      "The opencode_loop_goal_* tools control only experimental /loop-goal jobs and will not mutate the dedicated Goal.",
+      "Use opencode_goal_progress for checkpoints, opencode_goal_wait_for_user when user/manual input is required, opencode_goal_blocked for a genuine blocker, or opencode_goal_complete for verified completion.",
+    ].join("\n"),
+  }
+}
+
 function goalTools(defaultDirectory) {
   return {
     opencode_loop_goal_complete: tool({
-      description: "Mark the current OpenCode Loop experimental goal as completed. Use only after acceptance criteria are satisfied and you have evidence from tests, typecheck, build, or code inspection.",
+      description: "Experimental /loop-goal ONLY: mark the current OpenCode Loop experimental goal as completed. Never use this tool to control a dedicated @bybrawe/opencode-goal Goal; use opencode_goal_complete there. Use only after acceptance criteria are satisfied and you have evidence from tests, typecheck, build, or code inspection.",
       args: {
         summary: tool.schema.string().describe("Short human-readable summary of what was completed."),
         evidence: tool.schema.string().describe("Concrete evidence that the goal is complete, such as commands run, passing checks, files changed, and important results."),
       },
       execute: async (args, context) => {
+        const directory = context.directory || defaultDirectory
+        const dedicated = await dedicatedGoalToolRejection(directory, context.sessionID)
+        if (dedicated) return dedicated
         const steering = steeringToolRejection(context.sessionID)
         if (steering) return steering
-        const result = await setGoalComplete(context.directory || defaultDirectory, context.sessionID, args)
+        const result = await setGoalComplete(directory, context.sessionID, args)
         return { title: result.ok ? "Goal completed" : result.rejected ? "Goal completion rejected" : "Goal not found", output: result.message }
       },
     }),
     opencode_loop_goal_blocked: tool({
-      description: "Mark the current OpenCode Loop experimental goal as blocked when user input or manual intervention is required.",
+      description: "Experimental /loop-goal ONLY: mark the current OpenCode Loop experimental goal as blocked. Never use this tool for a dedicated @bybrawe/opencode-goal Goal; use opencode_goal_wait_for_user for user/manual input or opencode_goal_blocked for a genuine dedicated-Goal blocker.",
       args: {
         reason: tool.schema.string().describe("Why the goal is blocked."),
         needed: tool.schema.string().describe("What user input, credential, decision, or manual action is needed to continue."),
       },
       execute: async (args, context) => {
+        const directory = context.directory || defaultDirectory
+        const dedicated = await dedicatedGoalToolRejection(directory, context.sessionID)
+        if (dedicated) return dedicated
         const steering = steeringToolRejection(context.sessionID)
         if (steering) return steering
-        const result = await setGoalBlocked(context.directory || defaultDirectory, context.sessionID, args)
+        const result = await setGoalBlocked(directory, context.sessionID, args)
         return { title: result.ok ? "Goal blocked" : "Goal not found", output: result.message }
       },
     }),
     opencode_loop_goal_progress: tool({
-      description: "Record meaningful progress on the current OpenCode Loop experimental goal without completing it.",
+      description: "Experimental /loop-goal ONLY: record meaningful progress on the current OpenCode Loop experimental goal. Never use this tool for a dedicated @bybrawe/opencode-goal Goal; use opencode_goal_progress there.",
       args: {
         summary: tool.schema.string().describe("What useful progress was made."),
         next: tool.schema.string().describe("The next step toward completing the goal."),
       },
       execute: async (args, context) => {
+        const directory = context.directory || defaultDirectory
+        const dedicated = await dedicatedGoalToolRejection(directory, context.sessionID)
+        if (dedicated) return dedicated
         const steering = steeringToolRejection(context.sessionID)
         if (steering) return steering
-        const result = await setGoalProgress(context.directory || defaultDirectory, context.sessionID, args)
+        const result = await setGoalProgress(directory, context.sessionID, args)
         return { title: result.ok ? "Goal progress" : "Goal not found", output: result.message }
       },
     }),
