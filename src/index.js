@@ -926,9 +926,9 @@ function loopOwnedUserMessageGuardActive(sessionID, messageID) {
   const entry = loopOwnedUserMessageGuards.get(sessionID);
   if (!entry || typeof entry !== "object")
     return false;
-  for (const [id2, expiresAt] of entry.messageIDs.entries())
+  for (const [id, expiresAt] of entry.messageIDs.entries())
     if (expiresAt < now())
-      entry.messageIDs.delete(id2);
+      entry.messageIDs.delete(id);
   const id = typeof messageID === "string" ? messageID : "";
   if (id && entry.messageIDs.has(id))
     return true;
@@ -1617,8 +1617,8 @@ function createGoalCommandHandlers(options = {}) {
   const addLoop = requireFunction2(options.addLoop, "addLoop");
   const scheduleDueWork = requireFunction2(options.scheduleDueWork, "scheduleDueWork");
   const scheduleIdleWork = requireFunction2(options.scheduleIdleWork, "scheduleIdleWork");
-  const toast2 = requireFunction2(options.toast, "toast");
-  const say2 = requireFunction2(options.say, "say");
+  const toast = requireFunction2(options.toast, "toast");
+  const say = requireFunction2(options.say, "say");
   const readState2 = typeof options.readState === "function" ? options.readState : readState;
   const writeState2 = typeof options.writeState === "function" ? options.writeState : writeState;
   const setGoalComplete2 = typeof options.setGoalComplete === "function" ? options.setGoalComplete : setGoalComplete;
@@ -1635,8 +1635,8 @@ function createGoalCommandHandlers(options = {}) {
       const rejected = job.goalCompletionRejectedReason ? " | completion-rejected" : "";
       return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${status} | turns=${job.runCount || 0} | objective=${String(job.action || job.goalFile || "").slice(0, 220)}${checks}${acceptance}${progress}${noProgress}${rejected}`;
     }) : ["No experimental goal jobs."];
-    await toast2(client, goals.length ? `${goals.length} experimental goal(s).` : "No experimental goal jobs.", goals.length ? "info" : "warning");
-    await say2(client, sessionID, `OpenCode Loop experimental goal status:
+    await toast(client, goals.length ? `${goals.length} experimental goal(s).` : "No experimental goal jobs.", goals.length ? "info" : "warning");
+    await say(client, sessionID, `OpenCode Loop experimental goal status:
 ` + lines.join(`
 `));
   }
@@ -1647,7 +1647,7 @@ function createGoalCommandHandlers(options = {}) {
     state.jobs = (state.jobs || []).map((job, index) => isGoalJob(job) && matchJob(job, target, index) ? (count++, { ...job, paused: true }) : job);
     await writeState2(directory, sessionID, state);
     await scheduleDueWork(directory, client, sessionID);
-    await toast2(client, `Paused ${count} experimental goal(s).`, count ? "success" : "warning");
+    await toast(client, `Paused ${count} experimental goal(s).`, count ? "success" : "warning");
   }
   async function resumeGoal(directory, client, sessionID, args) {
     const target = String(args || "").trim() || "goal";
@@ -1660,7 +1660,7 @@ function createGoalCommandHandlers(options = {}) {
       return { ...job, paused: false, enabled: true, goalStatus: job.goalStatus === "blocked" ? "active" : job.goalStatus || "active", lastRunAt: 0, noProgressCount: 0, goalNoProgressReason: "", goalInterruptedReason: "" };
     });
     await writeState2(directory, sessionID, state);
-    await toast2(client, `Resumed ${count} experimental goal(s).`, count ? "success" : "warning");
+    await toast(client, `Resumed ${count} experimental goal(s).`, count ? "success" : "warning");
     if (count) {
       await scheduleDueWork(directory, client, sessionID);
       scheduleIdleWork(directory, client, sessionID);
@@ -1673,15 +1673,15 @@ function createGoalCommandHandlers(options = {}) {
     state.jobs = (state.jobs || []).filter((job, index) => !isGoalJob(job) || target && !matchJob(job, target, index));
     await writeState2(directory, sessionID, state);
     await scheduleDueWork(directory, client, sessionID);
-    await toast2(client, `Cleared ${before - state.jobs.length} experimental goal(s).`, before !== state.jobs.length ? "success" : "warning");
+    await toast(client, `Cleared ${before - state.jobs.length} experimental goal(s).`, before !== state.jobs.length ? "success" : "warning");
   }
   async function completeGoalCommand(directory, client, sessionID, args) {
     const result = await setGoalComplete2(directory, sessionID, { summary: String(args || "").trim() || "Goal manually marked complete.", evidence: "Marked complete by /loop-goal-done.", manual: true });
-    await toast2(client, result.message, result.ok ? "success" : "warning");
+    await toast(client, result.message, result.ok ? "success" : "warning");
   }
   async function blockGoalCommand(directory, client, sessionID, args) {
     const result = await setGoalBlocked2(directory, sessionID, { reason: String(args || "").trim() || "Goal manually marked blocked.", needed: "User input or manual intervention." });
-    await toast2(client, result.message, "warning");
+    await toast(client, result.message, "warning");
   }
   async function addGoal(directory, client, sessionID, args) {
     const text = String(args || "").trim();
@@ -1930,8 +1930,8 @@ function createLoopCommandHandlers(options = {}) {
   const stopWatchdog = requireFunction3(options.stopWatchdog, "stopWatchdog");
   const scheduleDueWork = requireFunction3(options.scheduleDueWork, "scheduleDueWork");
   const maybeRunDueJobs = requireFunction3(options.maybeRunDueJobs, "maybeRunDueJobs");
-  const toast2 = requireFunction3(options.toast, "toast");
-  const say2 = requireFunction3(options.say, "say");
+  const toast = requireFunction3(options.toast, "toast");
+  const say = requireFunction3(options.say, "say");
   const now2 = typeof options.now === "function" ? options.now : now;
   const readState2 = typeof options.readState === "function" ? options.readState : readState;
   const writeState2 = typeof options.writeState === "function" ? options.writeState : writeState;
@@ -1951,7 +1951,7 @@ function createLoopCommandHandlers(options = {}) {
       clearActiveRun(sessionID);
       cancelDueWork(sessionID);
       stopWatchdog(sessionID);
-      await toast2(client, "All loops stopped for this session.", "success");
+      await toast(client, "All loops stopped for this session.", "success");
       return;
     }
     const state = await readState2(directory, sessionID);
@@ -1959,7 +1959,7 @@ function createLoopCommandHandlers(options = {}) {
     state.jobs = state.jobs.filter((job, index) => !matchJob(job, target, index));
     await writeState2(directory, sessionID, state);
     await scheduleDueWork(directory, client, sessionID);
-    await toast2(client, `Stopped ${before - state.jobs.length} loop(s).`, "success");
+    await toast(client, `Stopped ${before - state.jobs.length} loop(s).`, "success");
   }
   async function updateJobState(directory, client, sessionID, args, updater, message) {
     const target = String(args || "").trim() || "all";
@@ -1968,7 +1968,7 @@ function createLoopCommandHandlers(options = {}) {
     state.jobs = (state.jobs || []).map((job, index) => matchJob(job, target, index) ? (count++, updater(job)) : job);
     await writeState2(directory, sessionID, state);
     await scheduleDueWork(directory, client, sessionID);
-    await toast2(client, `${message}: ${count} loop(s).`, count ? "success" : "warning");
+    await toast(client, `${message}: ${count} loop(s).`, count ? "success" : "warning");
   }
   async function statusLoop(directory, client, sessionID) {
     const state = await readState2(directory, sessionID);
@@ -1979,8 +1979,8 @@ function createLoopCommandHandlers(options = {}) {
       const flags = [isGoalJob(job) ? `goal:${goalStatusText(job)}` : undefined, job.paused ? "paused" : "active", Number(job.runNowRequestedAt || 0) > 0 ? "run-now" : undefined, job.safe ? "safe" : undefined, job.askNever ? "ask-never" : undefined, job.noOverlap ? "no-overlap" : undefined, job.checkpointOnly ? "checkpoint-only" : undefined, job.gitCheckpoint ? "git-checkpoint" : undefined].filter(Boolean).join(",");
       return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${jobLabel(job)} | schedule=${scheduling.schedule} | state=${scheduling.state} | runs=${job.runCount || 0} | failures=${job.failureCount || 0} | ${flags}`;
     }) : ["No active loop jobs."];
-    await toast2(client, jobs.length ? `${jobs.length} loop job(s).` : "No active loop jobs.", jobs.length ? "info" : "warning");
-    await say2(client, sessionID, `OpenCode loop status:
+    await toast(client, jobs.length ? `${jobs.length} loop job(s).` : "No active loop jobs.", jobs.length ? "info" : "warning");
+    await say(client, sessionID, `OpenCode loop status:
 ` + lines.join(`
 `));
   }
@@ -1990,11 +1990,11 @@ function createLoopCommandHandlers(options = {}) {
       text = (await readFile(path7.join(stateDir(directory), "loop.log"), "utf8")).trim().split(/\r?\n/).slice(-80).join(`
 `) || text;
     } catch {}
-    await say2(client, sessionID, `OpenCode loop logs:
+    await say(client, sessionID, `OpenCode loop logs:
 ` + text);
   }
   async function helpLoop(client, sessionID) {
-    await say2(client, sessionID, [
+    await say(client, sessionID, [
       "OpenCode Loop help:",
       "/loop continue the project                           auto-continue forever whenever the session becomes idle",
       "/loop idle continue the project                      explicit form of the same idle loop",
@@ -2028,7 +2028,7 @@ function createLoopCommandHandlers(options = {}) {
       count += 1;
     }
     await writeState2(directory, sessionID, state);
-    await toast2(client, `Marked ${count} loop job(s) due now.`, count ? "success" : "warning");
+    await toast(client, `Marked ${count} loop job(s) due now.`, count ? "success" : "warning");
     if (count)
       await scheduleDueWork(directory, client, sessionID);
   }
@@ -2058,23 +2058,23 @@ function createLoopCommandHandlers(options = {}) {
     }
     if (otherSessions.length > 8)
       lines.push(`- ... ${otherSessions.length - 8} more persisted session(s)`);
-    await say2(client, sessionID, lines.join(`
+    await say(client, sessionID, lines.join(`
 `));
   }
   async function initLoop(directory, client, sessionID, args) {
     const target = String(args || "").trim() || "progress.md";
     const full = path7.resolve(directory, target);
     if (await pathExists2(full)) {
-      await toast2(client, `${target} already exists.`, "warning");
+      await toast(client, `${target} already exists.`, "warning");
       return;
     }
     await writeFile(full, DEFAULT_PROGRESS_MD, "utf8");
-    await toast2(client, `Created ${target}.`, "success");
+    await toast(client, `Created ${target}.`, "success");
     await appendLoopLog2(directory, "init", { sessionID, file: target });
   }
   async function exportLoop(directory, client, sessionID) {
     const state = await readState2(directory, sessionID);
-    await say2(client, sessionID, "OpenCode loop state export:\n```json\n" + JSON.stringify(state, null, 2) + "\n```");
+    await say(client, sessionID, "OpenCode loop state export:\n```json\n" + JSON.stringify(state, null, 2) + "\n```");
   }
   return {
     stopLoop,
@@ -2184,8 +2184,8 @@ function createLoopRegistration(options = {}) {
   const snapshotPaths = requireFunction4(options.snapshotPaths, "snapshotPaths");
   const scheduleDueWork = requireFunction4(options.scheduleDueWork, "scheduleDueWork");
   const scheduleIdleWork = requireFunction4(options.scheduleIdleWork, "scheduleIdleWork");
-  const toast2 = requireFunction4(options.toast, "toast");
-  const say2 = requireFunction4(options.say, "say");
+  const toast = requireFunction4(options.toast, "toast");
+  const say = requireFunction4(options.say, "say");
   const parseLoopArgs2 = typeof options.parseLoopArgs === "function" ? options.parseLoopArgs : parseLoopArgs;
   const normalizeLoopScheduleArgs2 = typeof options.normalizeLoopScheduleArgs === "function" ? options.normalizeLoopScheduleArgs : normalizeLoopScheduleArgs;
   const readState2 = typeof options.readState === "function" ? options.readState : readState;
@@ -2199,12 +2199,12 @@ function createLoopRegistration(options = {}) {
   async function addLoop(directory, client, sessionID, args, defaults = {}) {
     const normalized = normalizeLoopScheduleArgs2(args, defaults);
     if (!normalized.ok) {
-      await toast2(client, normalized.error, "warning");
+      await toast(client, normalized.error, "warning");
       return;
     }
     const parsed = parseLoopArgs2(normalized.args, normalized.defaults);
     if (!parsed.ok) {
-      await toast2(client, parsed.error, "warning");
+      await toast(client, parsed.error, "warning");
       return;
     }
     parsed.job.scheduleMode = normalized.scheduleMode;
@@ -2243,13 +2243,13 @@ function createLoopRegistration(options = {}) {
           job: parsed.job.name || parsed.job.id,
           goal: dedicatedGoal.id
         });
-        await toast2(client, "Prompt loop not added: dedicated /goal already owns continuation in this session. Pause/finish the Goal, use another session, or pass --allow-goal-overlap intentionally.", "warning");
+        await toast(client, "Prompt loop not added: dedicated /goal already owns continuation in this session. Pause/finish the Goal, use another session, or pass --allow-goal-overlap intentionally.", "warning");
         return;
       }
     }
     if (parsed.job.dryRun) {
-      await toast2(client, `Loop dry run: ${jobLabel(parsed.job)}`, "info");
-      await say2(client, sessionID, "OpenCode loop dry run:\n```json\n" + JSON.stringify(parsed.job, null, 2) + "\n```");
+      await toast(client, `Loop dry run: ${jobLabel(parsed.job)}`, "info");
+      await say(client, sessionID, "OpenCode loop dry run:\n```json\n" + JSON.stringify(parsed.job, null, 2) + "\n```");
       return;
     }
     const state = await readState2(directory, sessionID);
@@ -2273,7 +2273,7 @@ function createLoopRegistration(options = {}) {
     await scheduleDueWork(directory, client, sessionID);
     if (parsed.job.immediate)
       scheduleIdleWork(directory, client, sessionID);
-    await toast2(client, `${replaced ? "Loop replaced" : "Loop added"}: ${jobLabel(parsed.job)}`, "success");
+    await toast(client, `${replaced ? "Loop replaced" : "Loop added"}: ${jobLabel(parsed.job)}`, "success");
     await appendLoopLog2(directory, replaced ? "replace" : "add", {
       sessionID,
       job: parsed.job.name || parsed.job.id,
@@ -2400,19 +2400,19 @@ function clearSessionActivity(sessionID) {
 // src/source/runtime/scheduler-diagnostics.js
 var DEFAULT_DEFERRAL_LOG_THROTTLE_MS = 30000;
 function createSchedulerDiagnostics(options = {}) {
-  const now2 = typeof options.now === "function" ? options.now : Date.now;
-  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : async () => {};
+  const now = typeof options.now === "function" ? options.now : Date.now;
+  const appendLoopLog = typeof options.appendLoopLog === "function" ? options.appendLoopLog : async () => {};
   const configured = Number(options.throttleMs);
   const throttleMs = Number.isFinite(configured) && configured >= 0 ? configured : DEFAULT_DEFERRAL_LOG_THROTTLE_MS;
   const lastLogged = new Map;
   async function logDeferral(directory, sessionID, reason, extra = {}) {
     const key = `${sessionID || "unknown"}:${reason || "deferred"}:${extra.source || "runtime"}`;
-    const current = now2();
+    const current = now();
     const previous = Number(lastLogged.get(key) || 0);
     if (previous > 0 && current - previous < throttleMs)
       return false;
     lastLogged.set(key, current);
-    await appendLoopLog2(directory, "deferred", {
+    await appendLoopLog(directory, "deferred", {
       sessionID,
       reason,
       ...extra
@@ -2458,7 +2458,7 @@ function createSchedulerRuntime(options = {}) {
     if (options.appendLoopLog)
       await options.appendLoopLog(directory, event, extra);
   };
-  const toast2 = async (client, message, level) => {
+  const toast = async (client, message, level) => {
     if (options.toast)
       await options.toast(client, message, level);
   };
@@ -2522,7 +2522,7 @@ function createSchedulerRuntime(options = {}) {
         }
         await options.maybeRunDueJobs?.(directory, client, sessionID);
       }).catch((error) => {
-        toast2(client, `Loop idle handler failed: ${errorMessage(error)}`, "error").catch(() => {});
+        toast(client, `Loop idle handler failed: ${errorMessage(error)}`, "error").catch(() => {});
         appendLog(directory, "idle-error", { sessionID, error: errorMessage(error) }).catch(() => {});
       });
     }, idleDebounceMs);
@@ -2534,13 +2534,13 @@ function createSchedulerRuntime(options = {}) {
     const timer = setIntervalFn(() => {
       Promise.resolve().then(async () => {
         const state = await readStateFn(directory, sessionID);
-        const delay2 = nextDueDelay(state, clock());
+        const delay = nextDueDelay(state, clock());
         const hasJobs = (state.jobs || []).some((job) => job.enabled !== false && !job.paused && (!isGoalJob(job) || !["completed", "blocked", "cleared"].includes(job.goalStatus)));
-        if (!hasJobs || !Number.isFinite(delay2)) {
+        if (!hasJobs || !Number.isFinite(delay)) {
           stopWatchdog(sessionID);
           return;
         }
-        if (delay2 <= 0)
+        if (delay <= 0)
           await options.maybeRunDueJobs?.(directory, client, sessionID);
         else
           await scheduleDueWork(directory, client, sessionID);
@@ -2557,10 +2557,10 @@ function createSchedulerRuntime(options = {}) {
   async function scheduleDueWork(directory, client, sessionID, minDelayMs = 0) {
     cancelDueWork(sessionID);
     const state = await readStateFn(directory, sessionID);
-    const delay2 = nextDueDelay(state, clock());
-    if (!Number.isFinite(delay2))
+    const delay = nextDueDelay(state, clock());
+    if (!Number.isFinite(delay))
       return;
-    const wait = Math.min(Math.max(delay2, minDelayMs, minDueTimerMs), maxDueTimerMs);
+    const wait = Math.min(Math.max(delay, minDelayMs, minDueTimerMs), maxDueTimerMs);
     const timer = setTimeoutFn(() => {
       dueTimers.delete(sessionID);
       Promise.resolve().then(async () => {
@@ -2577,7 +2577,7 @@ function createSchedulerRuntime(options = {}) {
         }
         await options.maybeRunDueJobs?.(directory, client, sessionID);
       }).catch((error) => {
-        toast2(client, `Loop due timer failed: ${errorMessage(error)}`, "error").catch(() => {});
+        toast(client, `Loop due timer failed: ${errorMessage(error)}`, "error").catch(() => {});
         appendLog(directory, "due-timer-error", { sessionID, error: errorMessage(error) }).catch(() => {});
       });
     }, wait);
@@ -2616,9 +2616,9 @@ function requireFunction5(value, name) {
   return value;
 }
 function createGoalExecutionPolicy(options = {}) {
-  const runShellCommand2 = requireFunction5(options.runShellCommand, "runShellCommand");
+  const runShellCommand = requireFunction5(options.runShellCommand, "runShellCommand");
   const dangerousShell = requireFunction5(options.dangerousShell, "dangerousShell");
-  const toast2 = requireFunction5(options.toast, "toast");
+  const toast = requireFunction5(options.toast, "toast");
   const now2 = typeof options.now === "function" ? options.now : now;
   const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
   async function applyGoalNoProgressGuard(directory, client, sessionID, job, beforeJob) {
@@ -2639,7 +2639,7 @@ function createGoalExecutionPolicy(options = {}) {
       job.paused = true;
       job.goalNoProgressPausedAt = now2();
       job.goalNoProgressReason = `Paused after ${job.noProgressCount} turn(s) without recorded progress. Resume with /loop-goal-resume after adjusting the goal or evidence.`;
-      await toast2(client, job.goalNoProgressReason, "warning");
+      await toast(client, job.goalNoProgressReason, "warning");
       await appendLoopLog2(directory, "goal-no-progress-paused", { sessionID, job: job.name || job.id, count: job.noProgressCount, limit });
     }
     return job;
@@ -2653,7 +2653,7 @@ function createGoalExecutionPolicy(options = {}) {
         results.push({ command, code: -1, output: "Blocked dangerous command in safe mode." });
         continue;
       }
-      const result = await runShellCommand2(command, directory, job.timeoutMs || 300000);
+      const result = await runShellCommand(command, directory, job.timeoutMs || 300000);
       results.push({ command, code: result.code, output: (result.stdout + `
 ` + result.stderr).slice(0, 1200) });
     }
@@ -2663,7 +2663,7 @@ function createGoalExecutionPolicy(options = {}) {
     if (allPassed) {
       job.goalChecksPassedAt = now2();
       job.failureCount = 0;
-      await toast2(client, "Goal checks passed.", "success");
+      await toast(client, "Goal checks passed.", "success");
       if (job.goalCompleteWhenChecksPass) {
         job.goalStatus = "completed";
         job.enabled = false;
@@ -2681,7 +2681,7 @@ exit=${item.code}
 ${item.output}`).join(`
 
 `).slice(0, 4000);
-      await toast2(client, "Goal checks still failing; goal will continue on next idle turn.", "warning");
+      await toast(client, "Goal checks still failing; goal will continue on next idle turn.", "warning");
     }
     await appendLoopLog2(directory, "goal-checks", { sessionID, job: job.name || job.id, results: results.map((item) => ({ command: item.command, code: item.code })) });
     return job;
@@ -2716,7 +2716,7 @@ function dangerousShell(command) {
   ].some((pattern) => pattern.test(text));
 }
 function createJobWorkspaceRuntime(options = {}) {
-  const toast2 = requireFunction6(options.toast, "toast");
+  const toast = requireFunction6(options.toast, "toast");
   const runProcess2 = typeof options.runProcess === "function" ? options.runProcess : runProcess;
   const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
   const readSmallTextFile2 = typeof options.readSmallTextFile === "function" ? options.readSmallTextFile : readSmallTextFile;
@@ -2760,7 +2760,7 @@ ${text.trim().slice(0, 20000)}`);
     if (result.code !== 0)
       result = await runProcess2("git", ["switch", "-c", branch], directory, 30000);
     job.branchDone = true;
-    await toast2(client, result.code === 0 ? `Loop branch active: ${branch}` : `Could not switch/create branch: ${branch}`, result.code === 0 ? "success" : "warning");
+    await toast(client, result.code === 0 ? `Loop branch active: ${branch}` : `Could not switch/create branch: ${branch}`, result.code === 0 ? "success" : "warning");
     await appendLoopLog2(directory, "branch", { sessionID, branch, code: result.code });
     return job;
   }
@@ -2854,7 +2854,7 @@ ${staged.stdout}`);
       await runProcess2("git", ["add", "-A"], directory, 120000);
       await runProcess2("git", ["commit", "-m", `chore: opencode loop checkpoint ${timestamp}`], directory, 120000);
     }
-    await toast2(client, `Loop checkpoint saved: ${prefix}`, "success");
+    await toast(client, `Loop checkpoint saved: ${prefix}`, "success");
   }
   return {
     buildPrompt,
@@ -2968,15 +2968,15 @@ function createSessionStatusRuntime(options = {}) {
     }
     return attempted ? { type: "unknown", source: "sdk-error" } : undefined;
   }
-  async function canFinalizeActiveRun(directory, client, sessionID, active, options2 = {}) {
+  async function canFinalizeActiveRun(directory, client, sessionID, active, options = {}) {
     if (hasActiveToolCalls(sessionID) || hasBusyDescendant(sessionID))
       return false;
-    if (!options2.requireIdle && !options2.forceStale)
+    if (!options.requireIdle && !options.forceStale)
       return true;
-    const completion = options2.forceStale ? await activeRunCompletionFromMessages2(directory, client, sessionID, active) : undefined;
+    const completion = options.forceStale ? await activeRunCompletionFromMessages2(directory, client, sessionID, active) : undefined;
     if (settledAssistantCompletion(completion))
       return true;
-    if (!options2.requireIdle)
+    if (!options.requireIdle)
       return completion === "unknown" && staleActiveRun(sessionID);
     const cached = sessionStatuses.get(sessionID);
     const seenAt = sessionStatusSeenAt.get(sessionID) || 0;
@@ -2988,11 +2988,11 @@ function createSessionStatusRuntime(options = {}) {
       return true;
     }
     if (live?.type) {
-      if (live.type === "busy" && options2.forceStale && completion === "unknown" && staleActiveRun(sessionID))
+      if (live.type === "busy" && options.forceStale && completion === "unknown" && staleActiveRun(sessionID))
         return true;
       return false;
     }
-    if (options2.forceStale && completion === "unknown" && staleActiveRun(sessionID))
+    if (options.forceStale && completion === "unknown" && staleActiveRun(sessionID))
       return true;
     return cachedIdleAfterRun;
   }
@@ -3015,7 +3015,7 @@ function createSessionStatusRuntime(options = {}) {
     });
     return true;
   }
-  async function sessionStatusType(client, sessionID, directory, options2 = {}) {
+  async function sessionStatusType(client, sessionID, directory, options = {}) {
     if (hasActiveToolCalls(sessionID) || hasBusyDescendant(sessionID)) {
       markSessionStatus(sessionID, "busy");
       return "busy";
@@ -3035,7 +3035,7 @@ function createSessionStatusRuntime(options = {}) {
     if (live?.type) {
       if (await recoverCompletedTailWithoutActiveRun(directory, client, sessionID, live.type, seenAt))
         return "idle";
-      if ((live.type === "busy" || live.type === "retry") && options2.recoverStaleActive !== false) {
+      if ((live.type === "busy" || live.type === "retry") && options.recoverStaleActive !== false) {
         const active = activeRuns.get(sessionID);
         if (active) {
           const completion = await activeRunCompletionFromMessages2(directory, client, sessionID, active);
@@ -3060,8 +3060,8 @@ function createSessionStatusRuntime(options = {}) {
     markSessionStatus(sessionID, fallback);
     return fallback;
   }
-  async function sessionIsIdle(client, sessionID, directory, options2 = {}) {
-    return await sessionStatusType(client, sessionID, directory, options2) === "idle";
+  async function sessionIsIdle(client, sessionID, directory, options = {}) {
+    return await sessionStatusType(client, sessionID, directory, options) === "idle";
   }
   return {
     markSessionStatus,
@@ -3247,8 +3247,8 @@ function createActionDispatcher(options = {}) {
       const shellBody = { command, agent };
       if (model)
         shellBody.model = model;
-      const dispatch2 = fireSdk2(client, "session.shell", client.session.shell.bind(client.session), { path: { id: sessionID }, body: shellBody }, { path: { sessionID }, body: shellBody }, { sessionID, ...shellBody });
-      return { startsAssistantTurn: true, dispatch: dispatch2 };
+      const dispatch = fireSdk2(client, "session.shell", client.session.shell.bind(client.session), { path: { id: sessionID }, body: shellBody }, { path: { sessionID }, body: shellBody }, { sessionID, ...shellBody });
+      return { startsAssistantTurn: true, dispatch };
     }
     const prompt = await buildPrompt(directory, job);
     const prefix = kind === "goal" ? "EXPERIMENTAL GOAL MODE CONTINUATION. Continue pursuing the active goal. Do not explain the /loop-goal command. Use the goal tools only when progress/completion/block state is real." : "AUTONOMOUS OPENCODE LOOP ITERATION. Continue the configured task now. Do not explain the /loop command. Do not search for documentation about this plugin. Do not create scheduler files. Do not ask questions. Make reasonable assumptions and work directly.";
@@ -3711,7 +3711,7 @@ function createLoopExecutor(options = {}) {
     toast: toast2,
     dangerousShell: dangerousShell2
   });
-  const dueJobs2 = admissionRuntime.dueJobs;
+  const dueJobs = admissionRuntime.dueJobs;
   function clearActiveRun(sessionID) {
     const active = activeRuns.get(sessionID);
     if (active?.timer)
@@ -3934,7 +3934,7 @@ function createLoopExecutor(options = {}) {
           candidate.watchTriggered = true;
         }
       }
-      const due = dueJobs2(state, Boolean(runOptions.force));
+      const due = dueJobs(state, Boolean(runOptions.force));
       if (!due.length) {
         await writeState2(directory, sessionID, state);
         await reschedule();
@@ -4063,7 +4063,7 @@ function createLoopExecutor(options = {}) {
     }
   }
   return {
-    dueJobs: dueJobs2,
+    dueJobs,
     clearActiveRun,
     disposeSession,
     recoverActiveDispatchFailure,
@@ -4410,7 +4410,8 @@ async function dedicatedGoalToolRejection(directory, sessionID) {
       `A dedicated OpenCode Goal is persisted for this session (status=${String(goal.status || "unknown")}).`,
       "The opencode_loop_goal_* tools control only experimental /loop-goal jobs and will not mutate the dedicated Goal.",
       "Use opencode_goal_progress for checkpoints, opencode_goal_wait_for_user when user/manual input is required, opencode_goal_blocked for a genuine blocker, or opencode_goal_complete for verified completion."
-    ].join("\n")
+    ].join(`
+`)
   };
 }
 function goalTools(defaultDirectory) {
@@ -4532,8 +4533,8 @@ var DEFAULT_SESSION_STALE_MS = 12 * 60 * 60 * 1000;
 function sessionKey(sessionID) {
   return String(sessionID || "").trim();
 }
-function createSessionRegistry({ now: now2 = Date.now, staleAfterMs = DEFAULT_SESSION_STALE_MS } = {}) {
-  if (typeof now2 !== "function")
+function createSessionRegistry({ now = Date.now, staleAfterMs = DEFAULT_SESSION_STALE_MS } = {}) {
+  if (typeof now !== "function")
     throw new TypeError("session registry requires a clock function");
   if (!Number.isFinite(staleAfterMs) || staleAfterMs < 0)
     throw new TypeError("session registry requires a non-negative staleAfterMs");
@@ -4542,7 +4543,7 @@ function createSessionRegistry({ now: now2 = Date.now, staleAfterMs = DEFAULT_SE
     const key = sessionKey(sessionID);
     if (!key)
       throw new TypeError("session registry requires a session ID");
-    const seenAt = Number(now2());
+    const seenAt = Number(now());
     if (!Number.isFinite(seenAt))
       throw new TypeError("session registry clock must return a finite number");
     const entry = Object.freeze({ sessionID: key, runtime, seenAt });
@@ -4561,7 +4562,7 @@ function createSessionRegistry({ now: now2 = Date.now, staleAfterMs = DEFAULT_SE
       return false;
     return sessions.delete(key);
   }
-  function pruneStale(at = now2()) {
+  function pruneStale(at = now()) {
     const timestamp = Number(at);
     if (!Number.isFinite(timestamp))
       throw new TypeError("session registry prune time must be finite");
@@ -4645,7 +4646,7 @@ function createRuntimeScope() {
 }
 
 // src/source/runtime/timers.js
-function createOwnedTimer(scope, callback, delay2, repeat, api, ref) {
+function createOwnedTimer(scope, callback, delay, repeat, api, ref) {
   if (!scope?.isActive?.())
     return;
   let active = true;
@@ -4660,7 +4661,7 @@ function createOwnedTimer(scope, callback, delay2, repeat, api, ref) {
     }
     callback(...args);
   });
-  handle = repeat ? api.setInterval(invoke, delay2) : api.setTimeout(invoke, delay2);
+  handle = repeat ? api.setInterval(invoke, delay) : api.setTimeout(invoke, delay);
   release = scope.track(() => {
     if (repeat)
       api.clearInterval(handle);
@@ -4686,11 +4687,11 @@ function createOwnedTimer(scope, callback, delay2, repeat, api, ref) {
 }
 function createRuntimeTimers(scope, api = globalThis) {
   return Object.freeze({
-    timeout(callback, delay2, options = {}) {
-      return createOwnedTimer(scope, callback, delay2, false, api, options.ref !== false);
+    timeout(callback, delay, options = {}) {
+      return createOwnedTimer(scope, callback, delay, false, api, options.ref !== false);
     },
-    interval(callback, delay2, options = {}) {
-      return createOwnedTimer(scope, callback, delay2, true, api, options.ref !== false);
+    interval(callback, delay, options = {}) {
+      return createOwnedTimer(scope, callback, delay, true, api, options.ref !== false);
     }
   });
 }
@@ -4715,14 +4716,14 @@ function validateRuntime(runtime, sessionID) {
   return runtime;
 }
 function createSessionRuntimeManager({
-  now: now2 = Date.now,
+  now = Date.now,
   staleAfterMs = DEFAULT_SESSION_STALE_MS,
   timerAPI = globalThis,
   runtimeFactory = defaultRuntimeFactory
 } = {}) {
   if (typeof runtimeFactory !== "function")
     throw new TypeError("session runtime manager requires a runtime factory");
-  const registry = createSessionRegistry({ now: now2, staleAfterMs });
+  const registry = createSessionRegistry({ now, staleAfterMs });
   let disposed = false;
   function observeExternal(sessionID) {
     if (disposed)
@@ -4752,7 +4753,7 @@ function createSessionRuntimeManager({
     current.runtime.dispose(reason);
     return true;
   }
-  function pruneStale(at = now2()) {
+  function pruneStale(at = now()) {
     const before = new Map(registry.entries().map((entry) => [entry.sessionID, entry.runtime]));
     const removed = registry.pruneStale(at);
     const errors = [];
@@ -4953,12 +4954,12 @@ function scopedClient(client) {
   });
 }
 function scheduleLegacyCleanup(dispose, isCurrentGeneration) {
-  for (const delay2 of [0, 25, 100, 500, 2000, 1e4, 30000]) {
+  for (const delay of [0, 25, 100, 500, 2000, 1e4, 30000]) {
     const timer = setTimeout(() => {
       if (!isCurrentGeneration())
         return;
       Promise.resolve(dispose()).catch(() => {});
-    }, delay2);
+    }, delay);
     timer.unref?.();
   }
 }
