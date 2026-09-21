@@ -55,6 +55,7 @@ jobs:
           plugin_dir="$XDG_CONFIG_HOME/opencode/plugins"
           mkdir -p "$plugin_dir" "$project" "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
           cp "$GITHUB_WORKSPACE/scripts/fixtures/opencode2-real-adapter-probe.js" "$plugin_dir/opencode-loop-v2-real.js"
+          touch "$project/.gitkeep"
           git init --quiet "$project"
           git -C "$project" config user.email "opencode-loop-ci@example.invalid"
           git -C "$project" config user.name "OpenCode Loop CI"
@@ -129,7 +130,7 @@ jobs:
           echo "XDG_CONFIG_HOME=$project/.home/.config" >> "$GITHUB_ENV"
           echo "XDG_DATA_HOME=$project/.home/.local/share" >> "$GITHUB_ENV"
           echo "XDG_STATE_HOME=$project/.home/.local/state" >> "$GITHUB_ENV"
-      - name: Require the dual local plugin to load on 2.0.11
+      - name: Require the dual local plugin and Loop commands on 2.0.11
         shell: bash
         env:
           OPENCODE_DISABLE_AUTOUPDATE: "true"
@@ -137,32 +138,36 @@ jobs:
           OPENCODE_PRINT_LOGS: "1"
         run: |
           cd "$OPENCODE_LOOP_EXACT_PROJECT"
-          opencode api --standalone get /api/plugin > "$RUNNER_TEMP/opencode-2-0-11-plugins.json"
-          cat "$RUNNER_TEMP/opencode-2-0-11-plugins.json"
+          commands="$RUNNER_TEMP/opencode-2-0-11-commands.json"
+          plugins="$RUNNER_TEMP/opencode-2-0-11-plugins.json"
+          ready=0
+          for attempt in $(seq 1 60); do
+            opencode api get /api/command > "$commands" 2>"$RUNNER_TEMP/opencode-2-0-11-command.err" || true
+            if node -e '
+              const fs=require("node:fs");
+              let value; try { value=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); } catch { process.exit(1) }
+              const data=Array.isArray(value?.data)?value.data:Array.isArray(value)?value:[];
+              const names=new Set(data.map((item)=>item?.name));
+              const required=["loop","loop-status","loop-now","loop-pause","loop-resume","loop-stop","loop-help","loop-doctor"];
+              if(required.every((name)=>names.has(name))) process.exit(0);
+              process.exit(1);
+            ' "$commands"; then
+              ready=1
+              break
+            fi
+            sleep 0.2
+          done
+          cat "$commands" || true
+          cat "$RUNNER_TEMP/opencode-2-0-11-command.err" >&2 || true
+          opencode api get /api/plugin > "$plugins" 2>"$RUNNER_TEMP/opencode-2-0-11-plugin.err" || true
+          cat "$plugins" || true
+          cat "$RUNNER_TEMP/opencode-2-0-11-plugin.err" >&2 || true
+          test "$ready" = "1"
           node -e '
             const fs=require("node:fs");
             const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
             const data=Array.isArray(value?.data)?value.data:Array.isArray(value)?value:[];
             const plugin=data.find((item)=>item?.id==="@bybrawe/opencode-loop" || String(item?.source?.path||"").includes("opencode-loop.ts"));
-            if(!plugin) throw new Error("Loop local plugin missing from OpenCode 2.0.11 inventory");
+            if(!plugin) throw new Error("Loop local plugin missing from OpenCode 2.0.11 inventory after command activation");
             if(plugin?.state?.status!=="active") throw new Error("Loop local plugin is not active: "+JSON.stringify(plugin));
-          ' "$RUNNER_TEMP/opencode-2-0-11-plugins.json"
-      - name: Require Loop commands to register on 2.0.11
-        shell: bash
-        env:
-          OPENCODE_DISABLE_AUTOUPDATE: "true"
-          OPENCODE_DISABLE_LSP_DOWNLOAD: "true"
-          OPENCODE_PRINT_LOGS: "1"
-        run: |
-          cd "$OPENCODE_LOOP_EXACT_PROJECT"
-          opencode api --standalone get /api/command > "$RUNNER_TEMP/opencode-2-0-11-commands.json"
-          cat "$RUNNER_TEMP/opencode-2-0-11-commands.json"
-          node -e '
-            const fs=require("node:fs");
-            const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
-            const data=Array.isArray(value?.data)?value.data:Array.isArray(value)?value:[];
-            const names=new Set(data.map((item)=>item?.name));
-            for(const required of ["loop","loop-status","loop-now","loop-pause","loop-resume","loop-stop","loop-help","loop-doctor"]){
-              if(!names.has(required)) throw new Error("Missing OpenCode 2.0.11 command: "+required);
-            }
-          ' "$RUNNER_TEMP/opencode-2-0-11-commands.json"
+          ' "$plugins"
