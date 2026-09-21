@@ -18,7 +18,9 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
 
     let promptRuntime
     let diagnosticsRuntime
-    let requireBusyBeforeIdle = false
+    const hostVersion = String(ctx?.app?.version || "").trim()
+    const promiseStreamHost = /^2\./.test(hostVersion)
+    const requireBusyBeforeIdle = promiseStreamHost
     const logRuntime = createOpenCode2LogRuntime()
     const runtimeDirectory = String(ctx?.location?.directory || ctx?.options?.directory || "").trim() || undefined
 
@@ -30,7 +32,6 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
     }
 
     const commandRegistration = await ctx.command.transform((draft) => {
-      requireBusyBeforeIdle = typeof draft?.add === "function"
       return registerOpenCode2LoopCommands(draft, {
       execute: async ({ name, sessionID, arguments: argumentsText, delivery }) => {
         if (!promptRuntime || !diagnosticsRuntime) {
@@ -72,7 +73,7 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
     const runtime = createOpenCode2RuntimeAdapter(ctx, {
       directory: runtimeDirectory,
       onEvent: onRuntimeEvent,
-      eventSubscribeStyle: requireBusyBeforeIdle ? "stream" : "auto",
+      eventSubscribeStyle: promiseStreamHost ? "stream" : "auto",
     })
     promptRuntime = createOpenCode2PromptRuntime({
       prompt: (request) => runtime.prompt(request),
