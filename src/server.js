@@ -5866,10 +5866,17 @@ function createOpenCode2PromptRuntime(options = {}) {
         });
       }
       if (event.status === "idle") {
-        if (requireBusyBeforeIdle && awaitingBusy.has(scope.key)) {
-          return { handled: true, dispatched: false, reason: "awaiting-busy" };
+        if (requireBusyBeforeIdle) {
+          if (awaitingBusy.has(scope.key)) {
+            return { handled: true, dispatched: false, reason: "awaiting-busy" };
+          }
+          return runIdlePrompt(event);
         }
-        return runIdlePrompt(event);
+        idle.set(scope.key, true);
+        return await enqueueScope(scope, async () => {
+          await scheduleScope(scope);
+          return { handled: true, dispatched: false };
+        });
       }
       return { handled: false };
     }
