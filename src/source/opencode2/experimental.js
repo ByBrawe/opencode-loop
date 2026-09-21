@@ -69,7 +69,11 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
       await commandRegistration?.dispose?.()
       return undefined
     }
-    const runtime = createOpenCode2RuntimeAdapter(ctx, { directory: runtimeDirectory, onEvent: onRuntimeEvent })
+    const runtime = createOpenCode2RuntimeAdapter(ctx, {
+      directory: runtimeDirectory,
+      onEvent: onRuntimeEvent,
+      eventSubscribeStyle: requireBusyBeforeIdle ? "stream" : "auto",
+    })
     promptRuntime = createOpenCode2PromptRuntime({
       prompt: (request) => runtime.prompt(request),
       command: capabilities.sessionCommand ? (request) => runtime.command(request) : undefined,
