@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.38
+
+Long-session provider-error, waiting-user, and OpenCode 2.0.11 compatibility release.
+
+- Route Loop-owned OpenCode `session.error` events into stable V1 run ownership instead of letting a terminal provider failure disappear into later idle/stale recovery.
+- Pause fail-closed on non-retryable provider/auth/policy/unknown session errors, persisting the error name/message/timestamp so an unlimited idle loop cannot keep dispatching after a terminal host failure.
+- Refund and exponentially back off retryable terminal `APIError` attempts without consuming logical `runCount`, `--max-runs`, or ordinary failure budget; keep `MessageAbortedError` on the existing user/session-abort path.
+- Deduplicate identical stale/completed-status recovery diagnostics per active run, preventing concurrent status probes from amplifying one recovery event into hundreds of `loop.log` records.
+- Keep ordinary `/loop devam et` intentionally unlimited, but pause after two consecutive current assistant replies explicitly say autonomous work is waiting for user approval, input, access, credentials, or another user action. A reply naming concrete autonomous next work clears the waiting-user streak.
+- Add exact regressions for the reported Loto Diyarı free-tier provider error, the Turkish `Onay bekleyenler: commit + push, canlı migration, cihaz testi` steady-state, retryable provider recovery, abort classification, recovery-log deduplication, waiting-user UX, and generated-bundle parity.
+- Harden Windows regression reliability with bounded temporary-directory cleanup retries and bounded waits for persisted stale-busy recovery, without changing production scheduler semantics.
+- Add a dual local-plugin server entry that preserves the OpenCode 1.x `server` contract while exposing the OpenCode 2.x `{ id, setup }` contract required by OpenCode 2.0.11.
+- Support the current OpenCode 2.0.11 command editor and session-command field shapes while retaining the older beta adapter path; normalize current native session execution/status events and select the official Promise event stream without relying on function arity or command-reload timing.
+- Prove OpenCode 2.0.11 compatibility with an exact real-host gate: the local plugin is active, Loop commands register, a two-turn autonomous Loop reaches the deterministic provider exactly twice, control lifecycle commands mutate persisted state correctly, and `--max-runs` stops further turns.
+- Verify the exact feature heads across Ubuntu/Windows CI, minimum/latest OpenCode plugin compatibility, real OpenCode Loop canaries, Dedicated Goal Coexistence, V2 Lifecycle Contract, OpenCode 2 Real Adapter, and the Single-file Bundle Gate.
+
 ## 0.5.37
 
 Dedicated Goal tool-isolation release.
