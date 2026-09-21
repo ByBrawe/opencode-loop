@@ -351,6 +351,11 @@ async function verifyTwoTurnLoop({ directory, sessionID, events, prompts, native
     events.push({
       type: "session.status",
       location: { directory },
+      data: { sessionID, status: { type: "busy" } },
+    })
+    events.push({
+      type: "session.status",
+      location: { directory },
       data: { sessionID, status: { type: "idle" } },
     })
     await waitFor(() => prompts.length === 2, "OpenCode 2.0.11 second dispatch from native idle status")
