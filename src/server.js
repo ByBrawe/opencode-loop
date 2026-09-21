@@ -6328,7 +6328,7 @@ var OpenCodeLoopV2ExperimentalPlugin = {
         if (!promptRuntime || !diagnosticsRuntime) {
           throw new Error("OpenCode Loop V2 runtime is not ready");
         }
-        return await onRuntimeEvent(Object.freeze({
+        const commandEvent = Object.freeze({
           kind: "command",
           action: "executed",
           sessionID: String(sessionID || ""),
@@ -6336,7 +6336,17 @@ var OpenCodeLoopV2ExperimentalPlugin = {
           name,
           arguments: argumentsText,
           delivery
-        }));
+        });
+        const result = await onRuntimeEvent(commandEvent);
+        if (result?.handled && result?.accepted && ["loop", "loop-now", "loop-resume"].includes(name)) {
+          await onRuntimeEvent(Object.freeze({
+            kind: "session",
+            action: "idle",
+            sessionID: String(sessionID || ""),
+            directory: runtimeDirectory
+          }));
+        }
+        return result;
       }
     }));
     if (!capabilities.eventSubscribe || !capabilities.sessionPrompt) {
