@@ -5931,6 +5931,17 @@ function normalizeOpenCode2NativeEvent(raw) {
       arguments: parsed.arguments
     });
   }
+  if (type === "session.status") {
+    const status = text2(record2(data.status)?.type);
+    if (!sessionID || !status)
+      return;
+    return Object.freeze({ kind: "session", action: "status", sessionID, directory, status });
+  }
+  if (type === "session.idle") {
+    if (!sessionID)
+      return;
+    return Object.freeze({ kind: "session", action: "idle", sessionID, directory });
+  }
   if (type === "session.execution.started") {
     if (!sessionID)
       return;
