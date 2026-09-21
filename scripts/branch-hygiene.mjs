@@ -128,7 +128,15 @@ async function main() {
   if (!dryRun) {
     for (const item of candidates) {
       try {
-        await request(client, "DELETE", `${root}/git/refs/heads/${encodeURIComponent(item.name)}`)
+        const encodedRef = item.name.split("/").map(encodeURIComponent).join("/")
+        const refPath = `${root}/git/ref/heads/${encodedRef}`
+        const current = await request(client, "GET", refPath)
+        const currentSha = String(current?.object?.sha || "").trim()
+        if (currentSha !== item.sha) {
+          console.log(`SKIP ${item.name}: head changed from ${item.sha} to ${currentSha || "unknown"}`)
+          continue
+        }
+        await request(client, "DELETE", `${root}/git/refs/heads/${encodedRef}`)
         deleted.push(item)
       } catch (error) {
         failures.push({ item, error: error instanceof Error ? error.message : String(error) })
