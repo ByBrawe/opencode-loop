@@ -57,6 +57,8 @@ Completion-bounded idle loops add two safeguards:
 
 This avoids post-completion spam without weakening the deliberately infinite `/loop devam et` form.
 
+Plain continuation also has one fail-safe for a different terminal condition: if two consecutive current assistant turns explicitly report that autonomous work is waiting for user approval, access, credentials, or another user action, Loop pauses instead of polling the same external dependency forever. A reply that names concrete autonomous next work clears that waiting-user streak. Resume explicitly after supplying the required user-side action.
+
 For a real project, a stronger version is:
 
 ```text
