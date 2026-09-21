@@ -304,6 +304,61 @@ async function verifyTwoTurnLoop({ directory, sessionID, events, prompts, native
 }
 
 {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "opencode-loop-v2-2-0-11-command-add-"))
+  const sessionID = "ses_v2_2_0_11_add"
+  const events = controllableStream()
+  const prompts = []
+  const commands = new Map()
+  const ctx = {
+    location: { directory },
+    command: {
+      transform: async (callback) => {
+        await callback({
+          add(definition) {
+            commands.set(definition.name, definition)
+          },
+        })
+        return { dispose: async () => {} }
+      },
+    },
+    event: { subscribe: () => events.stream },
+    session: {
+      prompt: async (input) => {
+        prompts.push(structuredClone(input))
+        return { accepted: true }
+      },
+    },
+  }
+
+  const cleanup = await OpenCodeLoopV2ExperimentalPlugin.setup(ctx)
+  try {
+    assert.ok(commands.has("loop"), "OpenCode 2.0.11 add() command editor must receive /loop")
+    await commands.get("loop").execute({
+      sessionID,
+      prompt: { text: "0s --max-runs 1 continue exact 2.0.11 command path" },
+      delivery: "steer",
+    })
+
+    const stateFile = path.join(directory, ".opencode", "opencode-loop", `${sessionID}.json`)
+    await waitFor(async () => {
+      try { return JSON.parse(await readFile(stateFile, "utf8")).jobs?.length === 1 } catch { return false }
+    }, "OpenCode 2.0.11 direct command state creation")
+
+    events.push({
+      type: "session.execution.succeeded",
+      location: { directory },
+      data: { sessionID },
+    })
+    await waitFor(() => prompts.length === 1, "OpenCode 2.0.11 direct command loop dispatch")
+    assert.equal(prompts[0].sessionID, sessionID)
+    assert.match(prompts[0].text || "", /continue exact 2\.0\.11 command path/)
+  } finally {
+    await cleanup?.()
+    await rm(directory, { recursive: true, force: true })
+  }
+}
+
+{
   let commandDisposals = 0
   const result = await OpenCodeLoopV2ExperimentalPlugin.setup({
     command: {
