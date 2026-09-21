@@ -164,6 +164,8 @@ async function verifyTwoTurnLoop({ directory, sessionID, events, prompts, native
     sessionID: "ses_v2",
     noReply: true,
     parts: [{ type: "text", text: "OpenCode loop status:\nNo active loop jobs." }],
+    text: "OpenCode loop status:\nNo active loop jobs.",
+    resume: false,
     agent: "build",
     model: { providerID: "canary", modelID: "canary" },
   })
