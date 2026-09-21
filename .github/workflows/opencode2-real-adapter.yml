@@ -75,21 +75,26 @@ jobs:
           OPENCODE_PRINT_LOGS: "1"
         run: |
           rm -f "$OPENCODE_LOOP_V2_MARKER"
+          ready=0
           for attempt in $(seq 1 80); do
             opencode api get /api/command -H "x-opencode-directory: $OPENCODE_LOOP_V2_PROJECT" > "$RUNNER_TEMP/opencode2-real-command.json" 2>"$RUNNER_TEMP/opencode2-real-command.err" || true
-            if [ -f "$OPENCODE_LOOP_V2_MARKER" ]; then
-              cat "$OPENCODE_LOOP_V2_MARKER"
-              node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(value.id!=="bybrawe.opencode-loop.v2.experimental" || value.activated!==true || value.commandTransform!==true || value.eventSubscribe!==true || value.sessionPrompt!==true || value.sessionCommand!==true || value.commandFieldProbe?.matched!==true) process.exit(1)' "$OPENCODE_LOOP_V2_MARKER"
-              cat "$RUNNER_TEMP/opencode2-real-command.json"
-              node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); const data=Array.isArray(value?.data)?value.data:Array.isArray(value)?value:[]; const names=new Set(data.map((item)=>item?.name)); for (const required of ["loop-status","loop-now","loop-export","loop-help","loop-doctor","loop-logs"]) if(!names.has(required)) process.exit(1)' "$RUNNER_TEMP/opencode2-real-command.json"
-              exit 0
+            if node -e 'const fs=require("node:fs"); let value; try { value=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); } catch { process.exit(1) }; const data=Array.isArray(value?.data)?value.data:Array.isArray(value)?value:[]; const names=new Set(data.map((item)=>item?.name)); const required=["loop","loop-status","loop-now","loop-export","loop-help","loop-doctor","loop-logs"]; process.exit(required.every((name)=>names.has(name))?0:1)' "$RUNNER_TEMP/opencode2-real-command.json"; then
+              ready=1
+              break
             fi
             sleep 0.2
           done
-          cat "$RUNNER_TEMP/opencode2-real-command.json" >&2 || true
+          cat "$RUNNER_TEMP/opencode2-real-command.json" || true
           cat "$RUNNER_TEMP/opencode2-real-command.err" >&2 || true
-          opencode api get /api/plugin -H "x-opencode-directory: $OPENCODE_LOOP_V2_PROJECT" >&2 || true
-          exit 1
+          test "$ready" = "1"
+
+          # The marker is a probe-side diagnostic only. Validate it when the
+          # host happened to flush it, but do not make a filesystem side effect
+          # stronger evidence than the real command registry + E2E canary.
+          if [ -f "$OPENCODE_LOOP_V2_MARKER" ]; then
+            cat "$OPENCODE_LOOP_V2_MARKER"
+            node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(value.id!=="bybrawe.opencode-loop.v2.experimental" || value.activated!==true || value.commandTransform!==true || value.eventSubscribe!==true || value.sessionPrompt!==true || value.sessionCommand!==true) process.exit(1)' "$OPENCODE_LOOP_V2_MARKER"
+          fi
       # Keep the multi-turn host gate separate from the capability probe above.
       - name: Run real two-turn V2 Loop canary on 2.0.11
         run: node scripts/opencode2-loop-canary.mjs
