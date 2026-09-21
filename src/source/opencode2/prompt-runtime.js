@@ -90,6 +90,7 @@ export function createOpenCode2PromptRuntime(options = {}) {
   const setTimer = typeof options.setTimer === "function" ? options.setTimer : setTimeout
   const clearTimer = typeof options.clearTimer === "function" ? options.clearTimer : clearTimeout
   const onError = typeof options.onError === "function" ? options.onError : () => {}
+  const requireBusyBeforeIdle = options.requireBusyBeforeIdle === true
   const timers = new Map()
   const idle = new Map()
   const queues = new Map()
@@ -185,7 +186,7 @@ export function createOpenCode2PromptRuntime(options = {}) {
 
     const text = promptText(job)
     const request = { sessionID: scope.sessionID, text }
-    awaitingBusy.add(scope.key)
+    if (requireBusyBeforeIdle) awaitingBusy.add(scope.key)
     try {
       await options.prompt(request)
     } catch (error) {
@@ -337,7 +338,7 @@ export function createOpenCode2PromptRuntime(options = {}) {
     }
 
     if (event?.kind === "session" && event?.action === "idle") {
-      if (scope && awaitingBusy.has(scope.key)) {
+      if (requireBusyBeforeIdle && scope && awaitingBusy.has(scope.key)) {
         return { handled: true, dispatched: false, reason: "awaiting-busy" }
       }
       return runIdlePrompt(event)
@@ -352,7 +353,7 @@ export function createOpenCode2PromptRuntime(options = {}) {
         })
       }
       if (event.status === "idle") {
-        if (awaitingBusy.has(scope.key)) {
+        if (requireBusyBeforeIdle && awaitingBusy.has(scope.key)) {
           return { handled: true, dispatched: false, reason: "awaiting-busy" }
         }
         return runIdlePrompt(event)
