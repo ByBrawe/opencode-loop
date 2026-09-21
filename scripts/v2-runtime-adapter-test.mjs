@@ -349,11 +349,11 @@ async function verifyTwoTurnLoop({ directory, sessionID, events, prompts, native
     assert.match(prompts[0].text || "", /continue exact 2\.0\.11 command path/)
 
     events.push({
-      type: "session.execution.succeeded",
+      type: "session.status",
       location: { directory },
-      data: { sessionID },
+      data: { sessionID, status: { type: "idle" } },
     })
-    await waitFor(() => prompts.length === 2, "OpenCode 2.0.11 second dispatch from real idle event")
+    await waitFor(() => prompts.length === 2, "OpenCode 2.0.11 second dispatch from native idle status")
     const state = JSON.parse(await readFile(stateFile, "utf8"))
     assert.equal(state.jobs[0].runCount, 2)
     assert.equal(state.jobs[0].enabled, false)
