@@ -1086,12 +1086,35 @@ var NEXT_WORK_PATTERNS = [
   /\bremaining (?:work|task|todo|step)/i,
   /devam (?:edece\u011Fim|ediyorum|etmek gerek)(?=\s|[.,;:!\u2014-]|$)/i
 ];
+var WAITING_USER_PATTERNS = [
+  /(?:^|\n)\s*onay bekleyenler\s*:/i,
+  /(?:^|\n)\s*(?:kullan\u0131c\u0131|user) (?:onay\u0131|onayi|aksiyonu|i\u015Flemi|islemi|eri\u015Fimi|erisimi) (?:bekleniyor|gerekiyor|gerekli)\b/i,
+  /\b(?:senin|sizin) (?:onay\u0131n|onay\u0131n\u0131z|onayiniz|aksiyonun|aksiyonunuz|eri\u015Fimin|erisimin) (?:bekleniyor|gerekiyor|gerekli)\b/i,
+  /\b(?:onay|eri\u015Fim|erisim|yetki) olmadan (?:devam edemem|ilerleyemem|i\u015Flem yapamam|islem yapamam)\b/i,
+  /(?:^|\n)\s*(?:waiting (?:for|on) (?:your|user) (?:approval|input|action|access|credentials?)|(?:approval|user action|access) (?:required|pending))\s*:?/i,
+  /\b(?:requires?|needs?) (?:your|user) (?:approval|input|action|access|credentials?)\b/i,
+  /\bblocked (?:pending|until|on) (?:your|user|approval|access|credentials?)\b/i
+];
+var WAITING_USER_NEGATIONS = [
+  /\b(?:onay|eri\u015Fim|erisim|yetki) (?:gerekmiyor|gerekli de\u011Fil|gerekli degil|beklenmiyor)\b/i,
+  /\bno (?:user )?(?:approval|input|action|access|credentials?) (?:is )?(?:needed|required|pending)\b/i
+];
 function isContinuationShorthand(value) {
   return CONTINUATION_SHORTHANDS.has(String(value || "").trim().toLowerCase().replace(/\s+/g, " "));
 }
 function isCompletionBoundedContinuation(value) {
   const text = String(value || "").trim();
   return COMPLETION_BOUNDED_PATTERNS.some((pattern) => pattern.test(text));
+}
+function isWaitingUserReply(value) {
+  const text = String(value || "").trim();
+  if (!text)
+    return false;
+  if (WAITING_USER_NEGATIONS.some((pattern) => pattern.test(text)))
+    return false;
+  if (NEXT_WORK_PATTERNS.some((pattern) => pattern.test(text)))
+    return false;
+  return WAITING_USER_PATTERNS.some((pattern) => pattern.test(text));
 }
 function isTerminalNoWorkReply(value) {
   const text = String(value || "").trim();
@@ -3284,8 +3307,10 @@ function messageText(message) {
   return "";
 }
 async function applyTerminalContinuationGuard(directory, client, sessionID, job, options = {}) {
-  if (job?.scheduleMode !== "idle" || !isCompletionBoundedContinuation(job?.action)) {
-    return { job, terminal: false, pausedNow: false };
+  const completionBounded = isCompletionBoundedContinuation(job?.action);
+  const continuation = completionBounded || isContinuationShorthand(job?.action);
+  if (job?.scheduleMode !== "idle" || !continuation) {
+    return { job, terminal: false, pausedNow: false, waitingUser: false, waitingUserPausedNow: false };
   }
   const messages = await readRecentSessionMessages(client, sessionID, directory, options.messageLimit || 8);
   if (!messages)
@@ -3303,11 +3328,31 @@ async function applyTerminalContinuationGuard(directory, client, sessionID, job,
     return { job, terminal: false, pausedNow: false };
   }
   const text = messageText(tail);
+  const waitingUser = isWaitingUserReply(text);
+  if (waitingUser) {
+    if (job.terminalNoWorkCount)
+      job.terminalNoWorkCount = 0;
+    job.waitingUserCount = (job.waitingUserCount || 0) + 1;
+    job.lastWaitingUserAt = Date.now();
+    job.lastWaitingUserSummary = text.slice(0, 1000);
+    const threshold = Math.max(2, Number(options.waitingUserThreshold) || 2);
+    const waitingUserPausedNow = job.waitingUserCount >= threshold && !job.paused;
+    if (waitingUserPausedNow) {
+      job.paused = true;
+      job.lastFailureReason = "waiting_user";
+    }
+    return { job, terminal: false, pausedNow: false, waitingUser: true, waitingUserPausedNow, text };
+  }
+  if (job.waitingUserCount)
+    job.waitingUserCount = 0;
+  if (!completionBounded) {
+    return { job, terminal: false, pausedNow: false, waitingUser: false, waitingUserPausedNow: false, text };
+  }
   const terminal = isTerminalNoWorkReply(text);
   if (!terminal) {
     if (job.terminalNoWorkCount)
       job.terminalNoWorkCount = 0;
-    return { job, terminal: false, pausedNow: false, text };
+    return { job, terminal: false, pausedNow: false, waitingUser: false, waitingUserPausedNow: false, text };
   }
   job.terminalNoWorkCount = (job.terminalNoWorkCount || 0) + 1;
   job.lastTerminalNoWorkAt = Date.now();
@@ -3318,7 +3363,7 @@ async function applyTerminalContinuationGuard(directory, client, sessionID, job,
     job.paused = true;
     job.lastFailureReason = "terminal_no_work";
   }
-  return { job, terminal: true, pausedNow, text };
+  return { job, terminal: true, pausedNow, waitingUser: false, waitingUserPausedNow: false, text };
 }
 
 // src/source/runtime/run-finalization.js
@@ -3412,6 +3457,16 @@ exit=` + postrun.code + `
     }
     const terminal = await applyTerminalContinuationGuard2(directory, client, sessionID, job);
     job = terminal.job;
+    if (terminal.waitingUserPausedNow) {
+      await appendLoopLog2(directory, "waiting-user", {
+        sessionID,
+        job: job.name || job.id,
+        count: job.waitingUserCount,
+        summary: String(terminal.text || "").slice(0, 1000)
+      });
+      await notifyJob2(directory, job, "waiting_user");
+      await toast2(client, "Loop paused: autonomous continuation is waiting for explicit user approval, access, or action.", "warning");
+    }
     if (terminal.pausedNow) {
       await appendLoopLog2(directory, "terminal-no-work", {
         sessionID,
