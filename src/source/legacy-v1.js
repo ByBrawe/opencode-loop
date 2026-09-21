@@ -43,6 +43,7 @@ const executorRuntime = createLoopExecutor({
 })
 const {
   clearActiveRun,
+  handleSessionError,
   finalizeActiveRun,
   maybeRunDueJobs: runDueJobs,
   sessionIsIdle,
@@ -263,6 +264,10 @@ export const OpenCodeLoopPlugin = async ({ client, directory }) => {
       }
       const steering = await goalSteeringRuntime.handleEvent(directory, client, event)
       if (steering?.handled && steering.sessionID) rememberSession(directory, client, steering.sessionID)
+      if (event.type === "session.error") {
+        const handledError = await handleSessionError(directory, client, event)
+        if (handledError && event?.properties?.sessionID) rememberSession(directory, client, event.properties.sessionID)
+      }
       const statusUpdate = updateSessionStatusFromEvent(event)
       if (statusUpdate?.sessionID) rememberSession(directory, client, statusUpdate.sessionID)
       if (statusUpdate?.idle && !goalSteeringRuntime.shouldSuppressIdle(statusUpdate.sessionID)) {

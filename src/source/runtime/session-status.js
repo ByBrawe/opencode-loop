@@ -194,7 +194,11 @@ export function createSessionStatusRuntime(options = {}) {
               : completion === "completed"
                 ? "status-message-complete-recovery"
                 : "status-stale-recovery"
-            await appendLoopLog(directory, recoveryEvent, logDetails)
+            active.statusRecoveryLogEvents ??= new Set()
+            if (!active.statusRecoveryLogEvents.has(recoveryEvent)) {
+              active.statusRecoveryLogEvents.add(recoveryEvent)
+              await appendLoopLog(directory, recoveryEvent, logDetails)
+            }
             return "idle"
           }
         }

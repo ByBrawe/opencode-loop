@@ -23,6 +23,30 @@ function requireFunction(value, label) {
   return value
 }
 
+function sessionErrorDetails(event, fallbackMessage) {
+  if (event?.type !== "session.error") return undefined
+  const sessionID = event?.properties?.sessionID
+  if (typeof sessionID !== "string" || !sessionID) return undefined
+  const error = event?.properties?.error
+  const name = error && typeof error === "object" && typeof error.name === "string"
+    ? error.name
+    : "SessionError"
+  const data = error && typeof error === "object" && error.data && typeof error.data === "object"
+    ? error.data
+    : undefined
+  const message = typeof data?.message === "string" && data.message.trim()
+    ? data.message.trim()
+    : fallbackMessage(error)
+  return {
+    sessionID,
+    error,
+    name,
+    message,
+    aborted: name === "MessageAbortedError",
+    retryable: name === "APIError" && data?.isRetryable === true,
+  }
+}
+
 export function createLoopExecutor(options = {}) {
   const workspace = options.workspace || {}
   const goalPolicy = options.goalPolicy || {}
@@ -219,6 +243,64 @@ export function createLoopExecutor(options = {}) {
       await toast(client, `Loop dispatch failed${job?.paused ? " and paused" : ""}: ${message}`, job?.paused ? "error" : "warning")
     }
     await scheduleDueWork(directory, client, sessionID, retryDelay)
+    return true
+  }
+
+  async function handleSessionError(directory, client, event) {
+    const details = sessionErrorDetails(event, errorMessage)
+    if (!details || details.aborted) return false
+
+    const active = activeRuns.get(details.sessionID)
+    if (!active || active.compactionOnly) return false
+
+    const snapshot = active
+    clearActiveRun(details.sessionID)
+    clearSessionStatus(details.sessionID)
+
+    if (details.retryable) {
+      const refunded = await persistInfrastructureRefund(directory, details.sessionID, snapshot, {
+        reason: "session_error_retryable",
+        error: details.message,
+      })
+      await appendLoopLog(directory, "provider-session-error-retry", {
+        sessionID: details.sessionID,
+        job: refunded.job?.name || snapshot.jobId,
+        errorName: details.name,
+        error: details.message,
+        retryInMs: refunded.delayMs,
+      })
+      await toast(client, `Loop provider turn failed after OpenCode retries; the logical run was refunded and will retry with backoff: ${details.message}`, "warning")
+      await scheduleDueWork(directory, client, details.sessionID, refunded.delayMs)
+      return true
+    }
+
+    const state = await readState(directory, details.sessionID)
+    const job = (state.jobs || []).find((candidate) => candidate.id === snapshot.jobId)
+    if (job) {
+      job.failureCount = (job.failureCount || 0) + 1
+      job.paused = true
+      job.lastFailureReason = "session_error"
+      job.lastSessionErrorName = details.name
+      job.lastSessionError = details.message.slice(0, 4000)
+      job.lastSessionErrorAt = now()
+      state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate)
+      await writeState(directory, details.sessionID, state)
+      await notifyJob(directory, job, "session_error")
+    }
+
+    await appendLoopLog(directory, "session-error", {
+      sessionID: details.sessionID,
+      job: job?.name || snapshot.jobId,
+      errorName: details.name,
+      error: details.message,
+      paused: Boolean(job?.paused),
+    })
+    await toast(
+      client,
+      `Loop paused after a terminal OpenCode session error: ${details.message}`,
+      "error",
+    )
+    await scheduleDueWork(directory, client, details.sessionID)
     return true
   }
 
@@ -525,6 +607,7 @@ export function createLoopExecutor(options = {}) {
     clearActiveRun,
     disposeSession,
     recoverActiveDispatchFailure,
+    handleSessionError,
     recoverStuckProviderRetry,
     finalizeActiveRun,
     fireAction,
