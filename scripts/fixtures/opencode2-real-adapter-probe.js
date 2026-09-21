@@ -28,7 +28,12 @@ export default {
         const sessionID = String(created?.id || created?.data?.id || created?.sessionID || "")
         if (!sessionID) throw new Error("session.create returned no session id")
         try {
-          await ctx.session.command({ sessionID, command: COMMAND_SENTINEL })
+          await ctx.session.command({
+            sessionID,
+            name: COMMAND_SENTINEL,
+            command: COMMAND_SENTINEL,
+            text: "",
+          })
           commandFieldProbe = {
             matched: false,
             sessionID,
