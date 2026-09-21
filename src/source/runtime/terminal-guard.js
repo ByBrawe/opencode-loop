@@ -1,4 +1,4 @@
-import { isCompletionBoundedContinuation, isTerminalNoWorkReply } from "../core/continuation.js"
+import { isCompletionBoundedContinuation, isContinuationShorthand, isTerminalNoWorkReply, isWaitingUserReply } from "../core/continuation.js"
 import { orderedSessionMessages, readRecentSessionMessages } from "../opencode/host.js"
 
 function messageText(message) {
@@ -17,10 +17,13 @@ function messageText(message) {
 }
 
 export async function applyTerminalContinuationGuard(directory, client, sessionID, job, options = {}) {
-  // `/loop devam et` is intentionally infinite. The guard is only for an
-  // explicit completion-bounded request such as "bitene kadar" / "until done".
-  if (job?.scheduleMode !== "idle" || !isCompletionBoundedContinuation(job?.action)) {
-    return { job, terminal: false, pausedNow: false }
+  // Plain continuation remains intentionally infinite for ordinary work and
+  // even ordinary "done" replies. We only inspect it for an explicit
+  // waiting-user dependency so a blocked autonomous loop does not poll forever.
+  const completionBounded = isCompletionBoundedContinuation(job?.action)
+  const continuation = completionBounded || isContinuationShorthand(job?.action)
+  if (job?.scheduleMode !== "idle" || !continuation) {
+    return { job, terminal: false, pausedNow: false, waitingUser: false, waitingUserPausedNow: false }
   }
 
   const messages = await readRecentSessionMessages(client, sessionID, directory, options.messageLimit || 8)
@@ -37,10 +40,32 @@ export async function applyTerminalContinuationGuard(directory, client, sessionI
   }
 
   const text = messageText(tail)
+  const waitingUser = isWaitingUserReply(text)
+  if (waitingUser) {
+    if (job.terminalNoWorkCount) job.terminalNoWorkCount = 0
+    job.waitingUserCount = (job.waitingUserCount || 0) + 1
+    job.lastWaitingUserAt = Date.now()
+    job.lastWaitingUserSummary = text.slice(0, 1000)
+    const threshold = Math.max(2, Number(options.waitingUserThreshold) || 2)
+    const waitingUserPausedNow = job.waitingUserCount >= threshold && !job.paused
+    if (waitingUserPausedNow) {
+      job.paused = true
+      job.lastFailureReason = "waiting_user"
+    }
+    return { job, terminal: false, pausedNow: false, waitingUser: true, waitingUserPausedNow, text }
+  }
+
+  if (job.waitingUserCount) job.waitingUserCount = 0
+
+  // A normal completion/no-work reply still cannot stop plain /loop devam et.
+  if (!completionBounded) {
+    return { job, terminal: false, pausedNow: false, waitingUser: false, waitingUserPausedNow: false, text }
+  }
+
   const terminal = isTerminalNoWorkReply(text)
   if (!terminal) {
     if (job.terminalNoWorkCount) job.terminalNoWorkCount = 0
-    return { job, terminal: false, pausedNow: false, text }
+    return { job, terminal: false, pausedNow: false, waitingUser: false, waitingUserPausedNow: false, text }
   }
 
   job.terminalNoWorkCount = (job.terminalNoWorkCount || 0) + 1
@@ -52,5 +77,5 @@ export async function applyTerminalContinuationGuard(directory, client, sessionI
     job.paused = true
     job.lastFailureReason = "terminal_no_work"
   }
-  return { job, terminal: true, pausedNow, text }
+  return { job, terminal: true, pausedNow, waitingUser: false, waitingUserPausedNow: false, text }
 }

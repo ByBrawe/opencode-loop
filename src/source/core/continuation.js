@@ -45,6 +45,21 @@ const NEXT_WORK_PATTERNS = [
   /devam (?:edeceğim|ediyorum|etmek gerek)(?=\s|[.,;:!—-]|$)/i,
 ]
 
+const WAITING_USER_PATTERNS = [
+  /(?:^|\n)\s*onay bekleyenler\s*:/i,
+  /(?:^|\n)\s*(?:kullanıcı|user) (?:onayı|onayi|aksiyonu|işlemi|islemi|erişimi|erisimi) (?:bekleniyor|gerekiyor|gerekli)\b/i,
+  /\b(?:senin|sizin) (?:onayın|onayınız|onayiniz|aksiyonun|aksiyonunuz|erişimin|erisimin) (?:bekleniyor|gerekiyor|gerekli)\b/i,
+  /\b(?:onay|erişim|erisim|yetki) olmadan (?:devam edemem|ilerleyemem|işlem yapamam|islem yapamam)\b/i,
+  /(?:^|\n)\s*(?:waiting (?:for|on) (?:your|user) (?:approval|input|action|access|credentials?)|(?:approval|user action|access) (?:required|pending))\s*:?/i,
+  /\b(?:requires?|needs?) (?:your|user) (?:approval|input|action|access|credentials?)\b/i,
+  /\bblocked (?:pending|until|on) (?:your|user|approval|access|credentials?)\b/i,
+]
+
+const WAITING_USER_NEGATIONS = [
+  /\b(?:onay|erişim|erisim|yetki) (?:gerekmiyor|gerekli değil|gerekli degil|beklenmiyor)\b/i,
+  /\bno (?:user )?(?:approval|input|action|access|credentials?) (?:is )?(?:needed|required|pending)\b/i,
+]
+
 export function isContinuationShorthand(value) {
   return CONTINUATION_SHORTHANDS.has(String(value || "").trim().toLowerCase().replace(/\s+/g, " "))
 }
@@ -52,6 +67,14 @@ export function isContinuationShorthand(value) {
 export function isCompletionBoundedContinuation(value) {
   const text = String(value || "").trim()
   return COMPLETION_BOUNDED_PATTERNS.some((pattern) => pattern.test(text))
+}
+
+export function isWaitingUserReply(value) {
+  const text = String(value || "").trim()
+  if (!text) return false
+  if (WAITING_USER_NEGATIONS.some((pattern) => pattern.test(text))) return false
+  if (NEXT_WORK_PATTERNS.some((pattern) => pattern.test(text))) return false
+  return WAITING_USER_PATTERNS.some((pattern) => pattern.test(text))
 }
 
 export function isTerminalNoWorkReply(value) {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { isCompletionBoundedContinuation, isTerminalNoWorkReply } from "../src/source/core/continuation.js"
+import { isCompletionBoundedContinuation, isTerminalNoWorkReply, isWaitingUserReply } from "../src/source/core/continuation.js"
 import { isTransientNetworkError, networkRetryDelayMs, refundInfrastructureRun } from "../src/source/runtime/network-recovery.js"
 import { createSessionStatusRuntime } from "../src/source/runtime/session-status.js"
 import { applyTerminalContinuationGuard } from "../src/source/runtime/terminal-guard.js"
@@ -90,6 +90,10 @@ assert.equal(isCompletionBoundedContinuation("devam et"), false)
 assert.equal(isCompletionBoundedContinuation("devam et bitene kadar devam tamamen projeyi bitir"), true)
 assert.equal(isTerminalNoWorkReply("Proje tamamlandı — 28/28 test yeşil. Yapılacak iş yok. Sıfır bilinen hata."), true)
 assert.equal(isTerminalNoWorkReply("Proje tamamlandı ama sıradaki iş build doğrulaması."), false)
+assert.equal(isWaitingUserReply("Durum sabit.\n\nOnay bekleyenler: commit + push, canlı migration, cihaz testi."), true)
+assert.equal(isWaitingUserReply("Waiting for your approval before I can push the release."), true)
+assert.equal(isWaitingUserReply("Onay gerekmiyor; sıradaki iş build doğrulaması."), false)
+assert.equal(isWaitingUserReply("Deployment needs your approval, but next step is local verification."), false)
 
 {
   const terminalMessages = [{
@@ -122,6 +126,39 @@ assert.equal(isTerminalNoWorkReply("Proje tamamlandı ama sıradaki iş build do
   const untouched = await applyTerminalContinuationGuard("/repo", client, "s", infinite)
   assert.equal(untouched.terminal, false)
   assert.equal(untouched.job.paused, false, "plain /loop devam et must remain intentionally infinite")
+
+  const waitingMessages = [{
+    info: { role: "assistant", time: { created: 2_200, completed: 2_300 } },
+    parts: [{ type: "text", text: "Durum sabit.\n\nOnay bekleyenler: commit + push, canlı migration, cihaz testi." }],
+  }]
+  const waitingClient = { session: { messages: async () => ({ data: waitingMessages }) } }
+  const waiting = {
+    id: "waiting",
+    action: "devam et",
+    scheduleMode: "idle",
+    lastRunAt: 1_500,
+    paused: false,
+  }
+  let waitingResult = await applyTerminalContinuationGuard("/repo", waitingClient, "s", waiting)
+  assert.equal(waitingResult.waitingUser, true)
+  assert.equal(waitingResult.waitingUserPausedNow, false)
+  assert.equal(waitingResult.job.waitingUserCount, 1)
+  assert.equal(waitingResult.job.paused, false)
+  waitingResult = await applyTerminalContinuationGuard("/repo", waitingClient, "s", waitingResult.job)
+  assert.equal(waitingResult.waitingUserPausedNow, true, "two explicit user-dependency replies should pause plain continuation")
+  assert.equal(waitingResult.job.paused, true)
+  assert.equal(waitingResult.job.lastFailureReason, "waiting_user")
+
+  const productiveMessages = [{
+    info: { role: "assistant", time: { created: 2_400, completed: 2_500 } },
+    parts: [{ type: "text", text: "Deployment needs your approval, but next step is local verification." }],
+  }]
+  const productiveClient = { session: { messages: async () => ({ data: productiveMessages }) } }
+  const productive = { ...waitingResult.job, paused: false, waitingUserCount: 1 }
+  const productiveResult = await applyTerminalContinuationGuard("/repo", productiveClient, "s", productive)
+  assert.equal(productiveResult.waitingUser, false)
+  assert.equal(productiveResult.job.waitingUserCount, 0, "a reply with autonomous next work must clear waiting-user streak")
+  assert.equal(productiveResult.job.paused, false)
 }
 
 {

@@ -98,6 +98,39 @@ assert.equal(failedPostrun.failureCount, 1)
 assert.equal(failedPostrun.paused, true)
 assert.equal(notifications.at(-1)[2], "postrun_failed")
 
+const waitingNotifications = []
+const waitingLogs = []
+const waitingToasts = []
+const waitingRuntime = createRunFinalizationRuntime({
+  runGoalChecks: async (_directory, _sessionID, job) => job,
+  applyGoalNoProgressGuard: async (_directory, _client, _sessionID, job) => job,
+  createCheckpoint: async () => {},
+  scheduleDueWork: async () => {},
+  writeState: async () => {},
+  appendLoopLog: async (...args) => { waitingLogs.push(args) },
+  notifyJob: async (...args) => { waitingNotifications.push(args) },
+  toast: async (...args) => { waitingToasts.push(args) },
+  applyTerminalContinuationGuard: async (_directory, _client, _sessionID, job) => ({
+    job: {
+      ...job,
+      paused: true,
+      waitingUserCount: 2,
+      lastFailureReason: "waiting_user",
+    },
+    terminal: false,
+    pausedNow: false,
+    waitingUser: true,
+    waitingUserPausedNow: true,
+    text: "Onay bekleyenler: commit + push, canlı migration, cihaz testi.",
+  }),
+})
+const waitingJob = { id: "waiting-user", name: "default", enabled: true, paused: false }
+await waitingRuntime.finalizeJob("/repo", {}, "session-waiting", { jobs: [waitingJob] }, waitingJob, { id: "before-waiting" })
+assert.equal(waitingNotifications.at(-1)[2], "waiting_user")
+assert.equal(waitingLogs.at(-1)[1], "waiting-user")
+assert.match(waitingToasts.at(-1)[1], /waiting for explicit user approval/)
+assert.equal(waitingToasts.at(-1)[2], "warning")
+
 const goal = {
   id: "goal-job",
   kind: "goal",
