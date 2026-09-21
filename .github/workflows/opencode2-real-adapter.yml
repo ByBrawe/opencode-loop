@@ -4,6 +4,10 @@ on:
   pull_request:
     paths:
       - "src/source/opencode2/**"
+      - "src/source/server.js"
+      - "src/server.js"
+      - "scripts/install-node.mjs"
+      - "package.json"
       - "scripts/fixtures/opencode2-real-adapter-probe.js"
       - "scripts/opencode2-loop-canary.mjs"
       - ".github/workflows/opencode2-real-adapter.yml"
@@ -11,6 +15,10 @@ on:
     branches: [main]
     paths:
       - "src/source/opencode2/**"
+      - "src/source/server.js"
+      - "src/server.js"
+      - "scripts/install-node.mjs"
+      - "package.json"
       - "scripts/fixtures/opencode2-real-adapter-probe.js"
       - "scripts/opencode2-loop-canary.mjs"
       - ".github/workflows/opencode2-real-adapter.yml"
@@ -81,3 +89,78 @@ jobs:
       # Keep the multi-turn host gate separate from the capability probe above.
       - name: Run real two-turn V2 Loop canary
         run: node scripts/opencode2-loop-canary.mjs
+
+  exact-2-0-11-loader:
+    name: OpenCode 2.0.11 local plugin contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: npm ci
+      - name: Build dual local plugin bundle
+        run: npm run build:plugin
+      - name: Install exact OpenCode 2.0.11 CLI
+        run: npm install -g @opencode/cli@2.0.11
+      - name: Show exact OpenCode version
+        run: opencode --version
+      - name: Prepare exact 2.0.11 local plugin project
+        shell: bash
+        run: |
+          project="$GITHUB_WORKSPACE/.tmp-opencode-2-0-11"
+          rm -rf "$project"
+          mkdir -p "$project/.opencode/plugins" "$project/.home/.config" "$project/.home/.local/share" "$project/.home/.local/state"
+          cp "$GITHUB_WORKSPACE/src/server.js" "$project/.opencode/plugins/opencode-loop.ts"
+          git init --quiet "$project"
+          git -C "$project" config user.email "opencode-loop-ci@example.invalid"
+          git -C "$project" config user.name "OpenCode Loop CI"
+          git -C "$project" add .
+          git -C "$project" commit --quiet -m "init"
+          echo "OPENCODE_LOOP_EXACT_PROJECT=$project" >> "$GITHUB_ENV"
+          echo "HOME=$project/.home" >> "$GITHUB_ENV"
+          echo "XDG_CONFIG_HOME=$project/.home/.config" >> "$GITHUB_ENV"
+          echo "XDG_DATA_HOME=$project/.home/.local/share" >> "$GITHUB_ENV"
+          echo "XDG_STATE_HOME=$project/.home/.local/state" >> "$GITHUB_ENV"
+      - name: Require the dual local plugin to load on 2.0.11
+        shell: bash
+        env:
+          OPENCODE_DISABLE_AUTOUPDATE: "true"
+          OPENCODE_DISABLE_LSP_DOWNLOAD: "true"
+        run: |
+          cd "$OPENCODE_LOOP_EXACT_PROJECT"
+          opencode api --standalone get /api/plugin > "$RUNNER_TEMP/opencode-2-0-11-plugins.json"
+          cat "$RUNNER_TEMP/opencode-2-0-11-plugins.json"
+          node -e '
+            const fs=require("node:fs");
+            const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+            const data=Array.isArray(value?.data)?value.data:Array.isArray(value)?value:[];
+            const plugin=data.find((item)=>item?.id==="@bybrawe/opencode-loop" || String(item?.source?.path||"").includes("opencode-loop.ts"));
+            if(!plugin) throw new Error("Loop local plugin missing from OpenCode 2.0.11 inventory");
+            if(plugin?.state?.status!=="active") throw new Error("Loop local plugin is not active: "+JSON.stringify(plugin));
+          ' "$RUNNER_TEMP/opencode-2-0-11-plugins.json"
+      - name: Require Loop commands to register on 2.0.11
+        shell: bash
+        env:
+          OPENCODE_DISABLE_AUTOUPDATE: "true"
+          OPENCODE_DISABLE_LSP_DOWNLOAD: "true"
+        run: |
+          cd "$OPENCODE_LOOP_EXACT_PROJECT"
+          opencode api --standalone get /api/command > "$RUNNER_TEMP/opencode-2-0-11-commands.json"
+          cat "$RUNNER_TEMP/opencode-2-0-11-commands.json"
+          node -e '
+            const fs=require("node:fs");
+            const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+            const data=Array.isArray(value?.data)?value.data:Array.isArray(value)?value:[];
+            const names=new Set(data.map((item)=>item?.name));
+            for(const required of ["loop","loop-status","loop-now","loop-pause","loop-resume","loop-stop","loop-help","loop-doctor"]){
+              if(!names.has(required)) throw new Error("Missing OpenCode 2.0.11 command: "+required);
+            }
+          ' "$RUNNER_TEMP/opencode-2-0-11-commands.json"
