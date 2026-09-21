@@ -18,7 +18,7 @@ const installerArgs = process.argv.slice(2)
 const uninstallRequested = installerArgs.length === 1 && ["--uninstall", "uninstall", "--remove"].includes(installerArgs[0] || "")
 
 if (installerArgs.includes("--help") || installerArgs.includes("-h")) {
-  console.log(`OpenCode Loop installer/updater\n\nUsage:\n  opencode-loop\n  npx -y @bybrawe/opencode-loop@latest\n  npx -y @bybrawe/opencode-loop@latest --uninstall\n\nInstall/update copies the Loop command files and local command agent, and keeps an existing npm package entry pinned to the exact version.\nUninstall removes Loop package registrations plus known local plugin/command/agent files while preserving project Loop state.\n\nSet OPENCODE_CONFIG_DIR to target a non-default OpenCode config directory.`)
+  console.log(`OpenCode Loop installer/updater\n\nUsage:\n  opencode-loop\n  npx -y @bybrawe/opencode-loop@latest\n  npx -y @bybrawe/opencode-loop@latest --uninstall\n\nInstall/update copies the dual OpenCode 1/2 Loop plugin plus command files and local command agent, and keeps an existing npm package entry pinned to the exact version.\nUninstall removes Loop package registrations plus known local plugin/command/agent files while preserving project Loop state.\n\nSet OPENCODE_CONFIG_DIR to target a non-default OpenCode config directory.`)
   process.exit(0)
 }
 
@@ -311,7 +311,9 @@ async function installOrUpdate() {
     await rm(join(pluginDir, "opencode-loop.js"), { force: true })
   } else {
     await ensureDependency()
-    await copyFile(join(root, "src", "index.js"), join(pluginDir, "opencode-loop.ts"))
+    // Copy the dual contract bundle: OpenCode 1.x consumes default.server,
+    // while OpenCode 2.x consumes default.setup from the same local file.
+    await copyFile(join(root, "src", "server.js"), join(pluginDir, "opencode-loop.ts"))
     await rm(join(pluginDir, "opencode-loop.js"), { force: true })
   }
 
