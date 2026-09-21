@@ -93,6 +93,7 @@ export function createOpenCode2PromptRuntime(options = {}) {
   const timers = new Map()
   const idle = new Map()
   const queues = new Map()
+  const awaitingBusy = new Set()
   let disposed = false
 
   function report(error) {
@@ -116,6 +117,7 @@ export function createOpenCode2PromptRuntime(options = {}) {
   function clearScope(scope) {
     clearScopeTimer(scope.key)
     idle.delete(scope.key)
+    awaitingBusy.delete(scope.key)
   }
 
   function enqueueScope(scope, task) {
@@ -183,7 +185,13 @@ export function createOpenCode2PromptRuntime(options = {}) {
 
     const text = promptText(job)
     const request = { sessionID: scope.sessionID, text }
-    await options.prompt(request)
+    awaitingBusy.add(scope.key)
+    try {
+      await options.prompt(request)
+    } catch (error) {
+      awaitingBusy.delete(scope.key)
+      throw error
+    }
     return { kind: "prompt", request, text }
   }
 
@@ -329,14 +337,27 @@ export function createOpenCode2PromptRuntime(options = {}) {
     }
 
     if (event?.kind === "session" && event?.action === "idle") {
+      if (scope && awaitingBusy.has(scope.key)) {
+        return { handled: true, dispatched: false, reason: "awaiting-busy" }
+      }
       return runIdlePrompt(event)
     }
     if (event?.kind === "session" && event?.action === "status" && scope) {
-      idle.set(scope.key, event.status === "idle")
-      return await enqueueScope(scope, async () => {
-        await scheduleScope(scope)
-        return { handled: true, dispatched: false }
-      })
+      if (event.status === "busy" || event.status === "retry") {
+        awaitingBusy.delete(scope.key)
+        idle.set(scope.key, false)
+        return await enqueueScope(scope, async () => {
+          await scheduleScope(scope)
+          return { handled: true, dispatched: false }
+        })
+      }
+      if (event.status === "idle") {
+        if (awaitingBusy.has(scope.key)) {
+          return { handled: true, dispatched: false, reason: "awaiting-busy" }
+        }
+        return runIdlePrompt(event)
+      }
+      return { handled: false }
     }
     if (event?.kind === "session" && event?.action === "deleted" && scope) {
       clearScope(scope)
@@ -361,6 +382,7 @@ export function createOpenCode2PromptRuntime(options = {}) {
     }
     timers.clear()
     idle.clear()
+    awaitingBusy.clear()
     const pending = [...queues.values()]
     if (pending.length) await Promise.allSettled(pending)
     queues.clear()
