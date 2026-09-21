@@ -321,7 +321,14 @@ async function verifyTwoTurnLoop({ directory, sessionID, events, prompts, native
         return { dispose: async () => {} }
       },
     },
-    event: { subscribe: () => events.stream },
+    event: {
+      // OpenCode 2.0.11 exposes subscribe(options), so Function.length === 1
+      // even though it returns an AsyncIterable rather than accepting a callback.
+      subscribe(options) {
+        assert.equal(options, undefined)
+        return events.stream
+      },
+    },
     session: {
       prompt: async (input) => {
         prompts.push(structuredClone(input))
