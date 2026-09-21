@@ -6325,9 +6325,10 @@ function createOpenCode2RuntimeAdapter(ctx, options = {}) {
     throw new Error("OpenCode 2 event.subscribe capability is unavailable");
   if (!capabilities.sessionPrompt)
     throw new Error("OpenCode 2 session.prompt capability is unavailable");
+  const subscribe = options.eventSubscribeStyle === "stream" ? () => ctx.event.subscribe() : ctx.event.subscribe.bind(ctx.event);
   const host = createOpenCode2HostContract({
     directory: options.directory,
-    subscribe: ctx.event.subscribe.bind(ctx.event),
+    subscribe,
     sendPrompt: (request) => ctx.session.prompt(promptRequest(request)),
     sendCommand: capabilities.sessionCommand ? (request) => ctx.session.command(commandRequest(request)) : undefined,
     onEvent: options.onEvent,
@@ -6399,7 +6400,11 @@ var OpenCodeLoopV2ExperimentalPlugin = {
       await commandRegistration?.dispose?.();
       return;
     }
-    const runtime = createOpenCode2RuntimeAdapter(ctx, { directory: runtimeDirectory, onEvent: onRuntimeEvent });
+    const runtime = createOpenCode2RuntimeAdapter(ctx, {
+      directory: runtimeDirectory,
+      onEvent: onRuntimeEvent,
+      eventSubscribeStyle: requireBusyBeforeIdle ? "stream" : "auto"
+    });
     promptRuntime = createOpenCode2PromptRuntime({
       prompt: (request) => runtime.prompt(request),
       command: capabilities.sessionCommand ? (request) => runtime.command(request) : undefined,
