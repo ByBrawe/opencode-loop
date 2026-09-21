@@ -168,25 +168,10 @@ function bridgePluginSource() {
 export default {
   id: "bybrawe.opencode-loop.v2.loop-canary-bridge",
   async setup(ctx) {
-    const controller = new AbortController()
-    const traceFile = process.env.OPENCODE_LOOP_V2_EVENT_TRACE
-    const tracePump = traceFile && typeof ctx?.event?.subscribe === "function"
-      ? (async () => {
-          try {
-            for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
-              await appendFile(traceFile, JSON.stringify(event) + "\\n", "utf8")
-            }
-          } catch (error) {
-            if (!controller.signal.aborted) {
-              await appendFile(traceFile, JSON.stringify({ traceError: error instanceof Error ? error.message : String(error) }) + "\\n", "utf8")
-            }
-          }
-        })()
-      : undefined
-
     const module = await import(process.env.OPENCODE_LOOP_V2_PLUGIN_URL)
+    const traceFile = process.env.OPENCODE_LOOP_V2_EVENT_TRACE
     const pluginTraceFile = process.env.OPENCODE_LOOP_V2_PLUGIN_EVENT_TRACE
-    const pluginContext = pluginTraceFile && typeof ctx?.event?.subscribe === "function"
+    const pluginContext = typeof ctx?.event?.subscribe === "function"
       ? {
           ...ctx,
           event: {
@@ -196,7 +181,9 @@ export default {
               return {
                 async *[Symbol.asyncIterator]() {
                   for await (const event of source) {
-                    await appendFile(pluginTraceFile, JSON.stringify(event) + "\\n", "utf8")
+                    const line = JSON.stringify(event) + "\\n"
+                    if (traceFile) await appendFile(traceFile, line, "utf8")
+                    if (pluginTraceFile) await appendFile(pluginTraceFile, line, "utf8")
                     yield event
                   }
                 },
@@ -208,8 +195,6 @@ export default {
     const cleanup = await module.default.setup(pluginContext)
     await writeFile(process.env.OPENCODE_LOOP_V2_MARKER, JSON.stringify({ activated: true }, null, 2), "utf8")
     return async () => {
-      controller.abort()
-      await tracePump?.catch(() => undefined)
       if (typeof cleanup === "function") await cleanup()
     }
   },
