@@ -486,8 +486,11 @@ async function testStaleBusyUsesCompletedAssistantTail() {
     // and can reconcile the completed assistant tail instead of trusting cached busy.
     await delay(1_700)
     await h.command("loop-now", "stale-complete")
-    const state = await h.readState()
-    assert.ok(state.jobs[0].lastFinishedAt > 0, "a completed assistant tail must override a stale busy status")
+    const state = await waitForValue(async () => {
+      const candidate = await h.readState()
+      return candidate.jobs[0]?.lastFinishedAt > 0 ? candidate : undefined
+    }, 3_000)
+    assert.ok(state?.jobs[0]?.lastFinishedAt > 0, "a completed assistant tail must override a stale busy status")
     assert.ok(h.records.messageReads.length > 0, "busy recovery must cross-check message history")
   } finally {
     await h.cleanup()
