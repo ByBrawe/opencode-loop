@@ -185,7 +185,27 @@ export default {
       : undefined
 
     const module = await import(process.env.OPENCODE_LOOP_V2_PLUGIN_URL)
-    const cleanup = await module.default.setup(ctx)
+    const pluginTraceFile = process.env.OPENCODE_LOOP_V2_PLUGIN_EVENT_TRACE
+    const pluginContext = pluginTraceFile && typeof ctx?.event?.subscribe === "function"
+      ? {
+          ...ctx,
+          event: {
+            ...ctx.event,
+            subscribe(options) {
+              const source = ctx.event.subscribe(options)
+              return {
+                async *[Symbol.asyncIterator]() {
+                  for await (const event of source) {
+                    await appendFile(pluginTraceFile, JSON.stringify(event) + "\\n", "utf8")
+                    yield event
+                  }
+                },
+              }
+            },
+          },
+        }
+      : ctx
+    const cleanup = await module.default.setup(pluginContext)
     await writeFile(process.env.OPENCODE_LOOP_V2_MARKER, JSON.stringify({ activated: true }, null, 2), "utf8")
     return async () => {
       controller.abort()
@@ -210,6 +230,7 @@ async function main() {
   const pluginDir = path.join(home, ".config", "opencode", "plugins")
   const marker = path.join(workspace, "v2-real-adapter-marker.json")
   const eventTrace = path.join(workspace, "v2-native-events.jsonl")
+  const pluginEventTrace = path.join(workspace, "v2-plugin-events.jsonl")
   const provider = startProvider()
   const providerPort = await provider.listen()
   let server
@@ -263,6 +284,7 @@ async function main() {
     OPENCODE_LOOP_V2_PLUGIN_URL: pathToFileURL(path.join(repoRoot, "src", "source", "opencode2", "experimental.js")).href,
     OPENCODE_LOOP_V2_MARKER: marker,
     OPENCODE_LOOP_V2_EVENT_TRACE: eventTrace,
+    OPENCODE_LOOP_V2_PLUGIN_EVENT_TRACE: pluginEventTrace,
     OPENCODE_SERVER_USERNAME: SERVER_USERNAME,
     OPENCODE_SERVER_PASSWORD: SERVER_PASSWORD,
     OPENCODE_DISABLE_AUTOUPDATE: "true",
@@ -276,7 +298,9 @@ async function main() {
       try { state = await readFile(path.join(workspace, ".opencode", "opencode-loop", `${sessionID}.json`), "utf8") } catch {}
     }
     let nativeEvents = "missing"
+    let pluginEvents = "missing"
     try { nativeEvents = await readFile(eventTrace, "utf8") } catch {}
+    try { pluginEvents = await readFile(pluginEventTrace, "utf8") } catch {}
     return [
       `apiPrefix=${String(apiPrefix)}`,
       `commands=${JSON.stringify([...latestCommands])}`,
@@ -288,6 +312,7 @@ async function main() {
       `currentCommandFields=${CURRENT_COMMAND_FIELDS}`,
       `serverExit=${server?.exitCode}`,
       `nativeEvents=${nativeEvents.slice(-40_000)}`,
+      `pluginEvents=${pluginEvents.slice(-40_000)}`,
       `serverLog=${serverLog}`,
     ].join("\n")
   }
