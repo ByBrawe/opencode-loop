@@ -45,13 +45,23 @@ jobs:
       - name: Build a single-file stable plugin from source
         run: npm run build:plugin
 
-      - name: Require committed stable bundle to match modular source
-        run: git diff --exit-code -- src/index.js
+      - name: Upload generated plugin bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-loop-bundles-${{ matrix.os }}
+          path: |
+            src/index.js
+            src/server.js
+          if-no-files-found: error
+
+      - name: Require committed stable bundles to match modular source
+        run: git diff --exit-code -- src/index.js src/server.js
 
       - name: Verify generated entry syntax and import
         run: |
           node --check src/index.js
-          bun -e "await import('./src/index.js')"
+          node --check src/server.js
+          bun -e "await import('./src/index.js'); const server = await import('./src/server.js'); if (typeof server.default?.server !== 'function' || typeof server.default?.setup !== 'function') throw new Error('dual server entry is invalid')"
 
       - name: Install current OpenCode CLI
         run: npm install --no-save --package-lock=false opencode-ai@latest
