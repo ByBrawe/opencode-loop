@@ -6,8 +6,12 @@ function promptRequest(request) {
     sessionID: request.sessionID,
   }
   if (request.noReply === true) {
+    // beta hosts understood noReply+parts; OpenCode 2.0.11 uses the ordinary
+    // prompt shape and resume=false for a durable non-running message.
     value.noReply = true
     value.parts = [{ type: "text", text: request.text }]
+    value.text = request.text
+    value.resume = false
   } else {
     value.text = request.text
   }
@@ -19,9 +23,14 @@ function promptRequest(request) {
 function commandRequest(request) {
   const value = {
     sessionID: request.sessionID,
+    // OpenCode 2.0.11 calls this field name; earlier beta clients called it command.
+    name: request.command,
     command: request.command,
   }
-  if (request.arguments !== undefined) value.arguments = request.arguments
+  if (request.arguments !== undefined) {
+    value.arguments = request.arguments
+    value.text = request.arguments
+  }
   if (request.agent !== undefined) value.agent = request.agent
   if (request.model !== undefined) value.model = request.model
   if (request.delivery !== undefined) value.delivery = request.delivery
