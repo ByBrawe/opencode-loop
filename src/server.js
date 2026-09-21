@@ -6363,27 +6363,27 @@ var OpenCodeLoopV2ExperimentalPlugin = {
       requireBusyBeforeIdle = typeof draft?.add === "function";
       return registerOpenCode2LoopCommands(draft, {
         execute: async ({ name, sessionID, arguments: argumentsText, delivery }) => {
-        if (!promptRuntime || !diagnosticsRuntime) {
-          throw new Error("OpenCode Loop V2 runtime is not ready");
-        }
-        const commandEvent = Object.freeze({
-          kind: "command",
-          action: "executed",
-          sessionID: String(sessionID || ""),
-          directory: runtimeDirectory,
-          name,
-          arguments: argumentsText,
-          delivery
-        });
-        const result = await onRuntimeEvent(commandEvent);
-        if (result?.handled && result?.accepted && ["loop", "loop-now", "loop-resume"].includes(name)) {
-          await onRuntimeEvent(Object.freeze({
-            kind: "session",
-            action: "idle",
+          if (!promptRuntime || !diagnosticsRuntime) {
+            throw new Error("OpenCode Loop V2 runtime is not ready");
+          }
+          const commandEvent = Object.freeze({
+            kind: "command",
+            action: "executed",
             sessionID: String(sessionID || ""),
-            directory: runtimeDirectory
-          }));
-        }
+            directory: runtimeDirectory,
+            name,
+            arguments: argumentsText,
+            delivery
+          });
+          const result = await onRuntimeEvent(commandEvent);
+          if (result?.handled && result?.accepted && ["loop", "loop-now", "loop-resume"].includes(name)) {
+            await onRuntimeEvent(Object.freeze({
+              kind: "session",
+              action: "idle",
+              sessionID: String(sessionID || ""),
+              directory: runtimeDirectory
+            }));
+          }
           return result;
         }
       });
