@@ -103,6 +103,16 @@ export function createRunFinalizationRuntime(options = {}) {
 
     const terminal = await applyTerminalContinuationGuard(directory, client, sessionID, job)
     job = terminal.job
+    if (terminal.waitingUserPausedNow) {
+      await appendLoopLog(directory, "waiting-user", {
+        sessionID,
+        job: job.name || job.id,
+        count: job.waitingUserCount,
+        summary: String(terminal.text || "").slice(0, 1000),
+      })
+      await notifyJob(directory, job, "waiting_user")
+      await toast(client, "Loop paused: autonomous continuation is waiting for explicit user approval, access, or action.", "warning")
+    }
     if (terminal.pausedNow) {
       await appendLoopLog(directory, "terminal-no-work", {
         sessionID,
