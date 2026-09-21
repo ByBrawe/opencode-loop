@@ -5585,6 +5585,7 @@ function createOpenCode2PromptRuntime(options = {}) {
   const setTimer = typeof options.setTimer === "function" ? options.setTimer : setTimeout;
   const clearTimer = typeof options.clearTimer === "function" ? options.clearTimer : clearTimeout;
   const onError = typeof options.onError === "function" ? options.onError : () => {};
+  const requireBusyBeforeIdle = options.requireBusyBeforeIdle === true;
   const timers = new Map;
   const idle = new Map;
   const queues = new Map;
@@ -5692,7 +5693,8 @@ function createOpenCode2PromptRuntime(options = {}) {
     }
     const text = promptText(job);
     const request = { sessionID: scope.sessionID, text };
-    awaitingBusy.add(scope.key);
+    if (requireBusyBeforeIdle)
+      awaitingBusy.add(scope.key);
     try {
       await options.prompt(request);
     } catch (error) {
@@ -5849,7 +5851,7 @@ function createOpenCode2PromptRuntime(options = {}) {
         return stopPromptLoops(event, "all");
     }
     if (event?.kind === "session" && event?.action === "idle") {
-      if (scope && awaitingBusy.has(scope.key)) {
+      if (requireBusyBeforeIdle && scope && awaitingBusy.has(scope.key)) {
         return { handled: true, dispatched: false, reason: "awaiting-busy" };
       }
       return runIdlePrompt(event);
@@ -5864,7 +5866,7 @@ function createOpenCode2PromptRuntime(options = {}) {
         });
       }
       if (event.status === "idle") {
-        if (awaitingBusy.has(scope.key)) {
+        if (requireBusyBeforeIdle && awaitingBusy.has(scope.key)) {
           return { handled: true, dispatched: false, reason: "awaiting-busy" };
         }
         return runIdlePrompt(event);
@@ -6347,6 +6349,7 @@ var OpenCodeLoopV2ExperimentalPlugin = {
     }
     let promptRuntime;
     let diagnosticsRuntime;
+    let requireBusyBeforeIdle = false;
     const logRuntime = createOpenCode2LogRuntime();
     const runtimeDirectory = String(ctx?.location?.directory || ctx?.options?.directory || "").trim() || undefined;
     const onRuntimeEvent = async (event) => {
@@ -6356,8 +6359,10 @@ var OpenCodeLoopV2ExperimentalPlugin = {
         return promptResult;
       return await diagnosticsRuntime?.onEvent(event) ?? promptResult;
     };
-    const commandRegistration = await ctx.command.transform((draft) => registerOpenCode2LoopCommands(draft, {
-      execute: async ({ name, sessionID, arguments: argumentsText, delivery }) => {
+    const commandRegistration = await ctx.command.transform((draft) => {
+      requireBusyBeforeIdle = typeof draft?.add === "function";
+      return registerOpenCode2LoopCommands(draft, {
+        execute: async ({ name, sessionID, arguments: argumentsText, delivery }) => {
         if (!promptRuntime || !diagnosticsRuntime) {
           throw new Error("OpenCode Loop V2 runtime is not ready");
         }
@@ -6379,9 +6384,10 @@ var OpenCodeLoopV2ExperimentalPlugin = {
             directory: runtimeDirectory
           }));
         }
-        return result;
-      }
-    }));
+          return result;
+        }
+      });
+    });
     if (!capabilities.eventSubscribe || !capabilities.sessionPrompt) {
       await commandRegistration?.dispose?.();
       return;
@@ -6389,7 +6395,8 @@ var OpenCodeLoopV2ExperimentalPlugin = {
     const runtime = createOpenCode2RuntimeAdapter(ctx, { directory: runtimeDirectory, onEvent: onRuntimeEvent });
     promptRuntime = createOpenCode2PromptRuntime({
       prompt: (request) => runtime.prompt(request),
-      command: capabilities.sessionCommand ? (request) => runtime.command(request) : undefined
+      command: capabilities.sessionCommand ? (request) => runtime.command(request) : undefined,
+      requireBusyBeforeIdle
     });
     diagnosticsRuntime = createOpenCode2DiagnosticsRuntime({
       prompt: (request) => runtime.prompt(request)
