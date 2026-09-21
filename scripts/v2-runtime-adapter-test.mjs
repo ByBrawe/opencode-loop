@@ -310,6 +310,7 @@ async function verifyTwoTurnLoop({ directory, sessionID, events, prompts, native
   const prompts = []
   const commands = new Map()
   const ctx = {
+    app: { name: "opencode", version: "2.0.11", channel: "latest" },
     location: { directory },
     command: {
       transform: async (callback) => {
