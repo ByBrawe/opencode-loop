@@ -43,9 +43,13 @@ export function createOpenCode2RuntimeAdapter(ctx, options = {}) {
   if (!capabilities.eventSubscribe) throw new Error("OpenCode 2 event.subscribe capability is unavailable")
   if (!capabilities.sessionPrompt) throw new Error("OpenCode 2 session.prompt capability is unavailable")
 
+  const subscribe = options.eventSubscribeStyle === "stream"
+    ? () => ctx.event.subscribe()
+    : ctx.event.subscribe.bind(ctx.event)
+
   const host = createOpenCode2HostContract({
     directory: options.directory,
-    subscribe: ctx.event.subscribe.bind(ctx.event),
+    subscribe,
     sendPrompt: (request) => ctx.session.prompt(promptRequest(request)),
     sendCommand: capabilities.sessionCommand ? (request) => ctx.session.command(commandRequest(request)) : undefined,
     onEvent: options.onEvent,
