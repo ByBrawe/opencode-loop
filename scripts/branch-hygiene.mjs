@@ -6,6 +6,14 @@ function sameRepositoryHead(pull, repository) {
   return pull?.head?.repo?.full_name === repository
 }
 
+function encodeRef(name) {
+  return String(name || "").split("/").map(encodeURIComponent).join("/")
+}
+
+function validSha(value) {
+  return /^[0-9a-f]{40}$/i.test(String(value || ""))
+}
+
 export function planBranchCleanup({ repository, defaultBranch, branches, openPulls, closedPulls }) {
   const openHeads = new Set(
     openPulls
@@ -49,7 +57,76 @@ export function planBranchCleanup({ repository, defaultBranch, branches, openPul
       retained.push({ name, reason: "no-exact-merged-head" })
       continue
     }
-    candidates.push({ name, sha, pull: merged.number })
+    candidates.push({ name, sha, pull: merged.number, source: "merged-pr" })
+  }
+
+  candidates.sort((a, b) => a.name.localeCompare(b.name))
+  retained.sort((a, b) => a.name.localeCompare(b.name))
+  return { candidates, retained }
+}
+
+export function planArchivedCleanup({
+  repository,
+  defaultBranch,
+  archiveRef,
+  manifest,
+  branches,
+  openPulls,
+}) {
+  if (!manifest || typeof manifest !== "object") throw new Error("archive manifest must be an object")
+  if (manifest.repository !== repository) throw new Error(`archive manifest repository mismatch: ${manifest.repository}`)
+  if (manifest.archiveBranch !== archiveRef) throw new Error(`archive manifest branch mismatch: ${manifest.archiveBranch}`)
+  if (!Array.isArray(manifest.archivedBranches)) throw new Error("archive manifest archivedBranches must be an array")
+
+  const branchByName = new Map(
+    branches
+      .map((branch) => [String(branch?.name || "").trim(), branch])
+      .filter(([name]) => Boolean(name)),
+  )
+  const openHeads = new Set(
+    openPulls
+      .filter((pull) => sameRepositoryHead(pull, repository))
+      .map((pull) => String(pull?.head?.ref || "").trim())
+      .filter(Boolean),
+  )
+
+  const seenNames = new Set()
+  const candidates = []
+  const retained = []
+
+  for (const entry of manifest.archivedBranches) {
+    const name = String(entry?.name || "").trim()
+    const sha = String(entry?.sha || "").trim()
+    if (!name || !validSha(sha)) throw new Error(`invalid archived branch entry: ${JSON.stringify(entry)}`)
+    if (seenNames.has(name)) throw new Error(`duplicate archived branch entry: ${name}`)
+    seenNames.add(name)
+
+    if (name === defaultBranch || name === archiveRef) {
+      retained.push({ name, reason: "reserved" })
+      continue
+    }
+
+    const branch = branchByName.get(name)
+    if (!branch) {
+      retained.push({ name, reason: "already-absent" })
+      continue
+    }
+    if (branch?.protected === true) {
+      retained.push({ name, reason: "protected" })
+      continue
+    }
+    if (openHeads.has(name)) {
+      retained.push({ name, reason: "open-pr" })
+      continue
+    }
+
+    const currentSha = String(branch?.commit?.sha || "").trim()
+    if (currentSha !== sha) {
+      retained.push({ name, reason: "head-changed", expectedSha: sha, currentSha })
+      continue
+    }
+
+    candidates.push({ name, sha, source: "archive-manifest" })
   }
 
   candidates.sort((a, b) => a.name.localeCompare(b.name))
@@ -91,11 +168,83 @@ async function paginate(client, pathname, query = {}) {
   throw new Error(`Pagination safety limit exceeded for ${pathname}`)
 }
 
+async function loadArchive(client, root, repository, archiveRef) {
+  if (!archiveRef) return null
+
+  const archivePath = "archive/legacy-branches-2026-09-21.json"
+  const encodedRef = encodeURIComponent(archiveRef)
+  const payload = await request(client, "GET", `${root}/contents/${archivePath}?ref=${encodedRef}`)
+  if (payload?.encoding !== "base64" || typeof payload?.content !== "string") {
+    throw new Error("archive manifest content is not base64")
+  }
+
+  const raw = Buffer.from(payload.content.replace(/\s+/g, ""), "base64").toString("utf8")
+  const manifest = JSON.parse(raw)
+  if (manifest.repository !== repository) throw new Error("archive manifest repository does not match current repository")
+  if (manifest.archiveBranch !== archiveRef) throw new Error("archive manifest archiveBranch does not match configured ref")
+
+  const ref = await request(client, "GET", `${root}/git/ref/heads/${encodeRef(archiveRef)}`)
+  const archiveSha = String(ref?.object?.sha || "").trim()
+  if (!validSha(archiveSha)) throw new Error("archive branch did not resolve to a commit SHA")
+
+  return { manifest, archiveSha, archivePath }
+}
+
+async function verifyArchivedReachability(client, root, archiveSha, items) {
+  const verified = []
+  for (const item of items) {
+    const compare = await request(client, "GET", `${root}/compare/${item.sha}...${archiveSha}`)
+    if (!["ahead", "identical"].includes(compare?.status)) {
+      throw new Error(`archive ref does not retain ${item.name} @ ${item.sha}; compare status=${compare?.status || "unknown"}`)
+    }
+    verified.push(item)
+  }
+  return verified
+}
+
+async function deleteCandidates(client, root, items, dryRun, label) {
+  const deleted = []
+  const skipped = []
+  const failures = []
+
+  for (const item of items) {
+    console.log(`${dryRun ? "DRY-RUN" : "DELETE"} [${label}] ${item.name} @ ${item.sha}`)
+    if (dryRun) continue
+
+    try {
+      const encodedRef = encodeRef(item.name)
+      const refPath = `${root}/git/ref/heads/${encodedRef}`
+      const current = await request(client, "GET", refPath)
+      const currentSha = String(current?.object?.sha || "").trim()
+      if (currentSha !== item.sha) {
+        console.log(`SKIP [${label}] ${item.name}: head changed from ${item.sha} to ${currentSha || "unknown"}`)
+        skipped.push({ ...item, reason: "head-changed-at-delete", currentSha })
+        continue
+      }
+      await request(client, "DELETE", `${root}/git/refs/heads/${encodedRef}`)
+      deleted.push(item)
+    } catch (error) {
+      failures.push({ item, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  return { deleted, skipped, failures }
+}
+
+function countReasons(items) {
+  return Object.fromEntries(
+    [...new Set(items.map((item) => item.reason))]
+      .sort()
+      .map((reason) => [reason, items.filter((item) => item.reason === reason).length]),
+  )
+}
+
 async function main() {
   const repository = String(process.env.GITHUB_REPOSITORY || "").trim()
   const token = String(process.env.GITHUB_TOKEN || "").trim()
   const api = String(process.env.GITHUB_API_URL || "https://api.github.com").replace(/\/$/, "")
   const defaultBranch = String(process.env.BRANCH_HYGIENE_DEFAULT_BRANCH || "main").trim()
+  const archiveRef = String(process.env.BRANCH_HYGIENE_ARCHIVE_REF || "").trim()
   const dryRun = process.env.BRANCH_HYGIENE_DRY_RUN === "1"
 
   if (!/^[^/]+\/[^/]+$/.test(repository)) throw new Error("GITHUB_REPOSITORY must be owner/name")
@@ -110,7 +259,7 @@ async function main() {
     paginate(client, `${root}/pulls`, { state: "closed" }),
   ])
 
-  const { candidates, retained } = planBranchCleanup({
+  const mergedPlan = planBranchCleanup({
     repository,
     defaultBranch,
     branches,
@@ -118,50 +267,45 @@ async function main() {
     closedPulls,
   })
 
-  console.log(`Branch hygiene: ${branches.length} branches, ${candidates.length} exact merged-head candidates, ${retained.length} retained.`)
-  for (const item of candidates) {
-    console.log(`${dryRun ? "DRY-RUN" : "DELETE"} ${item.name} @ ${item.sha} (merged PR #${item.pull})`)
+  let archivePlan = { candidates: [], retained: [] }
+  let archiveSha = ""
+  if (archiveRef) {
+    const archive = await loadArchive(client, root, repository, archiveRef)
+    archiveSha = archive.archiveSha
+    archivePlan = planArchivedCleanup({
+      repository,
+      defaultBranch,
+      archiveRef,
+      manifest: archive.manifest,
+      branches,
+      openPulls,
+    })
+    await verifyArchivedReachability(client, root, archiveSha, archivePlan.candidates)
   }
 
-  const deleted = []
-  const failures = []
-  if (!dryRun) {
-    for (const item of candidates) {
-      try {
-        const encodedRef = item.name.split("/").map(encodeURIComponent).join("/")
-        const refPath = `${root}/git/ref/heads/${encodedRef}`
-        const current = await request(client, "GET", refPath)
-        const currentSha = String(current?.object?.sha || "").trim()
-        if (currentSha !== item.sha) {
-          console.log(`SKIP ${item.name}: head changed from ${item.sha} to ${currentSha || "unknown"}`)
-          continue
-        }
-        await request(client, "DELETE", `${root}/git/refs/heads/${encodedRef}`)
-        deleted.push(item)
-      } catch (error) {
-        failures.push({ item, error: error instanceof Error ? error.message : String(error) })
-      }
-    }
-  }
+  const mergedResult = await deleteCandidates(client, root, mergedPlan.candidates, dryRun, "merged-pr")
 
-  const retainedCounts = Object.fromEntries(
-    [...new Set(retained.map((item) => item.reason))]
-      .sort()
-      .map((reason) => [reason, retained.filter((item) => item.reason === reason).length]),
-  )
+  const mergedNames = new Set(mergedPlan.candidates.map((item) => item.name))
+  const archiveCandidates = archivePlan.candidates.filter((item) => !mergedNames.has(item.name))
+  const archiveResult = await deleteCandidates(client, root, archiveCandidates, dryRun, "archive")
 
+  const failures = [...mergedResult.failures, ...archiveResult.failures]
   const summary = [
     "## Branch hygiene",
     "",
     `- Repository: \`${repository}\``,
     `- Default branch: \`${defaultBranch}\``,
     `- Branches scanned: ${branches.length}`,
-    `- Exact merged-head candidates: ${candidates.length}`,
-    `- Deleted: ${dryRun ? 0 : deleted.length}`,
+    `- Exact merged-head candidates: ${mergedPlan.candidates.length}`,
+    `- Archived inactive candidates: ${archiveCandidates.length}`,
+    `- Archive ref: \`${archiveRef || "disabled"}\``,
+    `- Archive SHA: \`${archiveSha || "n/a"}\``,
+    `- Deleted: ${dryRun ? 0 : mergedResult.deleted.length + archiveResult.deleted.length}`,
     `- Dry run: ${dryRun}`,
-    `- Retained by reason: \`${JSON.stringify(retainedCounts)}\``,
+    `- Retained merged-plan reasons: \`${JSON.stringify(countReasons(mergedPlan.retained))}\``,
+    `- Retained archive-plan reasons: \`${JSON.stringify(countReasons(archivePlan.retained))}\``,
     "",
-    "Safety rule: delete only a non-default, unprotected, same-repository branch with no open PR when a merged PR recorded exactly the branch's current head SHA.",
+    "Safety rules: merged branches require an exact merged-PR head SHA. Archived branches additionally require an unchanged current SHA, no open PR, and proof that the archived tip is an ancestor of the configured archive ref before deletion.",
   ].join("\n")
 
   if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`, "utf8")
