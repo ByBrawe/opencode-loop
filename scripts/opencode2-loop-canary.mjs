@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { createServer } from "node:http"
 import net from "node:net"
 import { execFileSync, spawn } from "node:child_process"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import process from "node:process"
@@ -163,15 +163,33 @@ function startProvider() {
 }
 
 function bridgePluginSource() {
-  return `import { writeFile } from "node:fs/promises"
+  return `import { appendFile, writeFile } from "node:fs/promises"
 
 export default {
   id: "bybrawe.opencode-loop.v2.loop-canary-bridge",
   async setup(ctx) {
+    const controller = new AbortController()
+    const traceFile = process.env.OPENCODE_LOOP_V2_EVENT_TRACE
+    const tracePump = traceFile && typeof ctx?.event?.subscribe === "function"
+      ? (async () => {
+          try {
+            for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+              await appendFile(traceFile, JSON.stringify(event) + "\\n", "utf8")
+            }
+          } catch (error) {
+            if (!controller.signal.aborted) {
+              await appendFile(traceFile, JSON.stringify({ traceError: error instanceof Error ? error.message : String(error) }) + "\\n", "utf8")
+            }
+          }
+        })()
+      : undefined
+
     const module = await import(process.env.OPENCODE_LOOP_V2_PLUGIN_URL)
     const cleanup = await module.default.setup(ctx)
     await writeFile(process.env.OPENCODE_LOOP_V2_MARKER, JSON.stringify({ activated: true }, null, 2), "utf8")
     return async () => {
+      controller.abort()
+      await tracePump?.catch(() => undefined)
       if (typeof cleanup === "function") await cleanup()
     }
   },
@@ -191,6 +209,7 @@ async function main() {
   const home = path.join(workspace, ".home")
   const pluginDir = path.join(home, ".config", "opencode", "plugins")
   const marker = path.join(workspace, "v2-real-adapter-marker.json")
+  const eventTrace = path.join(workspace, "v2-native-events.jsonl")
   const provider = startProvider()
   const providerPort = await provider.listen()
   let server
@@ -243,6 +262,7 @@ async function main() {
     XDG_CACHE_HOME: path.join(home, ".cache"),
     OPENCODE_LOOP_V2_PLUGIN_URL: pathToFileURL(path.join(repoRoot, "src", "source", "opencode2", "experimental.js")).href,
     OPENCODE_LOOP_V2_MARKER: marker,
+    OPENCODE_LOOP_V2_EVENT_TRACE: eventTrace,
     OPENCODE_SERVER_USERNAME: SERVER_USERNAME,
     OPENCODE_SERVER_PASSWORD: SERVER_PASSWORD,
     OPENCODE_DISABLE_AUTOUPDATE: "true",
@@ -255,6 +275,8 @@ async function main() {
     if (sessionID) {
       try { state = await readFile(path.join(workspace, ".opencode", "opencode-loop", `${sessionID}.json`), "utf8") } catch {}
     }
+    let nativeEvents = "missing"
+    try { nativeEvents = await readFile(eventTrace, "utf8") } catch {}
     return [
       `apiPrefix=${String(apiPrefix)}`,
       `commands=${JSON.stringify([...latestCommands])}`,
@@ -265,6 +287,7 @@ async function main() {
       `binary=${OPENCODE_BINARY}`,
       `currentCommandFields=${CURRENT_COMMAND_FIELDS}`,
       `serverExit=${server?.exitCode}`,
+      `nativeEvents=${nativeEvents.slice(-40_000)}`,
       `serverLog=${serverLog}`,
     ].join("\n")
   }
