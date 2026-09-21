@@ -335,7 +335,7 @@ async function verifyTwoTurnLoop({ directory, sessionID, events, prompts, native
     assert.ok(commands.has("loop"), "OpenCode 2.0.11 add() command editor must receive /loop")
     await commands.get("loop").execute({
       sessionID,
-      prompt: { text: "0s --max-runs 1 continue exact 2.0.11 command path" },
+      prompt: { text: "0s --max-runs 2 continue exact 2.0.11 command path" },
       delivery: "steer",
     })
 
@@ -344,14 +344,19 @@ async function verifyTwoTurnLoop({ directory, sessionID, events, prompts, native
       try { return JSON.parse(await readFile(stateFile, "utf8")).jobs?.length === 1 } catch { return false }
     }, "OpenCode 2.0.11 direct command state creation")
 
+    await waitFor(() => prompts.length === 1, "OpenCode 2.0.11 direct command first local-kick dispatch")
+    assert.equal(prompts[0].sessionID, sessionID)
+    assert.match(prompts[0].text || "", /continue exact 2\.0\.11 command path/)
+
     events.push({
       type: "session.execution.succeeded",
       location: { directory },
       data: { sessionID },
     })
-    await waitFor(() => prompts.length === 1, "OpenCode 2.0.11 direct command loop dispatch")
-    assert.equal(prompts[0].sessionID, sessionID)
-    assert.match(prompts[0].text || "", /continue exact 2\.0\.11 command path/)
+    await waitFor(() => prompts.length === 2, "OpenCode 2.0.11 second dispatch from real idle event")
+    const state = JSON.parse(await readFile(stateFile, "utf8"))
+    assert.equal(state.jobs[0].runCount, 2)
+    assert.equal(state.jobs[0].enabled, false)
   } finally {
     await cleanup?.()
     await rm(directory, { recursive: true, force: true })
