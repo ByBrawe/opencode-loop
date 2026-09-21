@@ -52,8 +52,8 @@ jobs:
         shell: bash
         run: |
           project="$RUNNER_TEMP/opencode-loop-v2-real-adapter"
-          plugin_dir="$project/.opencode/plugins"
-          mkdir -p "$plugin_dir" "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
+          plugin_dir="$XDG_CONFIG_HOME/opencode/plugins"
+          mkdir -p "$plugin_dir" "$project" "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
           cp "$GITHUB_WORKSPACE/scripts/fixtures/opencode2-real-adapter-probe.js" "$plugin_dir/opencode-loop-v2-real.js"
           git init --quiet "$project"
           git -C "$project" config user.email "opencode-loop-ci@example.invalid"
@@ -117,8 +117,8 @@ jobs:
         run: |
           project="$GITHUB_WORKSPACE/.tmp-opencode-2-0-11"
           rm -rf "$project"
-          mkdir -p "$project/.opencode/plugins" "$project/.home/.config" "$project/.home/.local/share" "$project/.home/.local/state"
-          cp "$GITHUB_WORKSPACE/src/server.js" "$project/.opencode/plugins/opencode-loop.ts"
+          mkdir -p "$project" "$project/.home/.config/opencode/plugins" "$project/.home/.local/share" "$project/.home/.local/state"
+          cp "$GITHUB_WORKSPACE/src/server.js" "$project/.home/.config/opencode/plugins/opencode-loop.ts"
           git init --quiet "$project"
           git -C "$project" config user.email "opencode-loop-ci@example.invalid"
           git -C "$project" config user.name "OpenCode Loop CI"
@@ -134,6 +134,7 @@ jobs:
         env:
           OPENCODE_DISABLE_AUTOUPDATE: "true"
           OPENCODE_DISABLE_LSP_DOWNLOAD: "true"
+          OPENCODE_PRINT_LOGS: "1"
         run: |
           cd "$OPENCODE_LOOP_EXACT_PROJECT"
           opencode api --standalone get /api/plugin > "$RUNNER_TEMP/opencode-2-0-11-plugins.json"
@@ -151,6 +152,7 @@ jobs:
         env:
           OPENCODE_DISABLE_AUTOUPDATE: "true"
           OPENCODE_DISABLE_LSP_DOWNLOAD: "true"
+          OPENCODE_PRINT_LOGS: "1"
         run: |
           cd "$OPENCODE_LOOP_EXACT_PROJECT"
           opencode api --standalone get /api/command > "$RUNNER_TEMP/opencode-2-0-11-commands.json"
