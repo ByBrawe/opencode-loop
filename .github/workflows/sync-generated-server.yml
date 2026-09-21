@@ -1,0 +1,53 @@
+name: Sync generated dual server bundle
+
+on:
+  push:
+    branches:
+      - fix/opencode-2-0-11-plugin-entry
+    paths:
+      - "src/source/server.js"
+      - "src/source/opencode2/**"
+      - "src/source/v1.js"
+      - "package.json"
+      - ".github/workflows/sync-generated-server.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-generated-server-opencode-2-0-11
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    if: github.repository == 'ByBrawe/opencode-loop'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/opencode-2-0-11-plugin-entry
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: npm ci
+      - name: Build exact Bun bundles
+        run: npm run build:plugin
+      - name: Require stable V1 bundle to remain unchanged
+        run: git diff --exit-code -- src/index.js
+      - name: Commit exact generated dual server bundle
+        shell: bash
+        run: |
+          if git diff --quiet -- src/server.js; then
+            echo "src/server.js is already synchronized."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/server.js
+          git commit -m "build(plugin): sync dual OpenCode server bundle"
+          git push origin HEAD:fix/opencode-2-0-11-plugin-entry
