@@ -40,6 +40,17 @@ export function normalizeOpenCode2NativeEvent(raw) {
     })
   }
 
+  if (type === "session.status") {
+    const status = text(record(data.status)?.type)
+    if (!sessionID || !status) return undefined
+    return Object.freeze({ kind: "session", action: "status", sessionID, directory, status })
+  }
+
+  if (type === "session.idle") {
+    if (!sessionID) return undefined
+    return Object.freeze({ kind: "session", action: "idle", sessionID, directory })
+  }
+
   if (type === "session.execution.started") {
     if (!sessionID) return undefined
     return Object.freeze({ kind: "session", action: "status", sessionID, directory, status: "busy" })

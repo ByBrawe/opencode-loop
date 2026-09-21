@@ -42,6 +42,7 @@ export function inspectOpenCode2CommandDraft(draft) {
   return frozenRecord({
     list: hasFunction(draft, "list"),
     get: hasFunction(draft, "get"),
+    add: hasFunction(draft, "add"),
     update: hasFunction(draft, "update"),
     remove: hasFunction(draft, "remove"),
   })

@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { createServer } from "node:http"
 import net from "node:net"
 import { execFileSync, spawn } from "node:child_process"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import process from "node:process"
@@ -14,6 +14,8 @@ const EXPECTED_TURNS = 2
 const EXPECTED_COMMANDS = ["loop", "loop-pause", "loop-resume", "loop-stop", "loop-remove", "loop-clear"]
 const SERVER_USERNAME = "opencode"
 const SERVER_PASSWORD = "opencode-loop-v2-canary"
+const OPENCODE_BINARY = process.env.OPENCODE2_BINARY || "opencode2"
+const CURRENT_COMMAND_FIELDS = process.env.OPENCODE2_CURRENT_COMMAND_FIELDS === "1"
 
 function appendLog(current, chunk, limit = 100_000) {
   return (current + String(chunk)).slice(-limit)
@@ -161,13 +163,36 @@ function startProvider() {
 }
 
 function bridgePluginSource() {
-  return `import { writeFile } from "node:fs/promises"
+  return `import { appendFile, writeFile } from "node:fs/promises"
 
 export default {
   id: "bybrawe.opencode-loop.v2.loop-canary-bridge",
   async setup(ctx) {
     const module = await import(process.env.OPENCODE_LOOP_V2_PLUGIN_URL)
-    const cleanup = await module.default.setup(ctx)
+    const traceFile = process.env.OPENCODE_LOOP_V2_EVENT_TRACE
+    const pluginTraceFile = process.env.OPENCODE_LOOP_V2_PLUGIN_EVENT_TRACE
+    const pluginContext = typeof ctx?.event?.subscribe === "function"
+      ? {
+          ...ctx,
+          event: {
+            ...ctx.event,
+            subscribe(options) {
+              const source = ctx.event.subscribe(options)
+              return {
+                async *[Symbol.asyncIterator]() {
+                  for await (const event of source) {
+                    const line = JSON.stringify(event) + "\\n"
+                    if (traceFile) await appendFile(traceFile, line, "utf8")
+                    if (pluginTraceFile) await appendFile(pluginTraceFile, line, "utf8")
+                    yield event
+                  }
+                },
+              }
+            },
+          },
+        }
+      : ctx
+    const cleanup = await module.default.setup(pluginContext)
     await writeFile(process.env.OPENCODE_LOOP_V2_MARKER, JSON.stringify({ activated: true }, null, 2), "utf8")
     return async () => {
       if (typeof cleanup === "function") await cleanup()
@@ -187,8 +212,10 @@ async function main() {
 
   const workspace = await mkdtemp(path.join(os.tmpdir(), "opencode-loop-v2-e2e-"))
   const home = path.join(workspace, ".home")
-  const pluginDir = path.join(workspace, ".opencode", "plugins")
+  const pluginDir = path.join(home, ".config", "opencode", "plugins")
   const marker = path.join(workspace, "v2-real-adapter-marker.json")
+  const eventTrace = path.join(workspace, "v2-native-events.jsonl")
+  const pluginEventTrace = path.join(workspace, "v2-plugin-events.jsonl")
   const provider = startProvider()
   const providerPort = await provider.listen()
   let server
@@ -241,6 +268,8 @@ async function main() {
     XDG_CACHE_HOME: path.join(home, ".cache"),
     OPENCODE_LOOP_V2_PLUGIN_URL: pathToFileURL(path.join(repoRoot, "src", "source", "opencode2", "experimental.js")).href,
     OPENCODE_LOOP_V2_MARKER: marker,
+    OPENCODE_LOOP_V2_EVENT_TRACE: eventTrace,
+    OPENCODE_LOOP_V2_PLUGIN_EVENT_TRACE: pluginEventTrace,
     OPENCODE_SERVER_USERNAME: SERVER_USERNAME,
     OPENCODE_SERVER_PASSWORD: SERVER_PASSWORD,
     OPENCODE_DISABLE_AUTOUPDATE: "true",
@@ -253,6 +282,10 @@ async function main() {
     if (sessionID) {
       try { state = await readFile(path.join(workspace, ".opencode", "opencode-loop", `${sessionID}.json`), "utf8") } catch {}
     }
+    let nativeEvents = "missing"
+    let pluginEvents = "missing"
+    try { nativeEvents = await readFile(eventTrace, "utf8") } catch {}
+    try { pluginEvents = await readFile(pluginEventTrace, "utf8") } catch {}
     return [
       `apiPrefix=${String(apiPrefix)}`,
       `commands=${JSON.stringify([...latestCommands])}`,
@@ -260,14 +293,18 @@ async function main() {
       `sessionID=${sessionID || "none"}`,
       `commandError=${String(commandError ?? "none")}`,
       `state=${state}`,
+      `binary=${OPENCODE_BINARY}`,
+      `currentCommandFields=${CURRENT_COMMAND_FIELDS}`,
       `serverExit=${server?.exitCode}`,
+      `nativeEvents=${nativeEvents.slice(-40_000)}`,
+      `pluginEvents=${pluginEvents.slice(-40_000)}`,
       `serverLog=${serverLog}`,
     ].join("\n")
   }
 
   try {
     const port = await reservePort()
-    server = spawn("opencode2", ["serve", "--hostname", "127.0.0.1", "--port", String(port)], {
+    server = spawn(OPENCODE_BINARY, ["serve", "--hostname", "127.0.0.1", "--port", String(port)], {
       cwd: workspace,
       env,
       windowsHide: true,
@@ -336,9 +373,13 @@ async function main() {
     sessionID = String(session?.id ?? "")
     assert.ok(sessionID, `OpenCode 2 did not create a session: ${createdResponse.text}\n${await diagnostics()}`)
 
+    const commandBody = (command, argumentsText = "") => CURRENT_COMMAND_FIELDS
+      ? { name: command, text: argumentsText }
+      : { command, arguments: argumentsText }
+
     const commandPromise = request(`${apiPrefix}/session/${encodeURIComponent(sessionID)}/command`, {
       method: "POST",
-      body: JSON.stringify({ command: "loop", arguments: `0s --max-runs ${EXPECTED_TURNS} ${LOOP_OBJECTIVE}` }),
+      body: JSON.stringify(commandBody("loop", `0s --max-runs ${EXPECTED_TURNS} ${LOOP_OBJECTIVE}`)),
     }, 120_000).catch((error) => {
       commandError = error
       return null
@@ -371,7 +412,7 @@ async function main() {
     const sendControl = async (command, argumentsText = "") => {
       const response = await request(`${apiPrefix}/session/${encodeURIComponent(sessionID)}/command`, {
         method: "POST",
-        body: JSON.stringify({ command, arguments: argumentsText }),
+        body: JSON.stringify(commandBody(command, argumentsText)),
       }, 120_000)
       if (!response.ok) throw new Error(`${command} failed: HTTP ${response.status} ${response.text}\n${await diagnostics()}`)
       return response

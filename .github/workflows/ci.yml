@@ -75,14 +75,14 @@ jobs:
 
       - run: npm test
 
-      - name: Verify Bun can load the plugin
-        run: bun -e "await import('./src/index.js')"
+      - name: Verify Bun can load the plugin entries
+        run: bun -e "await import('./src/index.js'); const server = await import('./src/server.js'); if (typeof server.default?.server !== 'function' || typeof server.default?.setup !== 'function') throw new Error('dual server entry is invalid')"
 
-      # Issue #2 happened in the installer-created .ts plugin shape, not the source .js file.
-      - name: "Regression #2 - verify local .ts plugin loads in Bun"
+      # Issue #2 and OpenCode 2.0.11 both happen in the installer-created .ts plugin shape.
+      - name: "Regression #2 - verify dual local .ts plugin loads in Bun"
         run: |
-          node -e "require('node:fs').copyFileSync('src/index.js', 'src/__opencode_loop_local_ci.ts')"
-          bun -e "await import('./src/__opencode_loop_local_ci.ts')"
+          node -e "require('node:fs').copyFileSync('src/server.js', 'src/__opencode_loop_local_ci.ts')"
+          bun -e "const plugin = await import('./src/__opencode_loop_local_ci.ts'); if (typeof plugin.default?.server !== 'function' || typeof plugin.default?.setup !== 'function') throw new Error('dual local plugin contract is invalid')"
           node -e "require('node:fs').rmSync('src/__opencode_loop_local_ci.ts', { force: true })"
 
   opencode-peer-compat:
@@ -121,12 +121,12 @@ jobs:
       - run: npm test
 
       - name: Verify Bun can load with this OpenCode plugin
-        run: bun -e "await import('./src/index.js')"
+        run: bun -e "await import('./src/index.js'); const server = await import('./src/server.js'); if (typeof server.default?.server !== 'function') throw new Error('V1 server contract is unavailable')"
 
-      - name: "Regression #2 - verify local .ts plugin loads with this OpenCode plugin"
+      - name: "Regression #2 - verify dual local .ts plugin loads with this OpenCode plugin"
         run: |
-          node -e "require('node:fs').copyFileSync('src/index.js', 'src/__opencode_loop_local_ci.ts')"
-          bun -e "await import('./src/__opencode_loop_local_ci.ts')"
+          node -e "require('node:fs').copyFileSync('src/server.js', 'src/__opencode_loop_local_ci.ts')"
+          bun -e "const plugin = await import('./src/__opencode_loop_local_ci.ts'); if (typeof plugin.default?.server !== 'function') throw new Error('V1 local server contract is unavailable')"
           node -e "require('node:fs').rmSync('src/__opencode_loop_local_ci.ts', { force: true })"
 
   real-opencode-loop:

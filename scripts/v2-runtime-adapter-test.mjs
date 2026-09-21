@@ -164,6 +164,8 @@ async function verifyTwoTurnLoop({ directory, sessionID, events, prompts, native
     sessionID: "ses_v2",
     noReply: true,
     parts: [{ type: "text", text: "OpenCode loop status:\nNo active loop jobs." }],
+    text: "OpenCode loop status:\nNo active loop jobs.",
+    resume: false,
     agent: "build",
     model: { providerID: "canary", modelID: "canary" },
   })
@@ -295,6 +297,79 @@ async function verifyTwoTurnLoop({ directory, sessionID, events, prompts, native
     await new Promise((resolve) => setTimeout(resolve, 25))
     await assert.rejects(readFile(path.join(directory, ".opencode", "opencode-loop", `${sessionID}.json`), "utf8"), /ENOENT/)
     assert.equal(prompts.length, 0, "ordinary V2 inbox messages must not be interpreted as Loop commands")
+  } finally {
+    await cleanup?.()
+    await rm(directory, { recursive: true, force: true })
+  }
+}
+
+{
+  const directory = await mkdtemp(path.join(os.tmpdir(), "opencode-loop-v2-2-0-11-command-add-"))
+  const sessionID = "ses_v2_2_0_11_add"
+  const events = controllableStream()
+  const prompts = []
+  const commands = new Map()
+  const ctx = {
+    app: { name: "opencode", version: "2.0.11", channel: "latest" },
+    location: { directory },
+    command: {
+      transform: async (callback) => {
+        await callback({
+          add(definition) {
+            commands.set(definition.name, definition)
+          },
+        })
+        return { dispose: async () => {} }
+      },
+    },
+    event: {
+      // OpenCode 2.0.11 exposes subscribe(options), so Function.length === 1
+      // even though it returns an AsyncIterable rather than accepting a callback.
+      subscribe(options) {
+        assert.equal(options, undefined)
+        return events.stream
+      },
+    },
+    session: {
+      prompt: async (input) => {
+        prompts.push(structuredClone(input))
+        return { accepted: true }
+      },
+    },
+  }
+
+  const cleanup = await OpenCodeLoopV2ExperimentalPlugin.setup(ctx)
+  try {
+    assert.ok(commands.has("loop"), "OpenCode 2.0.11 add() command editor must receive /loop")
+    await commands.get("loop").execute({
+      sessionID,
+      prompt: { text: "0s --max-runs 2 continue exact 2.0.11 command path" },
+      delivery: "steer",
+    })
+
+    const stateFile = path.join(directory, ".opencode", "opencode-loop", `${sessionID}.json`)
+    await waitFor(async () => {
+      try { return JSON.parse(await readFile(stateFile, "utf8")).jobs?.length === 1 } catch { return false }
+    }, "OpenCode 2.0.11 direct command state creation")
+
+    await waitFor(() => prompts.length === 1, "OpenCode 2.0.11 direct command first local-kick dispatch")
+    assert.equal(prompts[0].sessionID, sessionID)
+    assert.match(prompts[0].text || "", /continue exact 2\.0\.11 command path/)
+
+    events.push({
+      type: "session.status",
+      location: { directory },
+      data: { sessionID, status: { type: "busy" } },
+    })
+    events.push({
+      type: "session.status",
+      location: { directory },
+      data: { sessionID, status: { type: "idle" } },
+    })
+    await waitFor(() => prompts.length === 2, "OpenCode 2.0.11 second dispatch from native idle status")
+    const state = JSON.parse(await readFile(stateFile, "utf8"))
+    assert.equal(state.jobs[0].runCount, 2)
+    assert.equal(state.jobs[0].enabled, false)
   } finally {
     await cleanup?.()
     await rm(directory, { recursive: true, force: true })

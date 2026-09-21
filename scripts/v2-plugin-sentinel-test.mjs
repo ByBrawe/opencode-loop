@@ -3,7 +3,7 @@ import plugin, {
   OPENCODE_LOOP_V2_COMMANDS,
   OPENCODE_LOOP_V2_PLUGIN_ID,
 } from "../src/source/opencode2/experimental.js"
-import { parseOpenCode2LoopCommandText } from "../src/source/opencode2/commands.js"
+import { parseOpenCode2LoopCommandText, registerOpenCode2LoopCommands } from "../src/source/opencode2/commands.js"
 import {
   OPENCODE_LOOP_V2_COMMAND_SOURCE,
   OPENCODE_LOOP_V2_HOST_REQUIREMENTS,
@@ -77,13 +77,43 @@ for (const [name, definition] of Object.entries(OPENCODE_LOOP_V2_COMMANDS)) {
   assert.equal(command?.description, definition.description)
 }
 
-let missingDraftUpdateFailed = false
+let missingDraftMutationFailed = false
 try {
   await registered({})
 } catch (error) {
-  missingDraftUpdateFailed = /command draft\.update capability is unavailable/.test(String(error))
+  missingDraftMutationFailed = /neither add\(\) nor update\(\)/.test(String(error))
 }
-assert.equal(missingDraftUpdateFailed, true)
+assert.equal(missingDraftMutationFailed, true)
+
+const addedCommands = new Map()
+const executedCommands = []
+registerOpenCode2LoopCommands({
+  add(definition) {
+    addedCommands.set(definition.name, definition)
+  },
+}, {
+  execute: async (event) => {
+    executedCommands.push(structuredClone(event))
+  },
+})
+assert.deepEqual([...addedCommands.keys()], Object.keys(OPENCODE_LOOP_V2_COMMANDS))
+for (const [name, definition] of Object.entries(OPENCODE_LOOP_V2_COMMANDS)) {
+  const command = addedCommands.get(name)
+  assert.equal(command?.name, name)
+  assert.equal(command?.description, definition.description)
+  assert.equal(typeof command?.execute, "function")
+}
+await addedCommands.get("loop").execute({
+  sessionID: "ses_2_0_11",
+  prompt: { text: "devam et" },
+  delivery: "steer",
+})
+assert.deepEqual(executedCommands, [{
+  name: "loop",
+  sessionID: "ses_2_0_11",
+  arguments: "devam et",
+  delivery: "steer",
+}])
 
 assert.deepEqual(inspectOpenCode2Context(currentContext), {
   commandTransform: true,
@@ -98,6 +128,7 @@ assert.deepEqual(inspectOpenCode2Context(currentContext), {
 assert.deepEqual(inspectOpenCode2CommandDraft(currentDraft), {
   list: true,
   get: true,
+  add: false,
   update: true,
   remove: true,
 })

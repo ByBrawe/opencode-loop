@@ -56,7 +56,13 @@ async function waitFor(predicate, description, timeoutMs = 2_000) {
   await adapter.start()
   const result = await adapter.command({ sessionID: "ses_adapter", command: "/review", arguments: "--quick" })
   assert.deepEqual(result, { accepted: true })
-  assert.deepEqual(commands, [{ sessionID: "ses_adapter", command: "review", arguments: "--quick" }])
+  assert.deepEqual(commands, [{
+    sessionID: "ses_adapter",
+    name: "review",
+    command: "review",
+    arguments: "--quick",
+    text: "--quick",
+  }])
   assert.equal(Object.prototype.hasOwnProperty.call(commands[0], "id"), false)
   await adapter.dispose()
 }
@@ -103,7 +109,13 @@ async function waitFor(predicate, description, timeoutMs = 2_000) {
     })
     events.push({ directory, payload: { type: "session.idle", properties: { sessionID } } })
     await waitFor(() => commands.length === 1, "V2 command dispatch")
-    assert.deepEqual(commands[0], { sessionID, command: "review", arguments: "--quick" })
+    assert.deepEqual(commands[0], {
+      sessionID,
+      name: "review",
+      command: "review",
+      arguments: "--quick",
+      text: "--quick",
+    })
   } finally {
     await cleanup?.()
     await rm(directory, { recursive: true, force: true })
