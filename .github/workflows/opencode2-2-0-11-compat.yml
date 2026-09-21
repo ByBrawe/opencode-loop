@@ -1,0 +1,109 @@
+name: OpenCode 2.0.11 Compatibility
+
+on:
+  pull_request:
+    paths:
+      - "src/source/**"
+      - "src/server.js"
+      - "scripts/install-node.mjs"
+      - "scripts/v2-*.mjs"
+      - "package.json"
+      - ".github/workflows/opencode2-2-0-11-compat.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/source/**"
+      - "src/server.js"
+      - "scripts/install-node.mjs"
+      - "scripts/v2-*.mjs"
+      - "package.json"
+      - ".github/workflows/opencode2-2-0-11-compat.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  exact-host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: npm ci
+      - run: npm run build:plugin
+
+      - name: Isolate OpenCode 2.0.11 paths
+        shell: bash
+        run: |
+          echo "HOME=$RUNNER_TEMP/opencode-2-0-11-home" >> "$GITHUB_ENV"
+          echo "XDG_CONFIG_HOME=$RUNNER_TEMP/opencode-2-0-11-home/.config" >> "$GITHUB_ENV"
+          echo "XDG_DATA_HOME=$RUNNER_TEMP/opencode-2-0-11-home/.local/share" >> "$GITHUB_ENV"
+          echo "XDG_STATE_HOME=$RUNNER_TEMP/opencode-2-0-11-home/.local/state" >> "$GITHUB_ENV"
+
+      - name: Install exact OpenCode 2.0.11
+        run: npm install -g @opencode/cli@2.0.11
+
+      - name: Show exact host version
+        run: opencode2 --version
+
+      - name: Prepare global local-plugin shape from the installer bundle
+        shell: bash
+        run: |
+          config="$XDG_CONFIG_HOME/opencode"
+          project="$RUNNER_TEMP/opencode-loop-2-0-11-project"
+          mkdir -p "$config/plugins" "$project" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
+          cp src/server.js "$config/plugins/opencode-loop.ts"
+          printf '{"private":true,"dependencies":{"@opencode-ai/plugin":"1.18.31"}}\n' > "$config/package.json"
+          npm install --prefix "$config" --ignore-scripts --no-audit --no-fund
+          printf '# OpenCode 2.0.11 Loop compatibility\n' > "$project/README.md"
+          git init --quiet "$project"
+          git -C "$project" config user.email "opencode-loop-ci@example.invalid"
+          git -C "$project" config user.name "OpenCode Loop CI"
+          git -C "$project" add .
+          git -C "$project" commit --quiet -m "init"
+          echo "OPENCODE_LOOP_2011_PROJECT=$project" >> "$GITHUB_ENV"
+
+      - name: Verify exact 2.0.11 accepts the dual plugin and registers Loop commands
+        shell: bash
+        run: |
+          opencode2 service stop >/dev/null 2>&1 || true
+          plugin_json="$RUNNER_TEMP/opencode-loop-2-0-11-plugin.json"
+          command_json="$RUNNER_TEMP/opencode-loop-2-0-11-command.json"
+          opencode2 api get /api/plugin -H "x-opencode-directory: $OPENCODE_LOOP_2011_PROJECT" > "$plugin_json"
+          opencode2 api get /api/command -H "x-opencode-directory: $OPENCODE_LOOP_2011_PROJECT" > "$command_json"
+          cat "$plugin_json"
+          cat "$command_json"
+          node - "$plugin_json" "$command_json" <<'NODE'
+          const fs = require("node:fs")
+          const plugins = JSON.parse(fs.readFileSync(process.argv[2], "utf8"))
+          const commands = JSON.parse(fs.readFileSync(process.argv[3], "utf8"))
+          const collect = (value) => {
+            if (Array.isArray(value)) return value.flatMap(collect)
+            if (!value || typeof value !== "object") return []
+            return [
+              ...(typeof value.id === "string" ? [value.id] : []),
+              ...(typeof value.name === "string" ? [value.name] : []),
+              ...Object.values(value).flatMap(collect),
+            ]
+          }
+          const ids = new Set(collect(plugins))
+          if (!ids.has("@bybrawe/opencode-loop")) {
+            throw new Error("OpenCode 2.0.11 did not activate @bybrawe/opencode-loop")
+          }
+          const commandData = Array.isArray(commands?.data) ? commands.data : Array.isArray(commands) ? commands : []
+          const names = new Set(commandData.map((item) => item?.name).filter(Boolean))
+          for (const required of ["loop", "loop-status", "loop-now", "loop-stop", "loop-help", "loop-doctor"]) {
+            if (!names.has(required)) throw new Error(`OpenCode 2.0.11 missing command: ${required}`)
+          }
+          NODE
