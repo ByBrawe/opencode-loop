@@ -13,6 +13,41 @@ permissions:
   contents: read
 
 jobs:
+  sync-feature-server-bundle:
+    name: sync feature dual server bundle
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'fix/opencode-2-0-11-plugin-entry'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: npm ci
+      - run: npm run build:plugin
+      - name: Require stable V1 bundle to remain unchanged
+        run: git diff --exit-code -- src/index.js
+      - name: Commit generated server bundle when needed
+        shell: bash
+        run: |
+          if git diff --quiet -- src/server.js; then
+            echo "src/server.js already synchronized."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/server.js
+          git commit -m "build(plugin): sync dual OpenCode server bundle"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+
   bundled-host:
     name: bundled Loop host (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
