@@ -33,7 +33,7 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
         if (!promptRuntime || !diagnosticsRuntime) {
           throw new Error("OpenCode Loop V2 runtime is not ready")
         }
-        return await onRuntimeEvent(Object.freeze({
+        const commandEvent = Object.freeze({
           kind: "command",
           action: "executed",
           sessionID: String(sessionID || ""),
@@ -41,7 +41,23 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
           name,
           arguments: argumentsText,
           delivery,
-        }))
+        })
+        const result = await onRuntimeEvent(commandEvent)
+
+        // OpenCode 2.0.11 command callbacks are truly local: creating a Loop
+        // job does not itself start a model turn, so no execution-succeeded
+        // idle event follows the command. Kick one local idle boundary for
+        // commands that can make prompt work immediately due. Once the prompt
+        // is admitted, the real execution event stream owns subsequent turns.
+        if (result?.handled && result?.accepted && ["loop", "loop-now", "loop-resume"].includes(name)) {
+          await onRuntimeEvent(Object.freeze({
+            kind: "session",
+            action: "idle",
+            sessionID: String(sessionID || ""),
+            directory: runtimeDirectory,
+          }))
+        }
+        return result
       },
     }))
 
