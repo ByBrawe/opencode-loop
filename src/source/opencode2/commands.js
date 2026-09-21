@@ -49,16 +49,52 @@ export const OPENCODE_LOOP_V2_COMMANDS = Object.freeze({
   }),
 })
 
-export function registerOpenCode2LoopCommands(draft) {
-  if (!draft || typeof draft.update !== "function") {
-    throw new Error("OpenCode 2 command draft.update capability is unavailable")
+function commandArguments(input) {
+  const prompt = input?.prompt
+  if (typeof prompt?.text === "string") return prompt.text.trim()
+  if (typeof input?.arguments === "string") return input.arguments.trim()
+  return ""
+}
+
+export function registerOpenCode2LoopCommands(draft, options = {}) {
+  if (!draft || typeof draft !== "object") {
+    throw new Error("OpenCode 2 command transform draft is unavailable")
   }
-  for (const [name, definition] of Object.entries(OPENCODE_LOOP_V2_COMMANDS)) {
-    draft.update(name, (command) => {
-      command.template = definition.template
-      command.description = definition.description
-    })
+
+  // OpenCode 2.0.11 exposes CommandEditor.add({ name, execute }). Earlier
+  // beta hosts exposed update(name, mutate) over command-file definitions.
+  // Support both without guessing the host version.
+  if (typeof draft.add === "function") {
+    const execute = options.execute
+    if (typeof execute !== "function") {
+      throw new Error("OpenCode 2 command draft.add requires a local Loop command executor")
+    }
+    for (const [name, definition] of Object.entries(OPENCODE_LOOP_V2_COMMANDS)) {
+      draft.add({
+        name,
+        description: definition.description,
+        execute: async (input) => await execute({
+          name,
+          sessionID: input?.sessionID,
+          arguments: commandArguments(input),
+          delivery: input?.delivery,
+        }),
+      })
+    }
+    return
   }
+
+  if (typeof draft.update === "function") {
+    for (const [name, definition] of Object.entries(OPENCODE_LOOP_V2_COMMANDS)) {
+      draft.update(name, (command) => {
+        command.template = definition.template
+        command.description = definition.description
+      })
+    }
+    return
+  }
+
+  throw new Error("OpenCode 2 command transform exposes neither add() nor update()")
 }
 
 export function parseOpenCode2LoopCommandText(value) {
