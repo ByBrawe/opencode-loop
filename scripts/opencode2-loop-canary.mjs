@@ -14,6 +14,8 @@ const EXPECTED_TURNS = 2
 const EXPECTED_COMMANDS = ["loop", "loop-pause", "loop-resume", "loop-stop", "loop-remove", "loop-clear"]
 const SERVER_USERNAME = "opencode"
 const SERVER_PASSWORD = "opencode-loop-v2-canary"
+const OPENCODE_BINARY = process.env.OPENCODE2_BINARY || "opencode2"
+const CURRENT_COMMAND_FIELDS = process.env.OPENCODE2_CURRENT_COMMAND_FIELDS === "1"
 
 function appendLog(current, chunk, limit = 100_000) {
   return (current + String(chunk)).slice(-limit)
@@ -187,7 +189,7 @@ async function main() {
 
   const workspace = await mkdtemp(path.join(os.tmpdir(), "opencode-loop-v2-e2e-"))
   const home = path.join(workspace, ".home")
-  const pluginDir = path.join(workspace, ".opencode", "plugins")
+  const pluginDir = path.join(home, ".config", "opencode", "plugins")
   const marker = path.join(workspace, "v2-real-adapter-marker.json")
   const provider = startProvider()
   const providerPort = await provider.listen()
@@ -260,6 +262,8 @@ async function main() {
       `sessionID=${sessionID || "none"}`,
       `commandError=${String(commandError ?? "none")}`,
       `state=${state}`,
+      `binary=${OPENCODE_BINARY}`,
+      `currentCommandFields=${CURRENT_COMMAND_FIELDS}`,
       `serverExit=${server?.exitCode}`,
       `serverLog=${serverLog}`,
     ].join("\n")
@@ -267,7 +271,7 @@ async function main() {
 
   try {
     const port = await reservePort()
-    server = spawn("opencode2", ["serve", "--hostname", "127.0.0.1", "--port", String(port)], {
+    server = spawn(OPENCODE_BINARY, ["serve", "--hostname", "127.0.0.1", "--port", String(port)], {
       cwd: workspace,
       env,
       windowsHide: true,
@@ -336,9 +340,13 @@ async function main() {
     sessionID = String(session?.id ?? "")
     assert.ok(sessionID, `OpenCode 2 did not create a session: ${createdResponse.text}\n${await diagnostics()}`)
 
+    const commandBody = (command, argumentsText = "") => CURRENT_COMMAND_FIELDS
+      ? { name: command, text: argumentsText }
+      : { command, arguments: argumentsText }
+
     const commandPromise = request(`${apiPrefix}/session/${encodeURIComponent(sessionID)}/command`, {
       method: "POST",
-      body: JSON.stringify({ command: "loop", arguments: `0s --max-runs ${EXPECTED_TURNS} ${LOOP_OBJECTIVE}` }),
+      body: JSON.stringify(commandBody("loop", `0s --max-runs ${EXPECTED_TURNS} ${LOOP_OBJECTIVE}`)),
     }, 120_000).catch((error) => {
       commandError = error
       return null
@@ -371,7 +379,7 @@ async function main() {
     const sendControl = async (command, argumentsText = "") => {
       const response = await request(`${apiPrefix}/session/${encodeURIComponent(sessionID)}/command`, {
         method: "POST",
-        body: JSON.stringify({ command, arguments: argumentsText }),
+        body: JSON.stringify(commandBody(command, argumentsText)),
       }, 120_000)
       if (!response.ok) throw new Error(`${command} failed: HTTP ${response.status} ${response.text}\n${await diagnostics()}`)
       return response
