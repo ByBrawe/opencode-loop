@@ -165,7 +165,7 @@ async function createHarness(options = {}) {
     },
     async cleanup() {
       await hooks.dispose?.()
-      await fs.rm(directory, { recursive: true, force: true })
+      await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
     },
   }
 }
@@ -643,7 +643,7 @@ async function testInitializationDoesNotWaitForLocalApi() {
     assert.equal(typeof hooks.event, "function")
     await hooks.dispose?.()
   } finally {
-    await fs.rm(directory, { recursive: true, force: true })
+    await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   }
 }
 
