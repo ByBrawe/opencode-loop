@@ -158,6 +158,36 @@ try {
   }
 
   {
+    const sessionID = "concurrent-recovery-log-dedupe"
+    track(sessionID)
+    runtime.clearSessionStatus(sessionID)
+    activeRuns.set(sessionID, { jobId: "job-dedupe", job: { id: "job-dedupe", name: "dedupe" }, startedAt: 1_000 })
+    completion = "completed"
+    let releaseStatus
+    const gate = new Promise((resolve) => { releaseStatus = resolve })
+    let calls = 0
+    const client = {
+      session: {
+        status: async () => {
+          calls += 1
+          await gate
+          return { data: { [sessionID]: { type: "busy" } } }
+        },
+      },
+    }
+    const before = logs.filter((entry) => entry[1] === "status-message-complete-recovery" && entry[2]?.sessionID === sessionID).length
+    const pending = Array.from({ length: 20 }, () => runtime.sessionStatusType(client, sessionID, "/repo"))
+    await Promise.resolve()
+    assert.equal(calls, 20, "all concurrent status reads should be in flight before release")
+    releaseStatus()
+    assert.deepEqual(await Promise.all(pending), Array(20).fill("idle"))
+    const after = logs.filter((entry) => entry[1] === "status-message-complete-recovery" && entry[2]?.sessionID === sessionID).length
+    assert.equal(after - before, 1, "one active run must emit at most one copy of the same stale-recovery diagnostic")
+    activeRuns.delete(sessionID)
+    completion = "unknown"
+  }
+
+  {
     const sessionID = "retry-remains-owned"
     track(sessionID)
     runtime.clearSessionStatus(sessionID)
