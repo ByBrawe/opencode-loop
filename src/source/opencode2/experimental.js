@@ -16,22 +16,40 @@ export const OpenCodeLoopV2ExperimentalPlugin = {
       throw new Error("OpenCode 2 command.transform capability is unavailable")
     }
 
-    const commandRegistration = await ctx.command.transform(registerOpenCode2LoopCommands)
-    if (!capabilities.eventSubscribe || !capabilities.sessionPrompt) {
-      await commandRegistration?.dispose?.()
-      return undefined
-    }
-
     let promptRuntime
     let diagnosticsRuntime
     const logRuntime = createOpenCode2LogRuntime()
+    const runtimeDirectory = String(ctx?.location?.directory || ctx?.options?.directory || "").trim() || undefined
+
     const onRuntimeEvent = async (event) => {
       const promptResult = await promptRuntime?.onEvent(event)
       await logRuntime.record(event, promptResult)
       if (promptResult?.handled) return promptResult
       return await diagnosticsRuntime?.onEvent(event) ?? promptResult
     }
-    const runtime = createOpenCode2RuntimeAdapter(ctx, { onEvent: onRuntimeEvent })
+
+    const commandRegistration = await ctx.command.transform((draft) => registerOpenCode2LoopCommands(draft, {
+      execute: async ({ name, sessionID, arguments: argumentsText, delivery }) => {
+        if (!promptRuntime || !diagnosticsRuntime) {
+          throw new Error("OpenCode Loop V2 runtime is not ready")
+        }
+        return await onRuntimeEvent(Object.freeze({
+          kind: "command",
+          action: "executed",
+          sessionID: String(sessionID || ""),
+          directory: runtimeDirectory,
+          name,
+          arguments: argumentsText,
+          delivery,
+        }))
+      },
+    }))
+
+    if (!capabilities.eventSubscribe || !capabilities.sessionPrompt) {
+      await commandRegistration?.dispose?.()
+      return undefined
+    }
+    const runtime = createOpenCode2RuntimeAdapter(ctx, { directory: runtimeDirectory, onEvent: onRuntimeEvent })
     promptRuntime = createOpenCode2PromptRuntime({
       prompt: (request) => runtime.prompt(request),
       command: capabilities.sessionCommand ? (request) => runtime.command(request) : undefined,
