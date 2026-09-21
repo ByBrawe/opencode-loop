@@ -62,6 +62,11 @@ try {
   const localResult = await runInstaller(local)
   assert.equal(localResult.code, 0, localResult.stderr)
   assert.equal(await exists(path.join(local, "plugins", "opencode-loop.ts")), true)
+  assert.equal(
+    await fs.readFile(path.join(local, "plugins", "opencode-loop.ts"), "utf8"),
+    await fs.readFile(path.join(root, "src", "server.js"), "utf8"),
+    "local install must copy the dual OpenCode 1/2 server bundle",
+  )
   assert.equal(await commandCount(local), packagedCommandCount)
   assert.equal(await exists(path.join(local, "agents", "opencode-loop-local.md")), true)
   const localPackage = JSON.parse(await fs.readFile(path.join(local, "package.json"), "utf8"))
