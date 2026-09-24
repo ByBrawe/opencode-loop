@@ -383,6 +383,25 @@ Pin a session and limit runs:
 opencode-loopd --project . --session ses_xxx --every 5m --max-runs 20 --timeout 30m --prompt-file loop-prompt.md
 ```
 
+### Dedicated Goal pulse-check
+
+Use the daemon as a read-only stall detector for dedicated `/goal` state:
+
+```bash
+# one-shot (good for systemd timers / cron-style runners)
+opencode-loopd pulse-check --project . --stale-after 30m
+
+# repeating opt-in watcher
+opencode-loopd pulse-check --project . --stale-after 30m --every 1m
+
+# watch one Goal by Goal ID or session ID
+opencode-loopd pulse-check --project . --goal <goal-or-session-id> --stale-after 30m --every 1m
+```
+
+The pulse-check reads `.opencode/goals/*.json` and alerts only while the dedicated Goal is `active`. `paused`, `waiting_user`, `blocked`, budget/usage-limited, and completed Goals do not alert. A stall episode is based on durable Goal activity (`updatedAt`, progress/revision changes); OpenCode session `updated` time is included only as corroborating telemetry because it is not reliable enough to be the stall authority on every host version.
+
+Episode state is stored separately in `.opencode/opencode-loop/pulse-check.json`. The checker never writes Goal state, never dispatches a prompt, never runs `/goal resume`, and therefore does not participate in the prompt-producing Goal-overlap guard. It emits at most one alert per stall episode and re-arms after observed Goal activity or a status change. The alert explicitly names the human recovery action: run `/goal resume` in the Goal's session.
+
 Windows Task Scheduler:
 
 ```powershell
