@@ -819,6 +819,8 @@ async function activeRunCompletionFromMessages(directory, client, sessionID, act
   if (!messages)
     return "unknown";
   const ordered = orderedSessionMessages(messages);
+  if (ordered.length === 0)
+    return "unknown";
   const tail = ordered.at(-1);
   const info = tail?.info || tail;
   if (!info || info.role !== "assistant")
@@ -2994,8 +2996,10 @@ function createSessionStatusRuntime(options = {}) {
   async function canFinalizeActiveRun(directory, client, sessionID, active, options = {}) {
     if (hasActiveToolCalls(sessionID) || hasBusyDescendant(sessionID))
       return false;
-    if (!options.requireIdle && !options.forceStale)
-      return true;
+    if (!options.requireIdle && !options.forceStale) {
+      const completion = await activeRunCompletionFromMessages2(directory, client, sessionID, active);
+      return completion !== "incomplete";
+    }
     const completion = options.forceStale ? await activeRunCompletionFromMessages2(directory, client, sessionID, active) : undefined;
     if (settledAssistantCompletion(completion))
       return true;
