@@ -57,6 +57,7 @@ assert.equal(compactTuiCommandName("other"), undefined)
   assert.deepEqual(ordered.map((item) => item.info.id), ["a", "b", "c"])
 
   assert.equal(await activeRunCompletionFromMessages("/tmp", {}, "missing", { startedAt: 100 }), "unknown")
+  assert.equal(await activeRunCompletionFromMessages("/tmp", messagesClient([]), "empty-history", { startedAt: 100 }), "unknown")
   assert.equal(await activeRunCompletionFromMessages(
     "/tmp", messagesClient([{ info: { role: "assistant", time: { created: 50, completed: 90 } } }]), "old", { startedAt: 100 },
   ), "incomplete")
