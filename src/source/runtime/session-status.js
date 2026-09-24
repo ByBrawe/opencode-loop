@@ -113,7 +113,17 @@ export function createSessionStatusRuntime(options = {}) {
 
   async function canFinalizeActiveRun(directory, client, sessionID, active, options = {}) {
     if (hasActiveToolCalls(sessionID) || hasBusyDescendant(sessionID)) return false
-    if (!options.requireIdle && !options.forceStale) return true
+
+    // OpenCode 1.x can emit transient session.idle boundaries between tool
+    // steps while the same assistant turn is still in progress. When the
+    // message API can prove that the current assistant message is incomplete,
+    // keep the Loop-owned run active instead of treating that transient idle
+    // as a completed turn. Preserve the historical fallback when message
+    // completion evidence is unavailable.
+    if (!options.requireIdle && !options.forceStale) {
+      const completion = await activeRunCompletionFromMessages(directory, client, sessionID, active)
+      return completion !== "incomplete"
+    }
 
     const completion = options.forceStale
       ? await activeRunCompletionFromMessages(directory, client, sessionID, active)
