@@ -231,6 +231,17 @@ try {
     track(sessionID)
     runtime.clearSessionStatus(sessionID)
     const active = { jobId: "job", job: {}, startedAt: clock - 100 }
+    completion = "unknown"
+    assert.equal(await runtime.canFinalizeActiveRun("/repo", {}, sessionID, active), true)
+
+    completion = "incomplete"
+    assert.equal(
+      await runtime.canFinalizeActiveRun("/repo", {}, sessionID, active),
+      false,
+      "a transient idle boundary must not finalize a Loop-owned run while the assistant turn is still incomplete",
+    )
+
+    completion = "completed"
     assert.equal(await runtime.canFinalizeActiveRun("/repo", {}, sessionID, active), true)
 
     markToolCallActive({ sessionID, callID: "tool-finalize" })
@@ -240,6 +251,7 @@ try {
     runtime.markSessionStatus(sessionID, "idle", clock + 1)
     const client = { session: { status: async () => { throw new Error("status unavailable") } } }
     assert.equal(await runtime.canFinalizeActiveRun("/repo", client, sessionID, active, { requireIdle: true }), true)
+    completion = "unknown"
   }
 
   {
