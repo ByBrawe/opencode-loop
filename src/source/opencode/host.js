@@ -69,6 +69,7 @@ export async function activeRunCompletionFromMessages(directory, client, session
   const messages = await readRecentSessionMessages(client, sessionID, directory)
   if (!messages) return "unknown"
   const ordered = orderedSessionMessages(messages)
+  if (ordered.length === 0) return "unknown"
   const tail = ordered.at(-1)
   const info = tail?.info || tail
   if (!info || info.role !== "assistant") return "incomplete"
