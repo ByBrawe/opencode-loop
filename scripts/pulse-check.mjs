@@ -187,6 +187,7 @@ export async function checkGoalPulse(project, options = {}) {
       }
 
       let alerted = changed ? false : Boolean(previous?.alerted)
+      let newAlert = false
       const active = dedicatedGoalOwnsContinuation(goal)
       const ageMs = Math.max(0, now - lastActivityAt)
       const sessionUpdatedAt = timestamp(sessionActivity[goal.sessionID])
@@ -195,6 +196,7 @@ export async function checkGoalPulse(project, options = {}) {
         alerted = false
       } else if (ageMs >= staleAfterMs && !alerted) {
         alerted = true
+        newAlert = true
         const message = [
           "[opencode-loopd] GOAL PULSE STALLED",
           `goal=${id}`,
@@ -225,7 +227,7 @@ export async function checkGoalPulse(project, options = {}) {
         goalUpdatedAt,
         lastActivityAt,
         alerted,
-        ...(alerted ? { lastAlertAt: alerts.find((item) => item.goalID === id)?.goalID ? now : previous?.lastAlertAt } : {}),
+        ...(alerted ? { lastAlertAt: newAlert ? now : previous?.lastAlertAt } : {}),
         sessionID: String(goal.sessionID),
       }
     }
