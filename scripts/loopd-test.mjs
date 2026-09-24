@@ -146,6 +146,73 @@ try {
   })
   assert.equal(result.code, 7, "a finite daemon run must propagate the failing OpenCode exit code")
 
+  const goalsDir = path.join(project, ".opencode", "goals")
+  await fs.mkdir(goalsDir, { recursive: true })
+  const goalFile = path.join(goalsDir, "goal-stale.json")
+  const staleGoal = {
+    schemaVersion: 1,
+    id: "goal-stale",
+    sessionID: "ses_goal",
+    status: "active",
+    progressRevision: 4,
+    revision: 1,
+    storageGeneration: 1,
+    updatedAt: Date.now() - 60 * 60_000,
+  }
+  await fs.writeFile(goalFile, JSON.stringify(staleGoal, null, 2) + "\n", "utf8")
+  const originalGoal = await fs.readFile(goalFile, "utf8")
+  const pulseEnv = {
+    OPENCODE_BIN: fakeOpenCode.command,
+    FAKE_COMMAND_LOG: path.join(temporaryRoot, "pulse-opencode.jsonl"),
+    FAKE_SESSION_LIST_JSON: JSON.stringify([{ id: "ses_goal", title: "Goal", updated: Date.now() - 1_000 }]),
+  }
+
+  result = await runCli(["pulse-check", "--project", project, "--stale-after", "10m"], pulseEnv)
+  assert.equal(result.code, 0, result.stderr)
+  assert.match(result.stdout, /GOAL PULSE STALLED/)
+  assert.match(result.stdout, /goal=goal-stale/)
+  assert.match(result.stdout, /session=ses_goal/)
+  assert.match(result.stdout, /sessionUpdated=/)
+  assert.match(result.stdout, /action="\/goal resume"/)
+  assert.equal(await fs.readFile(goalFile, "utf8"), originalGoal, "pulse-check must never write dedicated Goal state")
+
+  result = await runCli(["pulse-check", "--project", project, "--stale-after", "10m"], pulseEnv)
+  assert.equal(result.code, 0, result.stderr)
+  assert.doesNotMatch(result.stdout, /GOAL PULSE STALLED/, "one stall episode must alert only once")
+
+  staleGoal.status = "waiting_user"
+  staleGoal.storageGeneration += 1
+  staleGoal.updatedAt = Date.now() - 30 * 60_000
+  await fs.writeFile(goalFile, JSON.stringify(staleGoal, null, 2) + "\n", "utf8")
+  result = await runCli(["pulse-check", "--project", project, "--stale-after", "10m"], pulseEnv)
+  assert.equal(result.code, 0, result.stderr)
+  assert.doesNotMatch(result.stdout, /GOAL PULSE STALLED/, "waiting_user must suppress pulse alerts")
+
+  staleGoal.status = "active"
+  staleGoal.progressRevision += 1
+  staleGoal.storageGeneration += 1
+  staleGoal.updatedAt = Date.now() - 11 * 60_000
+  await fs.writeFile(goalFile, JSON.stringify(staleGoal, null, 2) + "\n", "utf8")
+  result = await runCli(["pulse-check", "--project", project, "--stale-after", "10m"], pulseEnv)
+  assert.equal(result.code, 0, result.stderr)
+  assert.match(result.stdout, /GOAL PULSE STALLED/, "new Goal activity/status must re-arm a later stall episode")
+
+  const pulseState = path.join(project, ".opencode", "opencode-loop", "pulse-check.json")
+  await fs.rm(pulseState, { force: true })
+  staleGoal.updatedAt = Date.now() - 60 * 60_000
+  staleGoal.storageGeneration += 1
+  await fs.writeFile(goalFile, JSON.stringify(staleGoal, null, 2) + "\n", "utf8")
+  const concurrent = await Promise.all([
+    runCli(["pulse-check", "--project", project, "--stale-after", "10m"], pulseEnv),
+    runCli(["pulse-check", "--project", project, "--stale-after", "10m"], pulseEnv),
+  ])
+  assert.ok(concurrent.every((item) => item.code === 0), concurrent.map((item) => item.stderr).join("\n"))
+  const concurrentAlerts = concurrent.reduce((count, item) => count + (item.stdout.match(/GOAL PULSE STALLED/g) || []).length, 0)
+  assert.equal(concurrentAlerts, 1, "concurrent one-shot checks must share episode state and emit at most one alert")
+
+  const pulseCalls = await readLog(pulseEnv.FAKE_COMMAND_LOG)
+  assert.ok(pulseCalls.every((item) => item.args[0] === "session"), "pulse-check may inspect session telemetry but must never dispatch an OpenCode run")
+
   result = await runCli(["--project", project, "--max-runs", "not-a-number", "--prompt", "test"], {
     OPENCODE_BIN: fakeOpenCode.command,
     FAKE_COMMAND_LOG: path.join(temporaryRoot, "invalid-count.jsonl"),
