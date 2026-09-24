@@ -5,6 +5,7 @@ import { spawn, spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { homedir } from "node:os"
 import { fileURLToPath } from "node:url"
+import { checkGoalPulse, parsePulseDurationMs } from "./pulse-check.mjs"
 
 const args = process.argv.slice(2)
 const configuredRetryMs = Number(process.env.OPENCODE_LOOPD_FAILED_RUN_RETRY_MS)
@@ -48,6 +49,14 @@ function parseMaxRuns(value) {
   if (!/^\d+$/.test(text)) throw new Error(`Invalid --max-runs value: ${value}`)
   const parsed = Number(text)
   if (!Number.isSafeInteger(parsed)) throw new Error(`Invalid --max-runs value: ${value}`)
+  return parsed
+}
+
+function parseMaxChecks(value) {
+  const text = String(value ?? "0").trim()
+  if (!/^\d+$/.test(text)) throw new Error(`Invalid --max-checks value: ${value}`)
+  const parsed = Number(text)
+  if (!Number.isSafeInteger(parsed)) throw new Error(`Invalid --max-checks value: ${value}`)
   return parsed
 }
 
@@ -162,6 +171,21 @@ async function resolveLatestSessionID(opencodeBin, project, preferredTitle) {
   return typeof match?.id === "string" && match.id ? match.id : undefined
 }
 
+async function resolveSessionActivity(opencodeBin, project) {
+  const result = await run(opencodeBin, ["session", "list", "--format", "json", "-n", "100"], project, { capture: true, timeoutMs: 15_000 })
+  if (result.code !== 0 || result.timedOut) return {}
+  let parsed
+  try { parsed = JSON.parse(result.stdout || "[]") } catch { return {} }
+  const sessions = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.data) ? parsed.data : []
+  const activity = {}
+  for (const session of sessions) {
+    const id = typeof session?.id === "string" ? session.id : ""
+    const updated = Number(session?.updated ?? session?.time?.updated)
+    if (id && Number.isFinite(updated) && updated >= 0) activity[id] = updated
+  }
+  return activity
+}
+
 function runSync(command, commandArgs) {
   const options = { shell: false, stdio: "inherit", windowsHide: true }
   const direct = spawnSync(command, commandArgs, options)
@@ -255,6 +279,44 @@ async function daemon(options = {}) {
     }
 
     if (delay > 0) await sleep(delay)
+  }
+}
+
+async function pulseCheck(options = {}) {
+  const project = path.resolve(options.project ?? arg("--project", process.cwd()))
+  validateProject(project)
+  const staleAfterText = options.staleAfter ?? arg("--stale-after", "30m")
+  const staleAfterMs = parsePulseDurationMs(staleAfterText)
+  const every = options.every ?? arg("--every", "0s")
+  const delay = parseMs(every)
+  const maxChecks = parseMaxChecks(options.maxChecks ?? arg("--max-checks", "0"))
+  const target = options.target ?? arg("--goal")
+  const opencodeBin = options.opencodeBin || OPENCODE_BIN
+
+  console.log("OpenCode Goal pulse-check")
+  console.log(`project: ${project}`)
+  console.log(`stale-after: ${staleAfterText}`)
+  console.log(`every: ${delay > 0 ? every : "one-shot"}`)
+  if (target) console.log(`goal: ${target}`)
+
+  let checks = 0
+  while (true) {
+    checks += 1
+    const sessionActivity = await resolveSessionActivity(opencodeBin, project)
+    const result = await checkGoalPulse(project, {
+      staleAfterMs,
+      ...(target ? { target } : {}),
+      sessionActivity,
+    })
+
+    for (const alert of result.alerts) console.log(alert.message)
+    if (checks === 1) console.log(`state: ${result.stateFile}`)
+    if (target && checks === 1 && result.checked === 0) {
+      console.log(`[opencode-loopd] no dedicated Goal matched target=${target}`)
+    }
+
+    if (delay <= 0 || (maxChecks > 0 && checks >= maxChecks)) return 0
+    await sleep(delay)
   }
 }
 
@@ -354,6 +416,8 @@ OpenCode Loop daemon
 Usage:
   opencode-loopd --project . --every 5m --prompt-file loop-prompt.md
   opencode-loopd --project . --every 0s --prompt "continue from progress.md"
+  opencode-loopd pulse-check --project . --stale-after 30m
+  opencode-loopd pulse-check --project . --stale-after 30m --every 1m
   opencode-loopd install-task --project . --every 10m --prompt-file loop-prompt.md --name OpenCodeLoop
   opencode-loopd uninstall-task --name OpenCodeLoop
 
@@ -368,6 +432,12 @@ Options:
   --timeout <duration>   Max time per OpenCode run (default: 30m, 0s disables)
   --max-runs <n>         Stop after n runs
   --sleep-first          Wait before first run
+
+Pulse-check options:
+  --stale-after <duration>  Alert when an active dedicated Goal has not changed (default: 30m)
+  --goal <id|session>       Watch one Goal by Goal ID or session ID (default: all dedicated Goals)
+  --every <duration>        Repeat checks at this cadence; 0s is one-shot (default: 0s)
+  --max-checks <n>          Stop a repeating pulse-check after n checks
 `)
 }
 
@@ -378,6 +448,9 @@ try {
   if (command === "daemon" || command === "loopd") {
     args.shift()
     exitCode = await daemon()
+  } else if (command === "pulse-check") {
+    args.shift()
+    exitCode = await pulseCheck()
   } else if (command === "install-task") {
     args.shift()
     exitCode = installTask()
