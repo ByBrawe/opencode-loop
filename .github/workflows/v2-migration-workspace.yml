@@ -23,10 +23,10 @@ jobs:
         with:
           node-version: '22'
       - uses: oven-sh/setup-bun@v2
-      - name: Install locked development dependencies
+      - name: Install development dependencies
         run: |
           (cd loop && npm ci)
-          (cd goal && npm ci)
+          (cd goal && npm install --package-lock=false)
       - name: Archive public source and development dependencies only
         run: |
           mkdir workspace
