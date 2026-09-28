@@ -4272,6 +4272,7 @@ function createGoalSteeringRuntime(options = {}) {
   const now2 = typeof options.now === "function" ? options.now : now;
   const suppressionMs = Number.isFinite(Number(options.suppressionMs)) && Number(options.suppressionMs) > 0 ? Number(options.suppressionMs) : DEFAULT_STEERING_SUPPRESSION_MS;
   const seenUserMessageMs = Number.isFinite(Number(options.seenUserMessageMs)) && Number(options.seenUserMessageMs) > 0 ? Number(options.seenUserMessageMs) : DEFAULT_SEEN_USER_MESSAGE_MS;
+  const compactingSessions = new Set;
   const pendingSteering = new Map;
   const seenUserMessages = new Map;
   function pendingForSession(sessionID) {
@@ -4345,7 +4346,7 @@ function createGoalSteeringRuntime(options = {}) {
       return { handled: false, sessionID, messageID };
     const active = getActiveRun(sessionID);
     const activeGoalIDs = new Set(goals.map((goal) => goal.id));
-    const canPreempt = active && activeGoalIDs.has(active.jobId) && isGoalJob(active.job) && typeof client?.session?.abort === "function";
+    const canPreempt = !compactingSessions.has(sessionID) && active && activeGoalIDs.has(active.jobId) && isGoalJob(active.job) && typeof client?.session?.abort === "function";
     let preempted = false;
     let abortError = "";
     if (canPreempt) {
@@ -4357,7 +4358,8 @@ function createGoalSteeringRuntime(options = {}) {
       });
       try {
         await fireSdk2(client, "session.abort", client.session.abort.bind(client.session), { path: { id: sessionID }, body: {} }, { path: { sessionID }, body: {} }, { sessionID });
-        clearActiveRun(sessionID);
+        if (getActiveRun(sessionID) === active)
+          clearActiveRun(sessionID);
         preempted = true;
       } catch (error) {
         pendingSteering.delete(sessionID);
@@ -4378,9 +4380,20 @@ function createGoalSteeringRuntime(options = {}) {
     const user = userMessageFromEvent(event);
     if (!user)
       return;
-    return await handleUserMessage(directory, client, user);
+    if (alreadyHandled(user.sessionID, user.messageID))
+      return { handled: false, duplicate: true, ...user };
+    return { handled: false, reason: "untrusted-message-event", ...user };
+  }
+  function setCompacting(sessionID, value = true) {
+    if (typeof sessionID !== "string" || !sessionID)
+      return;
+    if (value)
+      compactingSessions.add(sessionID);
+    else
+      compactingSessions.delete(sessionID);
   }
   function clearSession(sessionID) {
+    compactingSessions.delete(sessionID);
     pendingSteering.delete(sessionID);
     const prefix = `${sessionID}\x00`;
     for (const key of seenUserMessages.keys())
@@ -4394,6 +4407,7 @@ function createGoalSteeringRuntime(options = {}) {
     shouldSuppressIdle,
     hasPendingSteering: shouldSuppressIdle,
     pendingForSession,
+    setCompacting,
     clearSession
   };
 }
@@ -4635,9 +4649,13 @@ var OpenCodeLoopPlugin = async ({ client, directory }) => {
       markToolCallFinished(input);
     },
     "experimental.session.compacting": async (input) => {
+      goalSteeringRuntime.setCompacting(input?.sessionID);
       await noteLoopCompactionStarted(directory, input?.sessionID);
     },
     event: async ({ event }) => {
+      if (["session.compacted", "session.error", "session.deleted"].includes(event?.type)) {
+        goalSteeringRuntime.setCompacting(event?.properties?.sessionID || event?.properties?.info?.id, false);
+      }
       if (event.type === "session.compacted")
         await noteLoopCompactionCompleted(directory, client, event?.properties?.sessionID);
       updateSessionRelationshipFromEvent(event);
