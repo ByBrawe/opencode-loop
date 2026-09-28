@@ -7,8 +7,14 @@ function once(source, before, after) {
   return source.replace(before, after)
 }
 
+// Git's Windows checkout may use CRLF. Compare canonical LF bytes while
+// retaining the exact source identity assertion and behavioral red baseline.
+function sourceText(file) {
+  return readFileSync(file, "utf8").replace(/\r\n/g, "\n")
+}
+
 if (process.argv[2] === "tests") {
-  const source = readFileSync("src/source/runtime/job-workspace.js")
+  const source = Buffer.from(sourceText("src/source/runtime/job-workspace.js"))
   const digest = createHash("sha1").update(`blob ${source.length}\0`).update(source).digest("hex")
   assert.equal(digest, "e237a01830001c452b1e423804e061d91be4728f", "audit must reproduce the reviewed original scanner")
   writeFileSync("scripts/control-plane-until-test.mjs", String.raw`import assert from "node:assert/strict"
@@ -54,7 +60,7 @@ for (const file of [
 } else {
   assert.equal(process.argv[2], "fix")
   const file = "src/source/runtime/job-workspace.js"
-  let source = readFileSync(file, "utf8")
+  let source = sourceText(file)
   source = once(source, '    if (!job.until) return false\n    const files =',
     '    if (!job.until) return false\n' +
     '    // Goal contracts/archives/leases can contain the configured marker too.\n' +
