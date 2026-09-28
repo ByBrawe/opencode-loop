@@ -1,0 +1,83 @@
+name: Native V2 promotion
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/native-promotion.yml
+      - .github/scripts/finalize-native.mjs
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-promotion-main
+  cancel-in-progress: false
+jobs:
+  verify:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - uses: oven-sh/setup-bun@v2
+      - run: npm ci
+      - name: Apply native source and installer migrations
+        run: |
+          if test ! -f src/source/native.js; then
+            node .github/scripts/native-migration.mjs
+            node .github/scripts/install-native.mjs
+            node .github/scripts/review-native.mjs
+          fi
+          if ! grep -q 'nativeGoalReservesSession' src/source/opencode2/native-runtime.js; then
+            node .github/scripts/finalize-native.mjs
+          fi
+      - name: Build actual shipping bundles
+        run: npm run build:plugin
+      - name: Syntax and complete regression suite
+        run: |
+          npm run check > /tmp/loop-check.log 2>&1 || { tail -60 /tmp/loop-check.log; exit 1; }
+          npm test > /tmp/loop-test.log 2>&1 || { tail -120 /tmp/loop-test.log; exit 1; }
+          tail -35 /tmp/loop-test.log
+          npm pack --dry-run
+      - name: Install exact native host
+        run: npm install --prefix /tmp/native-host --package-lock=false @opencode/cli@2.0.18
+      - name: Real native Loop bundled host lifecycle
+        env:
+          OPENCODE2_BINARY: /tmp/native-host/node_modules/.bin/opencode2
+          OPENCODE2_CURRENT_COMMAND_FIELDS: '1'
+          OPENCODE2_NATIVE_REQUIRED: '1'
+        run: node scripts/opencode2-loop-canary.mjs
+      - uses: actions/checkout@v6
+        with:
+          repository: ByBrawe/opencode-goal
+          ref: ce151534b2f2df3e5074b192bf82430cfb008f8e
+          path: companion-goal
+          persist-credentials: false
+      - name: Build pinned native Goal companion
+        working-directory: companion-goal
+        run: npm install && npm run build
+      - name: Both native plugins on the same real OpenCode 2 host
+        env:
+          OPENCODE2_BINARY: /tmp/native-host/node_modules/.bin/opencode2
+          OPENCODE2_CURRENT_COMMAND_FIELDS: '1'
+          OPENCODE2_NATIVE_REQUIRED: '1'
+        run: |
+          export OPENCODE_GOAL_V2_PLUGIN_URL="file://$GITHUB_WORKSPACE/companion-goal/dist/server.js"
+          node scripts/opencode2-loop-canary.mjs
+      - name: Commit only the verified worktree to unchanged main
+        run: |
+          EXPECTED=$(git rev-parse HEAD)
+          ACTUAL=$(git ls-remote origin refs/heads/main | cut -f1)
+          test "$EXPECTED" = "$ACTUAL"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src scripts package.json package-lock.json README.md CHANGELOG.md
+          if ! git diff --cached --quiet; then
+            git commit -m 'feat: activate verified native V2 Loop and protect compaction ownership'
+            git push origin HEAD:refs/heads/main
+          fi
+          echo "Verified native Loop head: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
