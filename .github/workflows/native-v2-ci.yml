@@ -44,7 +44,7 @@ jobs:
         run: git diff --exit-code -- src/index.js src/server.js src/native.js
       - run: npm run check
       - run: npm test
-      - run: npm pack --dry-run
+      - run: npm run package:smoke
       - name: Verify standalone native bundle has no V1 SDK import
         shell: bash
         run: |

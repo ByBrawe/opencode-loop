@@ -64,8 +64,8 @@ try {
   assert.equal(await exists(path.join(local, "plugins", "opencode-loop.ts")), true)
   assert.equal(
     await fs.readFile(path.join(local, "plugins", "opencode-loop.ts"), "utf8"),
-    await fs.readFile(path.join(root, "src", "server.js"), "utf8"),
-    "local install must copy the dual OpenCode 1/2 server bundle",
+    await fs.readFile(path.join(root, "src", "index.js"), "utf8"),
+    "explicit legacy install must copy the standalone V1 bundle, not the lazy package facade",
   )
   assert.equal(await commandCount(local), packagedCommandCount)
   assert.equal(await exists(path.join(local, "agents", "opencode-loop-local.md")), true)

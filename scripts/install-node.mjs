@@ -345,7 +345,7 @@ async function installOrUpdate() {
     await rm(join(pluginDir, "opencode-loop.js"), { force: true })
   } else {
     if (legacyV1) await ensureDependency()
-    await copyFile(join(root, "src", legacyV1 ? "server.js" : "native.js"), join(pluginDir, "opencode-loop.ts"))
+    await copyFile(join(root, "src", legacyV1 ? "index.js" : "native.js"), join(pluginDir, "opencode-loop.ts"))
     await rm(join(pluginDir, "opencode-loop.js"), { force: true })
   }
   if (legacyV1) {

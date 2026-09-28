@@ -383,29 +383,150 @@ function parseLoopArgs(raw, defaults = {}) {
 }
 var DEFAULT_GOAL_MAX_NO_PROGRESS = 3;
 
+// src/source/core/continuation.js
+function isContinuationShorthand(value) {
+  return CONTINUATION_SHORTHANDS.has(String(value || "").trim().toLowerCase().replace(/\s+/g, " "));
+}
+function isCompletionBoundedContinuation(value) {
+  const text = String(value || "").trim();
+  return COMPLETION_BOUNDED_PATTERNS.some((pattern) => pattern.test(text));
+}
+function continuationProjectInstruction(value) {
+  if (!isContinuationShorthand(value) && !isCompletionBoundedContinuation(value))
+    return "";
+  const finish = isCompletionBoundedContinuation(value) ? " If you believe the project is finished, perform a fresh verification pass before declaring completion; report both that the project is complete and that no work remains only when you have concrete current evidence." : "";
+  return `Treat this as continuation of the current project and conversation, not a fresh task. Inspect the repository state, relevant files, TODO/progress notes, recent changes, and git status as needed to identify the next unfinished step. Continue from existing work, do not redo completed work, and verify meaningful changes when practical.${finish}`;
+}
+var CONTINUATION_SHORTHANDS, COMPLETION_BOUNDED_PATTERNS;
+var init_continuation = __esm(() => {
+  CONTINUATION_SHORTHANDS = new Set([
+    "continue",
+    "continue.",
+    "continue working",
+    "keep going",
+    "go on",
+    "devam",
+    "devam et",
+    "devam et.",
+    "devam et bakal\u0131m"
+  ]);
+  COMPLETION_BOUNDED_PATTERNS = [
+    /\bbitene kadar\b/i,
+    /\b(?:tamamen|komple) projeyi bitir\b/i,
+    /\bi\u015Fi bitir\b/i,
+    /\buntil (?:it(?:'s| is) )?(?:done|complete|completed|finished)\b/i,
+    /\bfinish (?:the )?(?:project|task|work)\b/i,
+    /\bkeep going until\b/i
+  ];
+});
+
+// src/source/core/jobs.js
+function jobLabel(job) {
+  const title = job.name ? `${job.name}: ` : "";
+  const kind = job.kind ? ` [${job.kind}]` : "";
+  const limit = job.maxRuns > 0 ? `, max ${job.maxRuns}` : "";
+  const runtime = job.maxRuntimeMs > 0 ? `, runtime ${durationToText(job.maxRuntimeMs)}` : "";
+  const timeout = job.timeoutMs > 0 ? `, timeout ${durationToText(job.timeoutMs)}` : "";
+  const compact = job.compactEveryRuns > 0 ? `, compact every ${job.compactEveryRuns} runs` : job.compactEveryMs > 0 ? `, compact every ${durationToText(job.compactEveryMs)}` : "";
+  const verify = job.verifyCommand ? ", verify" : "";
+  const preflight = job.preflightCommand ? ", preflight" : "";
+  const failures = job.maxFailures > 0 ? `, max failures ${job.maxFailures}` : "";
+  const noProgress = isGoalJob(job) && (job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0 ? `, max no-progress ${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS}` : "";
+  const stopFile = job.stopFile ? ", stop-file" : "";
+  const watch = job.watchPaths?.length ? `, watch ${job.watchPaths.join(",")}` : "";
+  const paused = job.paused ? ", paused" : "";
+  return `${title}${durationToText(job.intervalMs)}${kind} -> ${job.action || `[prompt-file: ${job.promptFile}]`}${limit}${runtime}${timeout}${compact}${verify}${preflight}${failures}${noProgress}${stopFile}${watch}${paused}`;
+}
+function matchJob(job, target, index) {
+  const text = String(target || "").trim();
+  if (!text || text.toLowerCase() === "all")
+    return true;
+  return job.id === text || job.name === text || String(index + 1) === text;
+}
+function actionKind(action, job = {}) {
+  const text = String(action || "").trim();
+  const forced = String(job.kind || "").trim().toLowerCase();
+  if (forced === "compact")
+    return "compact";
+  if (forced === "goal")
+    return "goal";
+  if (text === "/compact" || text === "/summarize")
+    return "compact";
+  if (forced === "prompt" || forced === "ask")
+    return "prompt";
+  if (forced === "command" || forced === "cmd" || forced === "slash")
+    return "command";
+  if (forced === "shell")
+    return "shell";
+  if (text.startsWith("/"))
+    return "command";
+  if (text.startsWith("!") || text.startsWith("$"))
+    return "shell";
+  return "prompt";
+}
+function decoratePrompt(job) {
+  const additions = [];
+  const continuation = continuationProjectInstruction(job.action);
+  if (continuation)
+    additions.push(continuation);
+  if (job.progressFile)
+    additions.push(`Use ${job.progressFile} as the main progress/TODO state file. Read it before choosing the next task and update it after work.`);
+  if (job.lastVerifyFailure)
+    additions.push("Previous verify command failed. Fix this before moving on. Failure summary: " + String(job.lastVerifyFailure).slice(0, 1200));
+  if (job.askNever)
+    additions.push("Do not ask the user questions. Make reasonable assumptions and continue. Only write a short BLOCKED note if truly blocked.");
+  if (job.safe)
+    additions.push("Safety rules: do not run destructive commands such as git reset, git clean, rm -rf, del /s, rmdir /s, force push, production deploys, production migrations, terraform destroy, or deleting user data. If such an action seems needed, write a BLOCKED note instead.");
+  if (job.batch > 0)
+    additions.push(`Batch rule: in this run, work on at most ${job.batch} unfinished TODO item(s). Mark completed items with [x].`);
+  if (job.quiet)
+    additions.push("Keep replies short. Summarize only what changed, tests run, and next step.");
+  if (job.testCommand)
+    additions.push(`After making changes, run this test/check command if applicable: ${job.testCommand}. If it fails, fix the failure and try again.`);
+  if (job.checkpointOnly || job.gitCheckpoint)
+    additions.push("Keep changes incremental and easy to review because the loop will create a checkpoint after the run.");
+  if (!additions.length)
+    return job.action;
+  return `${job.action}
+
+OpenCode loop instructions:
+- ${additions.join(`
+- `)}`;
+}
+function isGoalJob(job) {
+  return String(job?.kind || "").toLowerCase() === "goal";
+}
+function goalStatusText(job) {
+  const status = job?.goalStatus || (isGoalJob(job) ? "active" : "");
+  if (!status)
+    return "";
+  if (status === "completed")
+    return "completed";
+  if (status === "blocked")
+    return "blocked";
+  if (job?.paused)
+    return "paused";
+  return status;
+}
+var init_jobs = __esm(() => {
+  init_continuation();
+});
+
 // src/source/core/state.js
 import { promises as fs } from "fs";
 import os from "os";
-import path from "path";
+import path2 from "path";
 function stateDir(directory) {
-  return path.join(directory, STATE_DIR);
+  return path2.join(directory, STATE_DIR);
 }
 function statePath(directory, sessionID) {
-  return path.join(stateDir(directory), `${safeID(sessionID)}.json`);
+  return path2.join(stateDir(directory), `${safeID(sessionID)}.json`);
 }
 async function ensureDir(directory) {
   await fs.mkdir(directory, { recursive: true });
 }
-async function pathExists(filePath) {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
 function stateLockKey(directory, sessionID) {
-  return `${path.resolve(directory)}:${safeID(sessionID)}`;
+  return `${path2.resolve(directory)}:${safeID(sessionID)}`;
 }
 async function withStateWriteLock(directory, sessionID, fn) {
   const key = stateLockKey(directory, sessionID);
@@ -467,7 +588,7 @@ async function delay(ms) {
 async function writeFileAtomically(target, contents, options = {}) {
   const encoding = options.encoding || "utf8";
   const attempts = Math.max(1, Number(options.attempts) || 5);
-  const temp = path.join(os.tmpdir(), `opencode-loop-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`);
+  const temp = path2.join(os.tmpdir(), `opencode-loop-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`);
   await fs.writeFile(temp, contents, encoding);
   try {
     let lastError;
@@ -604,12 +725,12 @@ var init_state = __esm(() => {
 
 // src/source/core/process.js
 import { promises as fs2 } from "fs";
-import path2 from "path";
-import { spawn } from "child_process";
+import path3 from "path";
+import { spawn as spawn2 } from "child_process";
 async function appendLoopLog(directory, line, extra = {}) {
   try {
     await ensureDir(stateDir(directory));
-    await fs2.appendFile(path2.join(stateDir(directory), "loop.log"), JSON.stringify({ time: new Date().toISOString(), line, ...extra }) + `
+    await fs2.appendFile(path3.join(stateDir(directory), "loop.log"), JSON.stringify({ time: new Date().toISOString(), line, ...extra }) + `
 `);
   } catch {}
 }
@@ -625,7 +746,7 @@ async function readSmallTextFile(filePath, maxBytes = 120000) {
 }
 async function runProcess(command, args, cwd, timeoutMs = 60000) {
   return await new Promise((resolve) => {
-    const child = spawn(command, args, { cwd, shell: false, windowsHide: true });
+    const child = spawn2(command, args, { cwd, shell: false, windowsHide: true });
     const stdout = [];
     const stderr = [];
     let timedOut = false;
@@ -649,7 +770,7 @@ async function runProcess(command, args, cwd, timeoutMs = 60000) {
 }
 async function runShellCommand(command, cwd, timeoutMs = 120000) {
   return await new Promise((resolve) => {
-    const child = spawn(command, [], { cwd, shell: true, windowsHide: true });
+    const child = spawn2(command, [], { cwd, shell: true, windowsHide: true });
     const stdout = [];
     const stderr = [];
     let timedOut = false;
@@ -671,328 +792,15 @@ async function runShellCommand(command, cwd, timeoutMs = 120000) {
     });
   });
 }
-async function notifyJob(directory, job, reason) {
-  if (!job.notifyCommand)
-    return;
-  const command = String(job.notifyCommand).replace(/\{reason\}/g, String(reason || "")).replace(/\{job\}/g, String(job.name || job.id || ""));
-  await runShellCommand(command, directory, 60000);
-}
 var init_process = __esm(() => {
   init_state();
 });
 
-// src/source/core/continuation.js
-function isContinuationShorthand(value) {
-  return CONTINUATION_SHORTHANDS.has(String(value || "").trim().toLowerCase().replace(/\s+/g, " "));
-}
-function isCompletionBoundedContinuation(value) {
-  const text = String(value || "").trim();
-  return COMPLETION_BOUNDED_PATTERNS.some((pattern) => pattern.test(text));
-}
-function isWaitingUserReply(value) {
-  const text = String(value || "").trim();
-  if (!text)
-    return false;
-  if (WAITING_USER_NEGATIONS.some((pattern) => pattern.test(text)))
-    return false;
-  if (NEXT_WORK_PATTERNS.some((pattern) => pattern.test(text)))
-    return false;
-  return WAITING_USER_PATTERNS.some((pattern) => pattern.test(text));
-}
-function isTerminalNoWorkReply(value) {
-  const text = String(value || "").trim();
-  if (!text || NEXT_WORK_PATTERNS.some((pattern) => pattern.test(text)))
-    return false;
-  const completed = TERMINAL_COMPLETION_PATTERNS.some((pattern) => pattern.test(text));
-  const noWork = TERMINAL_NO_WORK_PATTERNS.some((pattern) => pattern.test(text));
-  return completed && noWork;
-}
-function continuationProjectInstruction(value) {
-  if (!isContinuationShorthand(value) && !isCompletionBoundedContinuation(value))
-    return "";
-  const finish = isCompletionBoundedContinuation(value) ? " If you believe the project is finished, perform a fresh verification pass before declaring completion; report both that the project is complete and that no work remains only when you have concrete current evidence." : "";
-  return `Treat this as continuation of the current project and conversation, not a fresh task. Inspect the repository state, relevant files, TODO/progress notes, recent changes, and git status as needed to identify the next unfinished step. Continue from existing work, do not redo completed work, and verify meaningful changes when practical.${finish}`;
-}
-var CONTINUATION_SHORTHANDS, COMPLETION_BOUNDED_PATTERNS, TERMINAL_COMPLETION_PATTERNS, TERMINAL_NO_WORK_PATTERNS, NEXT_WORK_PATTERNS, WAITING_USER_PATTERNS, WAITING_USER_NEGATIONS;
-var init_continuation = __esm(() => {
-  CONTINUATION_SHORTHANDS = new Set([
-    "continue",
-    "continue.",
-    "continue working",
-    "keep going",
-    "go on",
-    "devam",
-    "devam et",
-    "devam et.",
-    "devam et bakal\u0131m"
-  ]);
-  COMPLETION_BOUNDED_PATTERNS = [
-    /\bbitene kadar\b/i,
-    /\b(?:tamamen|komple) projeyi bitir\b/i,
-    /\bi\u015Fi bitir\b/i,
-    /\buntil (?:it(?:'s| is) )?(?:done|complete|completed|finished)\b/i,
-    /\bfinish (?:the )?(?:project|task|work)\b/i,
-    /\bkeep going until\b/i
-  ];
-  TERMINAL_COMPLETION_PATTERNS = [
-    /proje tamamland[\u0131i](?=\s|[.,;:!\u2014-]|$)/i,
-    /\bproject (?:is )?(?:complete|completed|finished|done)\b/i,
-    /\b(?:task|work) (?:is )?(?:complete|completed|finished|done)\b/i
-  ];
-  TERMINAL_NO_WORK_PATTERNS = [
-    /yap[\u0131i]lacak (?:ba\u015Fka )?i\u015F yok(?=\s|[.,;:!\u2014-]|$)/i,
-    /ba\u015Fka (?:bir )?i\u015F (?:kalmad[\u0131i]|yok)(?=\s|[.,;:!\u2014-]|$)/i,
-    /\bnothing (?:else )?left to do\b/i,
-    /\bno (?:more|remaining) work\b/i,
-    /\bno known (?:bugs|issues)\b/i,
-    /\bzero known (?:bugs|issues)\b/i
-  ];
-  NEXT_WORK_PATTERNS = [
-    /\bnext(?: step| task)?\b/i,
-    /s[\u0131i]radaki(?=\s|[.,;:!\u2014-]|$)/i,
-    /sonraki(?=\s|[.,;:!\u2014-]|$)/i,
-    /kalan (?:i\u015F|i\u015Fler|todo|ad\u0131m)(?=\s|[.,;:!\u2014-]|$)/i,
-    /\bremaining (?:work|task|todo|step)/i,
-    /devam (?:edece\u011Fim|ediyorum|etmek gerek)(?=\s|[.,;:!\u2014-]|$)/i
-  ];
-  WAITING_USER_PATTERNS = [
-    /(?:^|\n)\s*onay bekleyenler\s*:/i,
-    /(?:^|\n)\s*(?:kullan\u0131c\u0131|user) (?:onay\u0131|onayi|aksiyonu|i\u015Flemi|islemi|eri\u015Fimi|erisimi) (?:bekleniyor|gerekiyor|gerekli)\b/i,
-    /\b(?:senin|sizin) (?:onay\u0131n|onay\u0131n\u0131z|onayiniz|aksiyonun|aksiyonunuz|eri\u015Fimin|erisimin) (?:bekleniyor|gerekiyor|gerekli)\b/i,
-    /\b(?:onay|eri\u015Fim|erisim|yetki) olmadan (?:devam edemem|ilerleyemem|i\u015Flem yapamam|islem yapamam)\b/i,
-    /(?:^|\n)\s*(?:waiting (?:for|on) (?:your|user) (?:approval|input|action|access|credentials?)|(?:approval|user action|access) (?:required|pending))\s*:?/i,
-    /\b(?:requires?|needs?) (?:your|user) (?:approval|input|action|access|credentials?)\b/i,
-    /\bblocked (?:pending|until|on) (?:your|user|approval|access|credentials?)\b/i
-  ];
-  WAITING_USER_NEGATIONS = [
-    /\b(?:onay|eri\u015Fim|erisim|yetki) (?:gerekmiyor|gerekli de\u011Fil|gerekli degil|beklenmiyor)\b/i,
-    /\bno (?:user )?(?:approval|input|action|access|credentials?) (?:is )?(?:needed|required|pending)\b/i
-  ];
-});
-
-// src/source/core/jobs.js
-function presetDefaults(name) {
-  if (name === "loop-compact")
-    return { intervalMs: parseDuration("200m"), action: "/compact", kind: "compact", name: "compact", immediate: false };
-  if (name === "loop-command" || name === "loop-cmd")
-    return { intervalMs: 0, kind: "command", name: "command", immediate: false };
-  if (name === "loop-prompt")
-    return { intervalMs: 0, kind: "prompt", name: "prompt", immediate: true };
-  if (name === "loop-ask")
-    return { intervalMs: 0, kind: "prompt", name: "ask", immediate: false };
-  if (name === "loop-shell")
-    return { intervalMs: 0, kind: "shell", name: "shell", immediate: false };
-  if (name === "loop-testfix")
-    return { intervalMs: 0, name: "testfix", safe: true, askNever: true, verifyCommand: "npm test", testfixPreset: true, action: "Run the project tests. Fix failures. Re-run the tests. Test command hint: npm test" };
-  if (name === "loop-progress")
-    return { intervalMs: 0, name: "progress", safe: true, askNever: true, progressFile: "progress.md", action: "Read progress.md and continue the next unfinished TODO. Mark completed TODOs with [x]. Add useful TODOs when you discover them." };
-  if (name === "loop-safe-dev")
-    return { intervalMs: 0, name: "safe-dev", safe: true, askNever: true, noOverlap: true, checkpointOnly: true, batch: 5, progressFile: "progress.md", action: "Develop the project from progress.md. Work in small safe batches. Mark completed TODOs with [x]. Add new ideas to progress.md. Run tests/lint/build if available." };
-  return { intervalMs: 0, name: "dev", askNever: true, progressFile: "progress.md", action: "Continue developing the project from progress.md. Mark completed TODOs with [x]. Add new ideas to progress.md. Run tests/lint/build if available." };
-}
-function jobLabel(job) {
-  const title = job.name ? `${job.name}: ` : "";
-  const kind = job.kind ? ` [${job.kind}]` : "";
-  const limit = job.maxRuns > 0 ? `, max ${job.maxRuns}` : "";
-  const runtime = job.maxRuntimeMs > 0 ? `, runtime ${durationToText(job.maxRuntimeMs)}` : "";
-  const timeout = job.timeoutMs > 0 ? `, timeout ${durationToText(job.timeoutMs)}` : "";
-  const compact = job.compactEveryRuns > 0 ? `, compact every ${job.compactEveryRuns} runs` : job.compactEveryMs > 0 ? `, compact every ${durationToText(job.compactEveryMs)}` : "";
-  const verify = job.verifyCommand ? ", verify" : "";
-  const preflight = job.preflightCommand ? ", preflight" : "";
-  const failures = job.maxFailures > 0 ? `, max failures ${job.maxFailures}` : "";
-  const noProgress = isGoalJob(job) && (job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0 ? `, max no-progress ${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS}` : "";
-  const stopFile = job.stopFile ? ", stop-file" : "";
-  const watch = job.watchPaths?.length ? `, watch ${job.watchPaths.join(",")}` : "";
-  const paused = job.paused ? ", paused" : "";
-  return `${title}${durationToText(job.intervalMs)}${kind} -> ${job.action || `[prompt-file: ${job.promptFile}]`}${limit}${runtime}${timeout}${compact}${verify}${preflight}${failures}${noProgress}${stopFile}${watch}${paused}`;
-}
-function matchJob(job, target, index) {
-  const text = String(target || "").trim();
-  if (!text || text.toLowerCase() === "all")
-    return true;
-  return job.id === text || job.name === text || String(index + 1) === text;
-}
-function actionKind(action, job = {}) {
-  const text = String(action || "").trim();
-  const forced = String(job.kind || "").trim().toLowerCase();
-  if (forced === "compact")
-    return "compact";
-  if (forced === "goal")
-    return "goal";
-  if (text === "/compact" || text === "/summarize")
-    return "compact";
-  if (forced === "prompt" || forced === "ask")
-    return "prompt";
-  if (forced === "command" || forced === "cmd" || forced === "slash")
-    return "command";
-  if (forced === "shell")
-    return "shell";
-  if (text.startsWith("/"))
-    return "command";
-  if (text.startsWith("!") || text.startsWith("$"))
-    return "shell";
-  return "prompt";
-}
-function decoratePrompt(job) {
-  const additions = [];
-  const continuation = continuationProjectInstruction(job.action);
-  if (continuation)
-    additions.push(continuation);
-  if (job.progressFile)
-    additions.push(`Use ${job.progressFile} as the main progress/TODO state file. Read it before choosing the next task and update it after work.`);
-  if (job.lastVerifyFailure)
-    additions.push("Previous verify command failed. Fix this before moving on. Failure summary: " + String(job.lastVerifyFailure).slice(0, 1200));
-  if (job.askNever)
-    additions.push("Do not ask the user questions. Make reasonable assumptions and continue. Only write a short BLOCKED note if truly blocked.");
-  if (job.safe)
-    additions.push("Safety rules: do not run destructive commands such as git reset, git clean, rm -rf, del /s, rmdir /s, force push, production deploys, production migrations, terraform destroy, or deleting user data. If such an action seems needed, write a BLOCKED note instead.");
-  if (job.batch > 0)
-    additions.push(`Batch rule: in this run, work on at most ${job.batch} unfinished TODO item(s). Mark completed items with [x].`);
-  if (job.quiet)
-    additions.push("Keep replies short. Summarize only what changed, tests run, and next step.");
-  if (job.testCommand)
-    additions.push(`After making changes, run this test/check command if applicable: ${job.testCommand}. If it fails, fix the failure and try again.`);
-  if (job.checkpointOnly || job.gitCheckpoint)
-    additions.push("Keep changes incremental and easy to review because the loop will create a checkpoint after the run.");
-  if (!additions.length)
-    return job.action;
-  return `${job.action}
-
-OpenCode loop instructions:
-- ${additions.join(`
-- `)}`;
-}
-function isGoalJob(job) {
-  return String(job?.kind || "").toLowerCase() === "goal";
-}
-function goalStatusText(job) {
-  const status = job?.goalStatus || (isGoalJob(job) ? "active" : "");
-  if (!status)
-    return "";
-  if (status === "completed")
-    return "completed";
-  if (status === "blocked")
-    return "blocked";
-  if (job?.paused)
-    return "paused";
-  return status;
-}
-var init_jobs = __esm(() => {
-  init_continuation();
-});
-
 // src/source/runtime/goal-report.js
-import { promises as fs3 } from "fs";
-import path3 from "path";
-function goalReportPath(directory, sessionID, job) {
-  return path3.join(stateDir(directory), GOAL_REPORT_DIR, `${safeID(sessionID)}-${safeID(job.name || job.id)}.md`);
-}
-function goalReportText(job) {
-  const lines = [];
-  lines.push(`# OpenCode Loop Goal Report`);
-  lines.push("");
-  lines.push(`Status: ${goalStatusText(job) || "unknown"}`);
-  lines.push(`Goal: ${job.action || job.goalFile || ""}`);
-  lines.push(`Created: ${job.createdAt || ""}`);
-  if (job.goalCompletedAt)
-    lines.push(`Completed: ${new Date(job.goalCompletedAt).toISOString()}`);
-  if (job.goalBlockedAt)
-    lines.push(`Blocked: ${new Date(job.goalBlockedAt).toISOString()}`);
-  if (job.lastUserInterruptAt)
-    lines.push(`Paused by user message: ${new Date(job.lastUserInterruptAt).toISOString()}`);
-  if (job.goalNoProgressPausedAt)
-    lines.push(`Paused by no-progress guard: ${new Date(job.goalNoProgressPausedAt).toISOString()}`);
-  if (job.runCount)
-    lines.push(`Turns: ${job.runCount}`);
-  if ((job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0)
-    lines.push(`No-progress: ${job.noProgressCount || 0}/${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS}`);
-  lines.push("");
-  if (job.goalSummary)
-    lines.push("## Summary", "", String(job.goalSummary), "");
-  if (job.goalEvidence)
-    lines.push("## Evidence", "", String(job.goalEvidence), "");
-  if (job.goalBlockedReason)
-    lines.push("## Blocked reason", "", String(job.goalBlockedReason), "");
-  if (job.goalCompletionRejectedReason)
-    lines.push("## Last completion rejection", "", String(job.goalCompletionRejectedReason), "");
-  if (job.goalInterruptedReason)
-    lines.push("## Interrupt", "", String(job.goalInterruptedReason), "");
-  if (job.goalNoProgressReason)
-    lines.push("## No-progress guard", "", String(job.goalNoProgressReason), "");
-  if (job.goalAcceptance?.length)
-    lines.push("## Acceptance criteria", "", ...job.goalAcceptance.map((item) => `- ${item}`), "");
-  if (job.lastGoalChecks?.length) {
-    lines.push("## Latest checks", "");
-    for (const item of job.lastGoalChecks)
-      lines.push(`- ${item.command}: exit ${item.code}`);
-    lines.push("");
-  }
-  if (job.goalProgress?.length) {
-    lines.push("## Progress", "");
-    for (const item of job.goalProgress)
-      lines.push(`- ${item.time}: ${item.summary}${item.next ? ` Next: ${item.next}` : ""}`);
-    lines.push("");
-  }
-  return lines.join(`
-`);
-}
-async function writeGoalReport(directory, sessionID, job) {
-  if (!isGoalJob(job))
-    return;
-  const target = job.goalEvidenceFile ? path3.resolve(directory, job.goalEvidenceFile) : goalReportPath(directory, sessionID, job);
-  await ensureDir(path3.dirname(target));
-  await fs3.writeFile(target, goalReportText(job), "utf8");
-}
-var GOAL_REPORT_DIR = "goals";
 var init_goal_report = __esm(() => {
   init_jobs();
   init_state();
 });
-
-// src/source/runtime/goal-evidence.js
-function hasConcreteGoalEvidence(value) {
-  const text = String(value || "").trim();
-  if (text.length < 24)
-    return false;
-  const normalized = text.toLowerCase().replace(/\s+/g, " ");
-  const weak = new Set(["done", "complete", "completed", "ok", "looks good", "n/a", "none", "no evidence", "no evidence provided", "goal completed", "marked complete"]);
-  if (weak.has(normalized) || normalized.startsWith("marked complete by /loop-goal-done"))
-    return false;
-  return /(\b(npm|pnpm|yarn|bun|node|pytest|cargo|dotnet|go test|tsc|typecheck|test|tests|lint|build|check|checks|exit\s*\d|passed|verified|changed|updated|created|fixed|file|files|diff|commit)\b|[`\\/][\w./:-]+)/i.test(text) || text.length >= 80;
-}
-function goalChecksPassed(job) {
-  return Array.isArray(job?.lastGoalChecks) && job.lastGoalChecks.length > 0 && job.lastGoalChecks.every((item) => Number(item?.code) === 0);
-}
-function goalRequiresPassingChecks(job) {
-  return job?.goalRequireChecksPass !== false && Array.isArray(job?.goalChecks) && job.goalChecks.length > 0;
-}
-function goalProgressSnapshot(job) {
-  return {
-    status: job?.goalStatus || "",
-    progressCount: Array.isArray(job?.goalProgress) ? job.goalProgress.length : 0,
-    evidence: String(job?.goalEvidence || ""),
-    checksPassedAt: Number(job?.goalChecksPassedAt || 0),
-    lastGoalCheckAt: Number(job?.lastGoalCheckAt || 0),
-    lastVerifyAt: Number(job?.lastVerifyAt || 0),
-    lastVerifyCode: Number.isFinite(Number(job?.lastVerifyCode)) ? Number(job.lastVerifyCode) : undefined
-  };
-}
-function goalMadeMeaningfulProgress(beforeJob, afterJob) {
-  const before = goalProgressSnapshot(beforeJob || {});
-  const after = goalProgressSnapshot(afterJob || {});
-  if (["completed", "blocked"].includes(after.status) && after.status !== before.status)
-    return true;
-  if (after.progressCount > before.progressCount)
-    return true;
-  if (after.evidence !== before.evidence && hasConcreteGoalEvidence(after.evidence))
-    return true;
-  if (after.checksPassedAt > before.checksPassedAt || goalChecksPassed(afterJob) && after.lastGoalCheckAt > before.lastGoalCheckAt)
-    return true;
-  if (after.lastVerifyAt > before.lastVerifyAt && after.lastVerifyCode === 0)
-    return true;
-  return false;
-}
-
 // src/source/runtime/goal-prompt.js
 import path4 from "path";
 async function buildGoalPrompt(directory, job) {
@@ -1081,98 +889,6 @@ var init_goal_prompt = __esm(() => {
 });
 
 // src/source/runtime/goal-runtime.js
-function pickGoalJob(state, target = "") {
-  const goals = (state.jobs || []).filter(isGoalJob);
-  if (!goals.length)
-    return;
-  const text = String(target || "").trim();
-  if (!text || ["active", "current", "goal"].includes(text.toLowerCase()))
-    return goals.find((job) => job.goalStatus === "active" && job.enabled !== false) || goals[0];
-  return goals.find((job, index) => matchJob(job, text, index));
-}
-function parseGoalToolText(args, fields) {
-  const result = {};
-  for (const field of fields)
-    result[field] = String(args?.[field] || "").trim();
-  return result;
-}
-async function rejectGoalCompletion(directory, sessionID, state, job, reason) {
-  job.goalCompletionRejectedAt = now();
-  job.goalCompletionRejectedReason = reason;
-  job.goalCompletionRejectedCount = (job.goalCompletionRejectedCount || 0) + 1;
-  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-  await writeState(directory, sessionID, state);
-  await writeGoalReport(directory, sessionID, job);
-  await appendLoopLog(directory, "goal-complete-rejected", { sessionID, job: job.name || job.id, reason });
-  return { ok: false, job, rejected: true, message: `Goal completion rejected: ${reason}` };
-}
-async function setGoalComplete(directory, sessionID, args = {}) {
-  const state = await readState(directory, sessionID);
-  const job = pickGoalJob(state, args.target);
-  if (!job)
-    return { ok: false, message: "No active experimental goal was found." };
-  const parsed = parseGoalToolText(args, ["summary", "evidence"]);
-  const manualOverride = args.manual === true || args.manualOverride === true;
-  const completionEvidence = parsed.evidence || job.goalEvidence || "";
-  const skipEvidenceGate = manualOverride || args.allowWeakEvidence === true || job.goalRequireEvidence === false;
-  const skipCheckGate = manualOverride || args.allowFailingChecks === true || job.goalRequireChecksPass === false;
-  if (!skipEvidenceGate && !hasConcreteGoalEvidence(completionEvidence)) {
-    return await rejectGoalCompletion(directory, sessionID, state, job, "concrete evidence is required before the goal tool can complete the goal");
-  }
-  if (!skipCheckGate && goalRequiresPassingChecks(job) && !goalChecksPassed(job)) {
-    return await rejectGoalCompletion(directory, sessionID, state, job, "configured goal checks have not passed yet");
-  }
-  job.goalStatus = "completed";
-  job.enabled = false;
-  job.paused = true;
-  job.goalCompletedAt = now();
-  job.goalSummary = parsed.summary || job.goalSummary || "Goal completed.";
-  job.goalEvidence = completionEvidence || "No evidence provided.";
-  job.noProgressCount = 0;
-  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-  await writeState(directory, sessionID, state);
-  await writeGoalReport(directory, sessionID, job);
-  await appendLoopLog(directory, "goal-complete", { sessionID, job: job.name || job.id, summary: job.goalSummary });
-  return { ok: true, job, message: `Goal completed: ${job.goalSummary}` };
-}
-async function setGoalBlocked(directory, sessionID, args = {}) {
-  const state = await readState(directory, sessionID);
-  const job = pickGoalJob(state, args.target);
-  if (!job)
-    return { ok: false, message: "No active experimental goal was found." };
-  const parsed = parseGoalToolText(args, ["reason", "needed", "evidence"]);
-  job.goalStatus = "blocked";
-  job.enabled = false;
-  job.paused = true;
-  job.goalBlockedAt = now();
-  job.goalBlockedReason = [parsed.reason, parsed.needed ? `Needed: ${parsed.needed}` : ""].filter(Boolean).join(`
-`) || "Goal blocked.";
-  if (parsed.evidence)
-    job.goalEvidence = parsed.evidence;
-  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-  await writeState(directory, sessionID, state);
-  await writeGoalReport(directory, sessionID, job);
-  await appendLoopLog(directory, "goal-blocked", { sessionID, job: job.name || job.id, reason: job.goalBlockedReason });
-  return { ok: true, job, message: `Goal blocked: ${job.goalBlockedReason}` };
-}
-async function setGoalProgress(directory, sessionID, args = {}) {
-  const state = await readState(directory, sessionID);
-  const job = pickGoalJob(state, args.target);
-  if (!job)
-    return { ok: false, message: "No active experimental goal was found." };
-  const parsed = parseGoalToolText(args, ["summary", "next", "evidence"]);
-  const item = { time: new Date().toISOString(), summary: parsed.summary || "Progress recorded.", next: parsed.next || "", evidence: parsed.evidence || "" };
-  job.goalProgress = [...job.goalProgress || [], item].slice(-30);
-  if (parsed.evidence)
-    job.goalEvidence = parsed.evidence;
-  job.noProgressCount = 0;
-  job.lastProgressAt = now();
-  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-  await writeState(directory, sessionID, state);
-  await writeGoalReport(directory, sessionID, job);
-  await appendLoopLog(directory, "goal-progress", { sessionID, job: job.name || job.id, summary: item.summary });
-  return { ok: true, job, message: `Goal progress recorded: ${item.summary}` };
-}
 var init_goal_runtime = __esm(() => {
   init_jobs();
   init_state();
@@ -1183,9 +899,9 @@ var init_goal_runtime = __esm(() => {
 });
 
 // src/source/runtime/job-workspace.js
-import { promises as fs7 } from "fs";
-import path8 from "path";
-function requireFunction6(value, name) {
+import { promises as fs3 } from "fs";
+import path5 from "path";
+function requireFunction(value, name) {
   if (typeof value !== "function")
     throw new TypeError(`createJobWorkspaceRuntime requires ${name}`);
   return value;
@@ -1207,7 +923,7 @@ function dangerousShell(command) {
   ].some((pattern) => pattern.test(text));
 }
 function createJobWorkspaceRuntime(options = {}) {
-  const toast = requireFunction6(options.toast, "toast");
+  const toast = requireFunction(options.toast, "toast");
   const runProcess2 = typeof options.runProcess === "function" ? options.runProcess : runProcess;
   const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
   const readSmallTextFile2 = typeof options.readSmallTextFile === "function" ? options.readSmallTextFile : readSmallTextFile;
@@ -1217,7 +933,7 @@ function createJobWorkspaceRuntime(options = {}) {
       return await buildGoalPrompt2(directory, job);
     const sections = [];
     if (job.promptFile) {
-      const text = await readSmallTextFile2(path8.resolve(directory, job.promptFile));
+      const text = await readSmallTextFile2(path5.resolve(directory, job.promptFile));
       if (text.trim())
         sections.push(`Instructions from ${job.promptFile}:
 ${text.trim()}`);
@@ -1227,7 +943,7 @@ ${text.trim()}`);
     if (job.action)
       sections.push(decoratePrompt(job));
     for (const file of job.includeFiles || []) {
-      const text = await readSmallTextFile2(path8.resolve(directory, file), 80000);
+      const text = await readSmallTextFile2(path5.resolve(directory, file), 80000);
       if (text.trim())
         sections.push(`Context from ${file}:
 ${text.trim().slice(0, 20000)}`);
@@ -1260,7 +976,7 @@ ${text.trim().slice(0, 20000)}`);
     const snapshot = {};
     for (const file of files || []) {
       try {
-        const stat = await fs7.stat(path8.resolve(directory, file));
+        const stat = await fs3.stat(path5.resolve(directory, file));
         snapshot[file] = `${stat.mtimeMs}:${stat.size}`;
       } catch {
         snapshot[file] = "missing";
@@ -1280,10 +996,10 @@ ${text.trim().slice(0, 20000)}`);
   }
   async function fileContains(filePath, needle) {
     try {
-      const stat = await fs7.stat(filePath);
+      const stat = await fs3.stat(filePath);
       if (!stat.isFile() || stat.size > MAX_SCAN_BYTES)
         return false;
-      return (await fs7.readFile(filePath, "utf8")).includes(needle);
+      return (await fs3.readFile(filePath, "utf8")).includes(needle);
     } catch {
       return false;
     }
@@ -1291,9 +1007,9 @@ ${text.trim().slice(0, 20000)}`);
   async function untilReached(directory, job) {
     if (!job.until)
       return false;
-    const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path8.join(".opencode", "opencode-loop", "until.txt")];
+    const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path5.join(".opencode", "opencode-loop", "until.txt")];
     for (const file of files)
-      if (await fileContains(path8.resolve(directory, file), job.until))
+      if (await fileContains(path5.resolve(directory, file), job.until))
         return true;
     let scanned = 0;
     async function walk(current) {
@@ -1301,7 +1017,7 @@ ${text.trim().slice(0, 20000)}`);
         return false;
       let entries;
       try {
-        entries = await fs7.readdir(current, { withFileTypes: true });
+        entries = await fs3.readdir(current, { withFileTypes: true });
       } catch {
         return false;
       }
@@ -1310,8 +1026,8 @@ ${text.trim().slice(0, 20000)}`);
           return false;
         if ([".git", "node_modules", "dist", "build", ".next", "coverage"].includes(entry.name))
           continue;
-        const full = path8.join(current, entry.name);
-        if (path8.resolve(full) === path8.resolve(stateDir(directory)))
+        const full = path5.join(current, entry.name);
+        if (path5.resolve(full) === path5.resolve(stateDir(directory)))
           continue;
         if (entry.isDirectory()) {
           if (await walk(full))
@@ -1336,13 +1052,13 @@ ${text.trim().slice(0, 20000)}`);
     if (!status.stdout.trim())
       return;
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const checkpointDir = path8.join(stateDir(directory), "checkpoints", safeID(sessionID));
+    const checkpointDir = path5.join(stateDir(directory), "checkpoints", safeID(sessionID));
     await ensureDir(checkpointDir);
     const diff = await runProcess2("git", ["diff", "--binary"], directory, 120000);
     const staged = await runProcess2("git", ["diff", "--cached", "--binary"], directory, 120000);
     const prefix = `${timestamp}-${safeID(job.name || job.id)}`;
-    await fs7.writeFile(path8.join(checkpointDir, `${prefix}.status.txt`), status.stdout + status.stderr);
-    await fs7.writeFile(path8.join(checkpointDir, `${prefix}.patch`), `${diff.stdout}
+    await fs3.writeFile(path5.join(checkpointDir, `${prefix}.status.txt`), status.stdout + status.stderr);
+    await fs3.writeFile(path5.join(checkpointDir, `${prefix}.patch`), `${diff.stdout}
 ${staged.stdout}`);
     if (job.gitCheckpoint) {
       await runProcess2("git", ["add", "-A"], directory, 120000);
@@ -1367,3896 +1083,11 @@ var init_job_workspace = __esm(() => {
   init_goal_runtime();
 });
 
-// src/source/legacy-v1.js
-init_process();
-import { tool } from "@opencode-ai/plugin/tool";
-
-// src/source/opencode/sdk.js
-function sdkError(result) {
-  if (!result || typeof result !== "object")
-    return;
-  return result.error || result.error === null ? result.error : undefined;
-}
-function sdkData(result) {
-  if (!result || typeof result !== "object")
-    return result;
-  return Object.prototype.hasOwnProperty.call(result, "data") ? result.data : result;
-}
-function sdkErrorMessage(error) {
-  if (!error)
-    return "unknown SDK error";
-  if (error instanceof Error)
-    return error.message;
-  if (typeof error === "string")
-    return error;
-  if (typeof error === "object") {
-    if (typeof error.message === "string")
-      return error.message;
-    if (typeof error.name === "string")
-      return error.name;
-    try {
-      return JSON.stringify(error).slice(0, 400);
-    } catch {}
-  }
-  return String(error);
-}
-async function sdkCall(method, ...argsList) {
-  let firstError;
-  for (const args of argsList) {
-    if (args === undefined)
-      continue;
-    try {
-      const result = await method(args);
-      const error = sdkError(result);
-      if (!error)
-        return sdkData(result);
-      firstError = firstError || new Error(sdkErrorMessage(error));
-    } catch (error) {
-      firstError = firstError || error;
-    }
-  }
-  throw firstError || new Error("SDK call failed without arguments");
-}
-
-// src/source/opencode/session-context.js
-var LOCAL_COMMAND_AGENT = "opencode-loop-local";
-var sessionExecutionContexts = new Map;
-function normalizedModelRef(model) {
-  if (typeof model === "string") {
-    const separator = model.indexOf("/");
-    if (separator > 0)
-      return { providerID: model.slice(0, separator), modelID: model.slice(separator + 1) };
-    return;
-  }
-  const providerID = model?.providerID;
-  const modelID = model?.modelID || model?.id;
-  if (typeof providerID !== "string" || typeof modelID !== "string")
-    return;
-  return { providerID, modelID };
-}
-function updateSessionExecutionContext(info) {
-  const sessionID = info?.sessionID || info?.id;
-  if (typeof sessionID !== "string")
-    return;
-  const previous = sessionExecutionContexts.get(sessionID) || {};
-  const candidateAgent = info?.agent || (info?.role === "assistant" ? info?.mode : undefined);
-  const agent = typeof candidateAgent === "string" && candidateAgent !== LOCAL_COMMAND_AGENT ? candidateAgent : previous.agent;
-  const model = normalizedModelRef(info?.model) || normalizedModelRef(info) || previous.model;
-  sessionExecutionContexts.set(sessionID, { agent, model });
-}
-async function captureSessionExecutionContext(client, sessionID) {
-  if (client?.session?.get) {
-    try {
-      const info = await sdkCall(client.session.get.bind(client.session), { path: { id: sessionID } }, { path: { sessionID } }, { sessionID });
-      updateSessionExecutionContext(info);
-    } catch {}
-  }
-  const context = sessionExecutionContexts.get(sessionID) || {};
-  const normalized = { agent: context.agent || "build", model: context.model };
-  sessionExecutionContexts.set(sessionID, normalized);
-  return normalized;
-}
-function getSessionExecutionContext(sessionID) {
-  return sessionExecutionContexts.get(sessionID);
-}
-function setSessionExecutionContext(sessionID, context) {
-  sessionExecutionContexts.set(sessionID, context);
-  return context;
-}
-function deleteSessionExecutionContext(sessionID) {
-  sessionExecutionContexts.delete(sessionID);
-}
-
-// src/source/opencode/host.js
-var SERVICE = "opencode-loop";
-function fireSdk(client, label, method, ...argsList) {
-  const pending = Promise.resolve().then(() => sdkCall(method, ...argsList));
-  pending.catch((error) => {
-    log(client, "warn", `${label} failed`, { error: sdkErrorMessage(error) }).catch(() => {});
-  });
-  return pending;
-}
-async function executeTuiCommand(client, command) {
-  if (!client?.tui?.executeCommand)
-    throw new Error("client.tui.executeCommand is not available");
-  return await sdkCall(client.tui.executeCommand.bind(client.tui), { body: { command } }, { command });
-}
-function compactTuiCommandName(command = "compact") {
-  const normalized = String(command || "compact").replace(/^\/+/, "").trim().toLowerCase();
-  if (normalized === "compact" || normalized === "summarize")
-    return "session_compact";
-  return;
-}
-async function readRecentSessionMessages(client, sessionID, directory, limit = 20) {
-  if (!client?.session?.messages)
-    return;
-  const query = { limit };
-  if (directory)
-    query.directory = directory;
-  try {
-    const messages = await sdkCall(client.session.messages.bind(client.session), { path: { id: sessionID }, query }, { path: { sessionID }, query }, { sessionID, ...query });
-    return Array.isArray(messages) ? messages : undefined;
-  } catch {
-    return;
-  }
-}
-function orderedSessionMessages(messages) {
-  return (messages || []).map((message, index) => {
-    const info = message?.info || message || {};
-    const created = Number(info?.time?.created || 0);
-    return { message, index, created: Number.isFinite(created) ? created : 0 };
-  }).sort((a, b) => a.created - b.created || a.index - b.index).map((entry) => entry.message);
-}
-function assistantMessageHasMeaningfulActivity(message) {
-  const parts = Array.isArray(message?.parts) ? message.parts : [];
-  for (const part of parts) {
-    if (!part || typeof part !== "object")
-      continue;
-    if (part.type === "text" && typeof part.text === "string" && part.text.trim())
-      return true;
-    if (["tool", "file", "patch", "artifact"].includes(String(part.type || "")))
-      return true;
-  }
-  const info = message?.info || message || {};
-  return [info.text, info.content, info.summary].some((value) => typeof value === "string" && value.trim());
-}
-async function activeRunCompletionFromMessages(directory, client, sessionID, active) {
-  const messages = await readRecentSessionMessages(client, sessionID, directory);
-  if (!messages)
-    return "unknown";
-  const ordered = orderedSessionMessages(messages);
-  if (ordered.length === 0)
-    return "unknown";
-  const tail = ordered.at(-1);
-  const info = tail?.info || tail;
-  if (!info || info.role !== "assistant")
-    return "incomplete";
-  const completed = Number(info?.time?.completed || 0);
-  const created = Number(info?.time?.created || 0);
-  if (!Number.isFinite(completed) || completed <= 0)
-    return "incomplete";
-  const startedAt = Number(active?.startedAt || 0);
-  if (startedAt > 0 && completed < startedAt && (!Number.isFinite(created) || created < startedAt))
-    return "incomplete";
-  const relevant = ordered.filter((message) => {
-    const candidate = message?.info || message || {};
-    if (candidate.role !== "assistant")
-      return false;
-    if (startedAt <= 0)
-      return true;
-    const candidateCreated = Number(candidate?.time?.created || 0);
-    const candidateCompleted = Number(candidate?.time?.completed || 0);
-    return candidateCreated >= startedAt || candidateCompleted >= startedAt;
-  });
-  return relevant.some(assistantMessageHasMeaningfulActivity) ? "completed" : "empty";
-}
-async function resolveCompactionModel(directory, client, sessionID, preferredModel) {
-  const preferred = normalizedModelRef(preferredModel);
-  if (preferred)
-    return preferred;
-  const cached = normalizedModelRef(getSessionExecutionContext(sessionID)?.model);
-  if (cached)
-    return cached;
-  const captured = await captureSessionExecutionContext(client, sessionID);
-  const capturedModel = normalizedModelRef(captured?.model);
-  if (capturedModel)
-    return capturedModel;
-  const messages = await readRecentSessionMessages(client, sessionID, directory);
-  for (const message of orderedSessionMessages(messages).reverse()) {
-    const info = message?.info || message;
-    const model = normalizedModelRef(info?.model) || normalizedModelRef(info);
-    if (!model)
-      continue;
-    const previous = getSessionExecutionContext(sessionID) || {};
-    setSessionExecutionContext(sessionID, { ...previous, model });
-    return model;
-  }
-  return;
-}
-async function compactSession(directory, client, sessionID, preferredModel) {
-  for (const command of ["session.compact", "session_compact"]) {
-    try {
-      await executeTuiCommand(client, command);
-      return true;
-    } catch (error) {
-      await log(client, "warn", `tui ${command} failed`, { error: sdkErrorMessage(error) });
-    }
-  }
-  try {
-    if (!client?.session?.summarize)
-      throw new Error("client.session.summarize is not available");
-    const model = await resolveCompactionModel(directory, client, sessionID, preferredModel);
-    if (!model)
-      throw new Error("could not resolve a provider/model for session.summarize");
-    const body = { providerID: model.providerID, modelID: model.modelID, auto: false };
-    await sdkCall(client.session.summarize.bind(client.session), { path: { id: sessionID }, body }, { path: { sessionID }, body }, { sessionID, ...body });
-    return true;
-  } catch (error) {
-    await log(client, "warn", "session.summarize fallback failed", { error: sdkErrorMessage(error) });
-  }
-  await toast(client, "Could not run /compact from loop. Check OpenCode version and active session model.", "error");
-  return false;
-}
-async function log(client, level, message, extra) {
-  try {
-    await sdkCall(client.app.log.bind(client.app), { body: extra === undefined ? { service: SERVICE, level, message } : { service: SERVICE, level, message, extra } }, extra === undefined ? { service: SERVICE, level, message } : { service: SERVICE, level, message, extra });
-  } catch {}
-}
-async function toast(client, message, variant = "info") {
-  try {
-    await sdkCall(client.tui.showToast.bind(client.tui), { body: { message, variant } }, { message, variant });
-  } catch {}
-}
-// src/source/opencode/messages.js
-var LOOP_OWNED_USER_MESSAGE_GUARD_MS = 1e4;
-var LOOP_OWNED_USER_MESSAGE_RETENTION_MS = 10 * 60000;
-var loopOwnedUserMessageGuards = new Map;
-function guardLoopOwnedUserMessage(sessionID) {
-  if (!sessionID)
-    return;
-  const current = loopOwnedUserMessageGuards.get(sessionID) || { pending: 0, until: 0, messageIDs: new Map };
-  current.pending += 1;
-  current.until = Math.max(current.until || 0, now() + LOOP_OWNED_USER_MESSAGE_GUARD_MS);
-  for (const [messageID, expiresAt] of current.messageIDs.entries())
-    if (expiresAt < now())
-      current.messageIDs.delete(messageID);
-  loopOwnedUserMessageGuards.set(sessionID, current);
-  for (const [key, entry] of loopOwnedUserMessageGuards.entries()) {
-    for (const [messageID, expiresAt] of entry.messageIDs.entries())
-      if (expiresAt < now())
-        entry.messageIDs.delete(messageID);
-    if ((entry.pending || 0) <= 0 && entry.messageIDs.size === 0 && (entry.until || 0) < now())
-      loopOwnedUserMessageGuards.delete(key);
-  }
-}
-function loopOwnedUserMessageGuardActive(sessionID, messageID) {
-  const entry = loopOwnedUserMessageGuards.get(sessionID);
-  if (!entry || typeof entry !== "object")
-    return false;
-  for (const [id, expiresAt] of entry.messageIDs.entries())
-    if (expiresAt < now())
-      entry.messageIDs.delete(id);
-  const id = typeof messageID === "string" ? messageID : "";
-  if (id && entry.messageIDs.has(id))
-    return true;
-  if ((entry.pending || 0) > 0 && (entry.until || 0) >= now()) {
-    if (!id)
-      return true;
-    entry.pending -= 1;
-    entry.messageIDs.set(id, now() + LOOP_OWNED_USER_MESSAGE_RETENTION_MS);
-    loopOwnedUserMessageGuards.set(sessionID, entry);
-    return true;
-  }
-  if ((entry.pending || 0) <= 0 && entry.messageIDs.size === 0)
-    loopOwnedUserMessageGuards.delete(sessionID);
-  return false;
-}
-async function say(client, sessionID, text) {
-  guardLoopOwnedUserMessage(sessionID);
-  try {
-    await sdkCall(client.session.prompt.bind(client.session), { path: { id: sessionID }, body: { noReply: true, parts: [{ type: "text", text }] } }, { path: { sessionID }, body: { noReply: true, parts: [{ type: "text", text }] } }, { sessionID, noReply: true, parts: [{ type: "text", text }] });
-  } catch {}
-}
-function clearLoopOwnedUserMessageGuard(sessionID) {
-  loopOwnedUserMessageGuards.delete(sessionID);
-}
-
-// src/source/opencode/commands.js
-var COMMAND_DEDUPE_MS = 30000;
-var handledCommands = new Map;
-var handledCommandEvents = new Map;
-function normalizeArgsForKey(args) {
-  if (args === undefined || args === null)
-    return "";
-  if (typeof args === "string")
-    return args.trim().replace(/\s+/g, " ");
-  if (Array.isArray(args))
-    return args.map(normalizeArgsForKey).join(" ").trim().replace(/\s+/g, " ");
-  try {
-    return JSON.stringify(args);
-  } catch {
-    return String(args);
-  }
-}
-function commandKey(sessionID, name, args) {
-  return `${sessionID || "no-session"}:${name || ""}:${normalizeArgsForKey(args)}`;
-}
-function commandEventKey(sessionID, messageID) {
-  return `${sessionID || "no-session"}:event:${messageID || "no-message"}`;
-}
-function markHandled(sessionID, name, args) {
-  const key = commandKey(sessionID, name, args);
-  const previous = handledCommands.get(key);
-  const pending = previous && now() - previous.time < COMMAND_DEDUPE_MS ? previous.pending + 1 : 1;
-  handledCommands.set(key, { time: now(), pending });
-  for (const [entryKey, entry] of handledCommands.entries())
-    if (now() - entry.time > COMMAND_DEDUPE_MS)
-      handledCommands.delete(entryKey);
-  for (const [entryKey, time] of handledCommandEvents.entries())
-    if (now() - time > COMMAND_DEDUPE_MS)
-      handledCommandEvents.delete(entryKey);
-}
-function consumeHandled(sessionID, name, args) {
-  const key = commandKey(sessionID, name, args);
-  const entry = handledCommands.get(key);
-  if (!entry || now() - entry.time >= COMMAND_DEDUPE_MS) {
-    handledCommands.delete(key);
-    return false;
-  }
-  if (entry.pending <= 1)
-    handledCommands.delete(key);
-  else
-    handledCommands.set(key, { time: entry.time, pending: entry.pending - 1 });
-  return true;
-}
-function hasHandledCommandEvent(sessionID, messageID) {
-  return handledCommandEvents.has(commandEventKey(sessionID, messageID));
-}
-function markHandledCommandEvent(sessionID, messageID) {
-  handledCommandEvents.set(commandEventKey(sessionID, messageID), now());
-}
-function forgetHandledCommandEvent(sessionID, messageID) {
-  handledCommandEvents.delete(commandEventKey(sessionID, messageID));
-}
-function clearCommandLifecycle(sessionID) {
-  const prefix = `${sessionID}:`;
-  for (const key of handledCommands.keys())
-    if (key.startsWith(prefix))
-      handledCommands.delete(key);
-  for (const key of handledCommandEvents.keys())
-    if (key.startsWith(prefix))
-      handledCommandEvents.delete(key);
-}
-function commandName(name) {
-  return String(name || "");
-}
-function isPreset(name) {
-  return ["loop-dev", "loop-testfix", "loop-compact", "loop-progress", "loop-safe-dev", "loop-command", "loop-cmd", "loop-prompt", "loop-ask", "loop-shell"].includes(name);
-}
-function isLoopCommandName(name) {
-  return name === "loop" || name === "loop-stop" || name === "loop-remove" || name === "loop-clear" || name === "loop-status" || name === "loop-logs" || name === "loop-help" || name === "loop-now" || name === "loop-pause" || name === "loop-resume" || name === "loop-doctor" || name === "loop-init" || name === "loop-export" || name === "loop-goal" || name === "loop-goal-status" || name === "loop-goal-pause" || name === "loop-goal-resume" || name === "loop-goal-clear" || name === "loop-goal-done" || name === "loop-goal-complete" || name === "loop-goal-blocked" || isPreset(name);
-}
-function commandArgsText(args) {
-  if (args === undefined || args === null)
-    return "";
-  if (typeof args === "string")
-    return args;
-  if (Array.isArray(args))
-    return args.map(commandArgsText).join(" ");
-  if (typeof args === "object") {
-    for (const key of ["arguments", "args", "message", "text", "value"]) {
-      if (args[key] !== undefined)
-        return commandArgsText(args[key]);
-    }
-  }
-  return String(args);
-}
-
-// src/source/opencode/command-router.js
-init_jobs();
-var HANDLER_NAMES = [
-  "addGoal",
-  "statusGoal",
-  "pauseGoal",
-  "resumeGoal",
-  "clearGoal",
-  "completeGoalCommand",
-  "blockGoalCommand",
-  "addLoop",
-  "stopLoop",
-  "statusLoop",
-  "logsLoop",
-  "helpLoop",
-  "runNow",
-  "updateJobState",
-  "doctorLoop",
-  "initLoop",
-  "exportLoop"
-];
-function requireFunction(value, name) {
-  if (typeof value !== "function")
-    throw new TypeError(`createCommandRouter requires ${name}`);
-  return value;
-}
-function createCommandRouter(options = {}) {
-  const rememberSession = requireFunction(options.rememberSession, "rememberSession");
-  const captureSessionExecutionContext2 = typeof options.captureSessionExecutionContext === "function" ? options.captureSessionExecutionContext : captureSessionExecutionContext;
-  const guardLoopOwnedUserMessage2 = typeof options.guardLoopOwnedUserMessage === "function" ? options.guardLoopOwnedUserMessage : guardLoopOwnedUserMessage;
-  const handlers = {};
-  for (const name of HANDLER_NAMES)
-    handlers[name] = requireFunction(options.handlers?.[name], `handlers.${name}`);
-  return async function handleCommand(directory, client, input, fallbackName, fallbackArgs, output, source = "before") {
-    const name = commandName(input?.command ?? input?.name ?? fallbackName);
-    const sessionID = input?.sessionID;
-    const args = commandArgsText(input?.arguments ?? fallbackArgs ?? "");
-    if (!sessionID || !name)
-      return false;
-    rememberSession(directory, client, sessionID);
-    if (isLoopCommandName(name))
-      await captureSessionExecutionContext2(client, sessionID);
-    if (source === "event") {
-      if (consumeHandled(sessionID, name, args))
-        return true;
-      if (hasHandledCommandEvent(sessionID, input?.messageID))
-        return true;
-      markHandledCommandEvent(sessionID, input?.messageID);
-    } else {
-      markHandled(sessionID, name, args);
-    }
-    if (isLoopCommandName(name))
-      guardLoopOwnedUserMessage2(sessionID);
-    const handled = () => {
-      if (output && typeof output === "object")
-        output.noReply = true;
-      return true;
-    };
-    if (name === "loop-goal")
-      return await handlers.addGoal(directory, client, sessionID, args), handled();
-    if (name === "loop-goal-status")
-      return await handlers.statusGoal(directory, client, sessionID), handled();
-    if (name === "loop-goal-pause")
-      return await handlers.pauseGoal(directory, client, sessionID, args), handled();
-    if (name === "loop-goal-resume")
-      return await handlers.resumeGoal(directory, client, sessionID, args), handled();
-    if (name === "loop-goal-clear")
-      return await handlers.clearGoal(directory, client, sessionID, args), handled();
-    if (name === "loop-goal-done" || name === "loop-goal-complete")
-      return await handlers.completeGoalCommand(directory, client, sessionID, args), handled();
-    if (name === "loop-goal-blocked")
-      return await handlers.blockGoalCommand(directory, client, sessionID, args), handled();
-    if (name === "loop")
-      return await handlers.addLoop(directory, client, sessionID, args), handled();
-    if (isPreset(name))
-      return await handlers.addLoop(directory, client, sessionID, args, presetDefaults(name, args)), handled();
-    if (name === "loop-stop" || name === "loop-remove")
-      return await handlers.stopLoop(directory, client, sessionID, args), handled();
-    if (name === "loop-clear")
-      return await handlers.stopLoop(directory, client, sessionID, "all"), handled();
-    if (name === "loop-status")
-      return await handlers.statusLoop(directory, client, sessionID), handled();
-    if (name === "loop-logs")
-      return await handlers.logsLoop(directory, client, sessionID), handled();
-    if (name === "loop-help")
-      return await handlers.helpLoop(client, sessionID), handled();
-    if (name === "loop-now")
-      return await handlers.runNow(directory, client, sessionID, args), handled();
-    if (name === "loop-pause")
-      return await handlers.updateJobState(directory, client, sessionID, args, (job) => ({ ...job, paused: true }), "Paused"), handled();
-    if (name === "loop-resume")
-      return await handlers.updateJobState(directory, client, sessionID, args, (job) => ({ ...job, paused: false, lastRunAt: 0 }), "Resumed"), handled();
-    if (name === "loop-doctor")
-      return await handlers.doctorLoop(directory, client, sessionID), handled();
-    if (name === "loop-init")
-      return await handlers.initLoop(directory, client, sessionID, args), handled();
-    if (name === "loop-export")
-      return await handlers.exportLoop(directory, client, sessionID), handled();
-    if (source === "event")
-      forgetHandledCommandEvent(sessionID, input?.messageID);
-    else
-      consumeHandled(sessionID, name, args);
-    return false;
-  };
-}
-
-// src/source/opencode/goal-commands.js
-init_jobs();
-init_state();
-init_goal_runtime();
-function requireFunction2(value, name) {
-  if (typeof value !== "function")
-    throw new TypeError(`createGoalCommandHandlers requires ${name}`);
-  return value;
-}
-function createGoalCommandHandlers(options = {}) {
-  const addLoop = requireFunction2(options.addLoop, "addLoop");
-  const scheduleDueWork = requireFunction2(options.scheduleDueWork, "scheduleDueWork");
-  const scheduleIdleWork = requireFunction2(options.scheduleIdleWork, "scheduleIdleWork");
-  const toast = requireFunction2(options.toast, "toast");
-  const say = requireFunction2(options.say, "say");
-  const readState2 = typeof options.readState === "function" ? options.readState : readState;
-  const writeState2 = typeof options.writeState === "function" ? options.writeState : writeState;
-  const setGoalComplete2 = typeof options.setGoalComplete === "function" ? options.setGoalComplete : setGoalComplete;
-  const setGoalBlocked2 = typeof options.setGoalBlocked === "function" ? options.setGoalBlocked : setGoalBlocked;
-  async function statusGoal(directory, client, sessionID) {
-    const state = await readState2(directory, sessionID);
-    const goals = (state.jobs || []).filter(isGoalJob);
-    const lines = goals.length ? goals.map((job, index) => {
-      const status = goalStatusText(job);
-      const checks = job.goalChecks?.length ? ` | checks=${job.goalChecks.length}` : "";
-      const acceptance = job.goalAcceptance?.length ? ` | acceptance=${job.goalAcceptance.length}` : "";
-      const progress = job.goalProgress?.length ? ` | progress=${job.goalProgress.length}` : "";
-      const noProgress = (job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0 ? ` | no-progress=${job.noProgressCount || 0}/${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS}` : "";
-      const rejected = job.goalCompletionRejectedReason ? " | completion-rejected" : "";
-      return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${status} | turns=${job.runCount || 0} | objective=${String(job.action || job.goalFile || "").slice(0, 220)}${checks}${acceptance}${progress}${noProgress}${rejected}`;
-    }) : ["No experimental goal jobs."];
-    await toast(client, goals.length ? `${goals.length} experimental goal(s).` : "No experimental goal jobs.", goals.length ? "info" : "warning");
-    await say(client, sessionID, `OpenCode Loop experimental goal status:
-` + lines.join(`
-`));
-  }
-  async function pauseGoal(directory, client, sessionID, args) {
-    const target = String(args || "").trim() || "goal";
-    const state = await readState2(directory, sessionID);
-    let count = 0;
-    state.jobs = (state.jobs || []).map((job, index) => isGoalJob(job) && matchJob(job, target, index) ? (count++, { ...job, paused: true }) : job);
-    await writeState2(directory, sessionID, state);
-    await scheduleDueWork(directory, client, sessionID);
-    await toast(client, `Paused ${count} experimental goal(s).`, count ? "success" : "warning");
-  }
-  async function resumeGoal(directory, client, sessionID, args) {
-    const target = String(args || "").trim() || "goal";
-    const state = await readState2(directory, sessionID);
-    let count = 0;
-    state.jobs = (state.jobs || []).map((job, index) => {
-      if (!isGoalJob(job) || !matchJob(job, target, index))
-        return job;
-      count++;
-      return { ...job, paused: false, enabled: true, goalStatus: job.goalStatus === "blocked" ? "active" : job.goalStatus || "active", lastRunAt: 0, noProgressCount: 0, goalNoProgressReason: "", goalInterruptedReason: "" };
-    });
-    await writeState2(directory, sessionID, state);
-    await toast(client, `Resumed ${count} experimental goal(s).`, count ? "success" : "warning");
-    if (count) {
-      await scheduleDueWork(directory, client, sessionID);
-      scheduleIdleWork(directory, client, sessionID);
-    }
-  }
-  async function clearGoal(directory, client, sessionID, args) {
-    const target = String(args || "").trim();
-    const state = await readState2(directory, sessionID);
-    const before = state.jobs.length;
-    state.jobs = (state.jobs || []).filter((job, index) => !isGoalJob(job) || target && !matchJob(job, target, index));
-    await writeState2(directory, sessionID, state);
-    await scheduleDueWork(directory, client, sessionID);
-    await toast(client, `Cleared ${before - state.jobs.length} experimental goal(s).`, before !== state.jobs.length ? "success" : "warning");
-  }
-  async function completeGoalCommand(directory, client, sessionID, args) {
-    const result = await setGoalComplete2(directory, sessionID, { summary: String(args || "").trim() || "Goal manually marked complete.", evidence: "Marked complete by /loop-goal-done.", manual: true });
-    await toast(client, result.message, result.ok ? "success" : "warning");
-  }
-  async function blockGoalCommand(directory, client, sessionID, args) {
-    const result = await setGoalBlocked2(directory, sessionID, { reason: String(args || "").trim() || "Goal manually marked blocked.", needed: "User input or manual intervention." });
-    await toast(client, result.message, "warning");
-  }
-  async function addGoal(directory, client, sessionID, args) {
-    const text = String(args || "").trim();
-    const [maybeCommand, rest] = splitFirst(text);
-    const sub = maybeCommand.toLowerCase();
-    if (!text || sub === "status")
-      return await statusGoal(directory, client, sessionID);
-    if (sub === "pause")
-      return await pauseGoal(directory, client, sessionID, rest);
-    if (sub === "resume")
-      return await resumeGoal(directory, client, sessionID, rest);
-    if (["clear", "remove", "stop"].includes(sub))
-      return await clearGoal(directory, client, sessionID, rest);
-    if (["done", "complete", "completed"].includes(sub))
-      return await completeGoalCommand(directory, client, sessionID, rest);
-    if (["blocked", "block"].includes(sub))
-      return await blockGoalCommand(directory, client, sessionID, rest);
-    return await addLoop(directory, client, sessionID, text, { intervalMs: 0, kind: "goal", name: "goal", immediate: true, safe: true, askNever: true, noOverlap: true, goalStatus: "active" });
-  }
-  return {
-    addGoal,
-    statusGoal,
-    pauseGoal,
-    resumeGoal,
-    clearGoal,
-    completeGoalCommand,
-    blockGoalCommand
-  };
-}
-
-// src/source/opencode/loop-commands.js
-init_jobs();
-init_state();
-init_process();
-import { promises as fs6 } from "fs";
+// src/source/opencode2/native-plugin.js
 import path7 from "path";
 
-// src/source/runtime/companion-goal.js
-import { promises as fs4 } from "fs";
-import path5 from "path";
-function goalRoot(directory) {
-  return path5.join(directory, ".opencode", "goals");
-}
-async function findDedicatedGoalForSession(directory, sessionID) {
-  if (!directory || !sessionID)
-    return;
-  let names;
-  try {
-    names = await fs4.readdir(goalRoot(directory));
-  } catch (error) {
-    if (error?.code === "ENOENT")
-      return;
-    return;
-  }
-  for (const name of names) {
-    if (!name.endsWith(".json"))
-      continue;
-    try {
-      const value = JSON.parse(await fs4.readFile(path5.join(goalRoot(directory), name), "utf8"));
-      if (value?.sessionID === sessionID)
-        return value;
-    } catch {}
-  }
-  return;
-}
-function dedicatedGoalOwnsContinuation(goal) {
-  return goal?.status === "active";
-}
-function dedicatedGoalSummary(goal) {
-  if (!goal)
-    return "not detected";
-  const id = String(goal.id || "unknown").slice(0, 12);
-  const status = String(goal.status || "unknown");
-  return `${status} (${id})`;
-}
-
-// src/source/runtime/loop-diagnostics.js
-init_state();
-import { promises as fs5 } from "fs";
-import path6 from "path";
-
-// src/source/runtime/schedule-policy.js
-init_jobs();
-var TERMINAL_GOAL_STATUSES = new Set(["completed", "blocked", "cleared"]);
-function inferredScheduleMode(job) {
-  const explicit = String(job?.scheduleMode || "").toLowerCase();
-  if (["idle", "interval", "once", "watch"].includes(explicit))
-    return explicit;
-  if (job?.watchPaths?.length)
-    return "watch";
-  if (Number(job?.maxRuns || 0) === 1 && job?.immediate === false && Number(job?.intervalMs || 0) > 0)
-    return "once";
-  return Number(job?.intervalMs || 0) === 0 ? "idle" : "interval";
-}
-function jobRunnable(job) {
-  if (!job)
-    return false;
-  if (isGoalJob(job) && TERMINAL_GOAL_STATUSES.has(job.goalStatus))
-    return false;
-  if (!job.enabled || job.paused)
-    return false;
-  if (Number(job.maxRuns || 0) > 0 && Number(job.runCount || 0) >= Number(job.maxRuns || 0))
-    return false;
-  return true;
-}
-function jobDueAt(job, current = Date.now()) {
-  if (!jobRunnable(job))
-    return Infinity;
-  if (Number(job.runNowRequestedAt || 0) > 0)
-    return current;
-  const created = Date.parse(job.createdAt || "");
-  if (Number(job.maxRuntimeMs || 0) > 0 && Number.isFinite(created) && current - created >= Number(job.maxRuntimeMs || 0))
-    return current;
-  if (job.watchPaths?.length)
-    return job.watchTriggered === true ? current : Infinity;
-  const intervalMs = Number(job.intervalMs || 0);
-  if (intervalMs === 0)
-    return current;
-  const lastRunAt = Number(job.lastRunAt || 0);
-  if (!lastRunAt) {
-    if (job.immediate === false)
-      return (Number.isFinite(created) ? created : current) + intervalMs;
-    return current;
-  }
-  return lastRunAt + intervalMs;
-}
-function jobIsDue(job, current = Date.now(), force = false) {
-  if (!jobRunnable(job))
-    return false;
-  if (force)
-    return true;
-  return jobDueAt(job, current) <= current;
-}
-function dueJobs(state, current = Date.now(), force = false) {
-  return (state?.jobs || []).filter((job) => jobIsDue(job, current, force)).sort((a, b) => Number(Number(b.runNowRequestedAt || 0) > 0) - Number(Number(a.runNowRequestedAt || 0) > 0));
-}
-function nextDueDelay(state, current = Date.now()) {
-  let soonest = Infinity;
-  for (const job of state?.jobs || [])
-    soonest = Math.min(soonest, jobDueAt(job, current));
-  if (!Number.isFinite(soonest))
-    return Infinity;
-  return Math.max(0, soonest - current);
-}
-function scheduleDescription(job) {
-  const mode = inferredScheduleMode(job);
-  const intervalMs = Number(job?.intervalMs || 0);
-  if (mode === "idle")
-    return "every idle";
-  if (mode === "watch")
-    return `on watch: ${(job.watchPaths || []).join(", ")}`;
-  if (mode === "once")
-    return intervalMs > 0 ? `once after ${durationToText(intervalMs)}` : "once on next idle";
-  if (job?.immediate === false)
-    return `every ${durationToText(intervalMs)}, first after ${durationToText(intervalMs)}`;
-  return `every ${durationToText(intervalMs)}, starts on next idle`;
-}
-function scheduleState(job, current = Date.now()) {
-  if (!job?.enabled)
-    return "stopped";
-  if (job?.paused)
-    return "paused";
-  if (Number(job?.runNowRequestedAt || 0) > 0)
-    return "due now; waiting for idle";
-  const mode = inferredScheduleMode(job);
-  const dueAt = jobDueAt(job, current);
-  if (!Number.isFinite(dueAt))
-    return mode === "watch" ? "waiting for watched change" : "not scheduled";
-  if (dueAt <= current)
-    return mode === "idle" ? "waiting for idle" : "due; waiting for idle";
-  return `due in ${durationToText(dueAt - current)}`;
-}
-
-// src/source/runtime/loop-diagnostics.js
-function describeJobScheduling(job, current = Date.now()) {
-  return {
-    schedule: scheduleDescription(job),
-    state: scheduleState(job, current)
-  };
-}
-async function listPersistedLoopSessions(directory, currentSessionID) {
-  const root = stateDir(directory);
-  let names;
-  try {
-    names = await fs5.readdir(root);
-  } catch (error) {
-    if (error?.code === "ENOENT")
-      return [];
-    return [];
-  }
-  const sessions = [];
-  for (const name of names) {
-    if (!name.endsWith(".json"))
-      continue;
-    const sessionID = name.slice(0, -5);
-    try {
-      const parsed = JSON.parse(await fs5.readFile(path6.join(root, name), "utf8"));
-      const jobs = Array.isArray(parsed?.jobs) ? parsed.jobs : [];
-      const enabled = jobs.filter((job) => job?.enabled !== false && !job?.paused).length;
-      const neverRan = jobs.filter((job) => Number(job?.runCount || 0) === 0).length;
-      sessions.push({
-        sessionID,
-        current: sessionID === currentSessionID,
-        jobs: jobs.length,
-        enabled,
-        neverRan
-      });
-    } catch {
-      sessions.push({ sessionID, current: sessionID === currentSessionID, jobs: 0, enabled: 0, neverRan: 0, corrupt: true });
-    }
-  }
-  return sessions.sort((a, b) => Number(b.current) - Number(a.current) || b.enabled - a.enabled || a.sessionID.localeCompare(b.sessionID));
-}
-
-// src/source/opencode/loop-commands.js
-var SERVICE2 = "opencode-loop";
-var DEFAULT_PROGRESS_MD = `# Progress
-
-## Current Goal
-Describe the current project goal here.
-
-## Agent Rules
-- Do not ask questions unless truly blocked.
-- Make reasonable assumptions and continue.
-- Work on unfinished TODOs in order.
-- Mark completed TODOs with [x].
-- Add new bugs, ideas, and follow-up work as TODOs.
-- Run tests, lint, or build when available.
-- Do not run destructive commands, force pushes, production deploys, or database resets.
-
-## Active TODO
-- [ ] Review the project structure and pick the next safe improvement.
-
-## Completed
-- [x] Created progress.md.
-
-## Backlog Ideas
-- [ ] Add more project-specific tasks here.
-
-## Blocked
-- None.
-`;
-function requireFunction3(value, name) {
-  if (typeof value !== "function")
-    throw new TypeError(`createLoopCommandHandlers requires ${name}`);
-  return value;
-}
-function createLoopCommandHandlers(options = {}) {
-  const clearActiveRun = requireFunction3(options.clearActiveRun, "clearActiveRun");
-  const cancelDueWork = requireFunction3(options.cancelDueWork, "cancelDueWork");
-  const stopWatchdog = requireFunction3(options.stopWatchdog, "stopWatchdog");
-  const scheduleDueWork = requireFunction3(options.scheduleDueWork, "scheduleDueWork");
-  const maybeRunDueJobs = requireFunction3(options.maybeRunDueJobs, "maybeRunDueJobs");
-  const toast = requireFunction3(options.toast, "toast");
-  const say = requireFunction3(options.say, "say");
-  const now2 = typeof options.now === "function" ? options.now : now;
-  const readState2 = typeof options.readState === "function" ? options.readState : readState;
-  const writeState2 = typeof options.writeState === "function" ? options.writeState : writeState;
-  const removeState2 = typeof options.removeState === "function" ? options.removeState : removeState;
-  const pathExists2 = typeof options.pathExists === "function" ? options.pathExists : pathExists;
-  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
-  const readFile = typeof options.readFile === "function" ? options.readFile : (...args) => fs6.readFile(...args);
-  const writeFile = typeof options.writeFile === "function" ? options.writeFile : (...args) => fs6.writeFile(...args);
-  const listPersistedLoopSessions2 = typeof options.listPersistedLoopSessions === "function" ? options.listPersistedLoopSessions : listPersistedLoopSessions;
-  const findDedicatedGoalForSession2 = typeof options.findDedicatedGoalForSession === "function" ? options.findDedicatedGoalForSession : findDedicatedGoalForSession;
-  const runtimeVersion = options.runtimeVersion || process.version;
-  const runtimePlatform = options.runtimePlatform || process.platform;
-  async function stopLoop(directory, client, sessionID, args) {
-    const target = String(args || "").trim();
-    if (!target || target.toLowerCase() === "all") {
-      await removeState2(directory, sessionID);
-      clearActiveRun(sessionID);
-      cancelDueWork(sessionID);
-      stopWatchdog(sessionID);
-      await toast(client, "All loops stopped for this session.", "success");
-      return;
-    }
-    const state = await readState2(directory, sessionID);
-    const before = state.jobs.length;
-    state.jobs = state.jobs.filter((job, index) => !matchJob(job, target, index));
-    await writeState2(directory, sessionID, state);
-    await scheduleDueWork(directory, client, sessionID);
-    await toast(client, `Stopped ${before - state.jobs.length} loop(s).`, "success");
-  }
-  async function updateJobState(directory, client, sessionID, args, updater, message) {
-    const target = String(args || "").trim() || "all";
-    const state = await readState2(directory, sessionID);
-    let count = 0;
-    state.jobs = (state.jobs || []).map((job, index) => matchJob(job, target, index) ? (count++, updater(job)) : job);
-    await writeState2(directory, sessionID, state);
-    await scheduleDueWork(directory, client, sessionID);
-    await toast(client, `${message}: ${count} loop(s).`, count ? "success" : "warning");
-  }
-  async function statusLoop(directory, client, sessionID) {
-    const state = await readState2(directory, sessionID);
-    const jobs = state.jobs || [];
-    const current = now2();
-    const lines = jobs.length ? jobs.map((job, index) => {
-      const scheduling = describeJobScheduling(job, current);
-      const flags = [isGoalJob(job) ? `goal:${goalStatusText(job)}` : undefined, job.paused ? "paused" : "active", Number(job.runNowRequestedAt || 0) > 0 ? "run-now" : undefined, job.safe ? "safe" : undefined, job.askNever ? "ask-never" : undefined, job.noOverlap ? "no-overlap" : undefined, job.checkpointOnly ? "checkpoint-only" : undefined, job.gitCheckpoint ? "git-checkpoint" : undefined].filter(Boolean).join(",");
-      return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${jobLabel(job)} | schedule=${scheduling.schedule} | state=${scheduling.state} | runs=${job.runCount || 0} | failures=${job.failureCount || 0} | ${flags}`;
-    }) : ["No active loop jobs."];
-    await toast(client, jobs.length ? `${jobs.length} loop job(s).` : "No active loop jobs.", jobs.length ? "info" : "warning");
-    await say(client, sessionID, `OpenCode loop status:
-` + lines.join(`
-`));
-  }
-  async function logsLoop(directory, client, sessionID) {
-    let text = "No loop log found.";
-    try {
-      text = (await readFile(path7.join(stateDir(directory), "loop.log"), "utf8")).trim().split(/\r?\n/).slice(-80).join(`
-`) || text;
-    } catch {}
-    await say(client, sessionID, `OpenCode loop logs:
-` + text);
-  }
-  async function helpLoop(client, sessionID) {
-    await say(client, sessionID, [
-      "OpenCode Loop help:",
-      "/loop continue the project                           auto-continue forever whenever the session becomes idle",
-      "/loop idle continue the project                      explicit form of the same idle loop",
-      "/loop every 5m continue the project                  recurring timer; first run after 5m, always waits for idle",
-      "/loop after 5m continue the project                  one-shot delayed prompt; runs once when 5m has passed and session is idle",
-      "/loop 5m continue the project                        legacy compact form: starts on next idle, then every 5m",
-      "/loop 5m --no-now continue the project               legacy recurring form with first run delayed 5m",
-      "/loop-command 200m /compact                          OpenCode slash-command loop, waits for idle",
-      "/loop-ask 1h did you run tests and tsc --noEmit?      scheduled question/check prompt",
-      "/loop-shell 10m npm test                              shell loop, waits for idle",
-      "/loop-goal finish the feature and keep tests green    experimental persistent goal mode",
-      '/loop 0s --verify "npm test" <prompt>               verify after each assistant turn',
-      "/loop --prompt-file loop-prompt.md                    idle loop loading its prompt from a file",
-      "/loop 0s --max-runtime 6h --max-failures 3 <task>     stop safely after limits",
-      "Prompt-producing /loop jobs are blocked while dedicated /goal owns the same session; use another session or --allow-goal-overlap only intentionally.",
-      "/loop-doctor | /loop-init | /loop-export"
-    ].join(`
-`));
-  }
-  async function runNow(directory, client, sessionID, args) {
-    const target = String(args || "").trim() || "all";
-    const state = await readState2(directory, sessionID);
-    const requestedAt = Math.max(1, Number(now2()) || Date.now());
-    let count = 0;
-    for (const [index, job] of (state.jobs || []).entries()) {
-      if (!matchJob(job, target, index))
-        continue;
-      job.lastRunAt = 0;
-      job.paused = false;
-      job.runNowRequestedAt = requestedAt;
-      count += 1;
-    }
-    await writeState2(directory, sessionID, state);
-    await toast(client, `Marked ${count} loop job(s) due now.`, count ? "success" : "warning");
-    if (count)
-      await scheduleDueWork(directory, client, sessionID);
-  }
-  async function doctorLoop(directory, client, sessionID) {
-    const state = await readState2(directory, sessionID);
-    const persisted = await listPersistedLoopSessions2(directory, sessionID);
-    const otherSessions = persisted.filter((entry) => !entry.current && entry.enabled > 0);
-    const dedicatedGoal = await findDedicatedGoalForSession2(directory, sessionID);
-    const lines = [
-      "OpenCode Loop doctor:",
-      `- plugin: ${SERVICE2}`,
-      `- project directory: ${directory}`,
-      `- state directory: ${stateDir(directory)}`,
-      `- current session: ${sessionID}`,
-      `- current-session jobs: ${(state.jobs || []).length}`,
-      `- dedicated /goal: ${dedicatedGoalSummary(dedicatedGoal)}`,
-      `- other persisted sessions with enabled jobs: ${otherSessions.length}`,
-      `- node: ${runtimeVersion}`,
-      `- platform: ${runtimePlatform}`,
-      "- smoke test: /loop --max-runs 1 --dry-run continue from progress.md",
-      "- delayed smoke test: /loop after 5m --dry-run continue from progress.md",
-      "- recurring smoke test: /loop every 5m --dry-run continue from progress.md",
-      "- experimental goal smoke test: /loop-goal --dry-run finish the current task and verify it"
-    ];
-    for (const entry of otherSessions.slice(0, 8)) {
-      lines.push(`- other session ${entry.sessionID}: jobs=${entry.jobs}, enabled=${entry.enabled}, never-ran=${entry.neverRan}`);
-    }
-    if (otherSessions.length > 8)
-      lines.push(`- ... ${otherSessions.length - 8} more persisted session(s)`);
-    await say(client, sessionID, lines.join(`
-`));
-  }
-  async function initLoop(directory, client, sessionID, args) {
-    const target = String(args || "").trim() || "progress.md";
-    const full = path7.resolve(directory, target);
-    if (await pathExists2(full)) {
-      await toast(client, `${target} already exists.`, "warning");
-      return;
-    }
-    await writeFile(full, DEFAULT_PROGRESS_MD, "utf8");
-    await toast(client, `Created ${target}.`, "success");
-    await appendLoopLog2(directory, "init", { sessionID, file: target });
-  }
-  async function exportLoop(directory, client, sessionID) {
-    const state = await readState2(directory, sessionID);
-    await say(client, sessionID, "OpenCode loop state export:\n```json\n" + JSON.stringify(state, null, 2) + "\n```");
-  }
-  return {
-    stopLoop,
-    updateJobState,
-    statusLoop,
-    logsLoop,
-    helpLoop,
-    runNow,
-    doctorLoop,
-    initLoop,
-    exportLoop
-  };
-}
-
-// src/source/opencode/loop-registration.js
-init_jobs();
-
-// src/source/core/schedule-syntax.js
-function removeBooleanFlag(input, flag) {
-  const pattern = new RegExp(`(^|\\s)${flag.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}(?=\\s|$)`, "i");
-  const found = pattern.test(input);
-  return {
-    found,
-    value: String(input || "").replace(pattern, " ").replace(/\s+/g, " ").trim()
-  };
-}
-function firstToken(input) {
-  const match = String(input || "").trim().match(/^(\S+)(?:\s+([\s\S]*))?$/);
-  return match ? { token: match[1], rest: String(match[2] || "").trim() } : { token: "", rest: "" };
-}
-function inferredMode(intervalMs, maxRuns) {
-  if (Number(maxRuns || 0) === 1 && Number(intervalMs || 0) > 0)
-    return "once";
-  return Number(intervalMs || 0) === 0 ? "idle" : "interval";
-}
-function normalizeLoopScheduleArgs(raw, defaults = {}) {
-  const overlap = removeBooleanFlag(String(raw || "").trim(), "--allow-goal-overlap");
-  let input = overlap.value;
-  const nextDefaults = { ...defaults };
-  let scheduleMode = defaults.scheduleMode;
-  let scheduleSyntax = "legacy";
-  const first = firstToken(input);
-  const keyword = first.token.toLowerCase();
-  if (keyword === "idle") {
-    nextDefaults.intervalMs = 0;
-    nextDefaults.immediate = true;
-    scheduleMode = "idle";
-    scheduleSyntax = "idle";
-    input = first.rest;
-  } else if (keyword === "every" || keyword === "after" || keyword === "in") {
-    const duration = firstToken(first.rest);
-    const intervalMs = parseDuration(duration.token);
-    if (intervalMs === null) {
-      return {
-        ok: false,
-        error: `Invalid ${keyword} schedule. Example: /loop ${keyword === "every" ? "every" : "after"} 5m continue the project`
-      };
-    }
-    nextDefaults.intervalMs = intervalMs;
-    nextDefaults.immediate = false;
-    input = duration.rest;
-    if (keyword === "every") {
-      scheduleMode = intervalMs === 0 ? "idle" : "interval";
-      scheduleSyntax = "every";
-    } else {
-      nextDefaults.maxRuns = 1;
-      scheduleMode = "once";
-      scheduleSyntax = "after";
-    }
-  } else {
-    const duration = parseDuration(first.token);
-    if (duration !== null) {
-      scheduleMode = duration === 0 ? "idle" : "interval";
-    } else if (nextDefaults.intervalMs === undefined || nextDefaults.intervalMs === null) {
-      nextDefaults.intervalMs = 0;
-      nextDefaults.immediate = nextDefaults.immediate ?? true;
-      scheduleMode = "idle";
-      scheduleSyntax = "idle-shorthand";
-    } else {
-      scheduleMode = scheduleMode || inferredMode(nextDefaults.intervalMs, nextDefaults.maxRuns);
-    }
-  }
-  return {
-    ok: true,
-    args: input,
-    defaults: nextDefaults,
-    scheduleMode: scheduleMode || inferredMode(nextDefaults.intervalMs, nextDefaults.maxRuns),
-    scheduleSyntax,
-    allowGoalOverlap: overlap.found || defaults.allowGoalOverlap === true
-  };
-}
-
-// src/source/opencode/loop-registration.js
-init_state();
-init_process();
-var DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180000;
-var FALLBACK_ACTIVE_GUARD_MS = 45000;
-function requireFunction4(value, name) {
-  if (typeof value !== "function")
-    throw new TypeError(`createLoopRegistration requires ${name}`);
-  return value;
-}
-function normalizeActionForCompare(value) {
-  return String(value || "").replace(/\s+/g, " ").trim();
-}
-function sameLoopDefinition(a, b) {
-  if (!a || !b)
-    return false;
-  return (a.name || "") === (b.name || "") && Number(a.intervalMs || 0) === Number(b.intervalMs || 0) && normalizeActionForCompare(a.action) === normalizeActionForCompare(b.action) && normalizeActionForCompare(a.kind) === normalizeActionForCompare(b.kind) && normalizeActionForCompare(a.promptFile) === normalizeActionForCompare(b.promptFile);
-}
-function createLoopRegistration(options = {}) {
-  const snapshotPaths = requireFunction4(options.snapshotPaths, "snapshotPaths");
-  const scheduleDueWork = requireFunction4(options.scheduleDueWork, "scheduleDueWork");
-  const scheduleIdleWork = requireFunction4(options.scheduleIdleWork, "scheduleIdleWork");
-  const toast = requireFunction4(options.toast, "toast");
-  const say = requireFunction4(options.say, "say");
-  const parseLoopArgs2 = typeof options.parseLoopArgs === "function" ? options.parseLoopArgs : parseLoopArgs;
-  const normalizeLoopScheduleArgs2 = typeof options.normalizeLoopScheduleArgs === "function" ? options.normalizeLoopScheduleArgs : normalizeLoopScheduleArgs;
-  const readState2 = typeof options.readState === "function" ? options.readState : readState;
-  const writeState2 = typeof options.writeState === "function" ? options.writeState : writeState;
-  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
-  const normalizedModelRef2 = typeof options.normalizedModelRef === "function" ? options.normalizedModelRef : normalizedModelRef;
-  const getSessionExecutionContext2 = typeof options.getSessionExecutionContext === "function" ? options.getSessionExecutionContext : getSessionExecutionContext;
-  const findDedicatedGoalForSession2 = typeof options.findDedicatedGoalForSession === "function" ? options.findDedicatedGoalForSession : findDedicatedGoalForSession;
-  const configuredGuard = Number(options.defaultActiveGuardMs);
-  const defaultActiveGuardMs = Number.isFinite(configuredGuard) && configuredGuard > 0 ? configuredGuard : FALLBACK_ACTIVE_GUARD_MS;
-  async function addLoop(directory, client, sessionID, args, defaults = {}) {
-    const normalized = normalizeLoopScheduleArgs2(args, defaults);
-    if (!normalized.ok) {
-      await toast(client, normalized.error, "warning");
-      return;
-    }
-    const parsed = parseLoopArgs2(normalized.args, normalized.defaults);
-    if (!parsed.ok) {
-      await toast(client, parsed.error, "warning");
-      return;
-    }
-    parsed.job.scheduleMode = normalized.scheduleMode;
-    parsed.job.scheduleSyntax = normalized.scheduleSyntax;
-    parsed.job.allowGoalOverlap = normalized.allowGoalOverlap === true;
-    if (normalized.scheduleSyntax === "after") {
-      parsed.job.immediate = false;
-      parsed.job.maxRuns = 1;
-      parsed.job.lastRunAt = Date.parse(parsed.job.createdAt || "") || Date.now();
-    }
-    const executionContext = getSessionExecutionContext2(sessionID) || { agent: "build" };
-    parsed.job.agent = defaults.agent || executionContext.agent || "build";
-    parsed.job.model = normalizedModelRef2(defaults.model) || executionContext.model;
-    if (defaults.testfixPreset) {
-      const defaultCommand = String(defaults.verifyCommand || "npm test");
-      const parsedAction = String(parsed.job.action || "").trim();
-      const usedDefaultAction = parsedAction === String(defaults.action || "").trim();
-      if (!usedDefaultAction && parsed.job.verifyCommand === defaults.verifyCommand) {
-        parsed.job.verifyCommand = parsedAction;
-        parsed.job.action = `Run the project tests. Fix failures. Re-run the tests. Test command hint: ${parsedAction}`;
-      } else if (usedDefaultAction && parsed.job.verifyCommand !== defaults.verifyCommand) {
-        parsed.job.action = `Run the project tests. Fix failures. Re-run the tests. Test command hint: ${parsed.job.verifyCommand || defaultCommand}`;
-      }
-    }
-    if (parsed.job.watchPaths.length)
-      parsed.job.watchSnapshot = await snapshotPaths(directory, parsed.job.watchPaths);
-    if (!parsed.job.activeRecoveryMs) {
-      parsed.job.activeRecoveryMs = isGoalJob(parsed.job) ? DEFAULT_GOAL_ACTIVE_RECOVERY_MS : Math.max(defaultActiveGuardMs, Math.min(90000, (parsed.job.intervalMs || 0) + 1e4));
-    }
-    const promptProducing = actionKind(parsed.job.action, parsed.job) === "prompt";
-    if (promptProducing && !parsed.job.allowGoalOverlap) {
-      const dedicatedGoal = await findDedicatedGoalForSession2(directory, sessionID);
-      if (dedicatedGoalOwnsContinuation(dedicatedGoal)) {
-        await appendLoopLog2(directory, "goal-overlap-blocked", {
-          sessionID,
-          job: parsed.job.name || parsed.job.id,
-          goal: dedicatedGoal.id
-        });
-        await toast(client, "Prompt loop not added: dedicated /goal already owns continuation in this session. Pause/finish the Goal, use another session, or pass --allow-goal-overlap intentionally.", "warning");
-        return;
-      }
-    }
-    if (parsed.job.dryRun) {
-      await toast(client, `Loop dry run: ${jobLabel(parsed.job)}`, "info");
-      await say(client, sessionID, "OpenCode loop dry run:\n```json\n" + JSON.stringify(parsed.job, null, 2) + "\n```");
-      return;
-    }
-    const state = await readState2(directory, sessionID);
-    const jobs = Array.isArray(state.jobs) ? state.jobs : [];
-    let replaced = false;
-    if (!parsed.job.multi) {
-      const targetName = parsed.job.name || "default";
-      parsed.job.name = targetName;
-      state.jobs = jobs.filter((existing) => {
-        const existingName = existing.name || "default";
-        const shouldReplace = existingName === targetName || sameLoopDefinition(existing, parsed.job);
-        if (shouldReplace)
-          replaced = true;
-        return !shouldReplace;
-      });
-    } else {
-      state.jobs = jobs;
-    }
-    state.jobs.push(parsed.job);
-    await writeState2(directory, sessionID, state);
-    await scheduleDueWork(directory, client, sessionID);
-    if (parsed.job.immediate)
-      scheduleIdleWork(directory, client, sessionID);
-    await toast(client, `${replaced ? "Loop replaced" : "Loop added"}: ${jobLabel(parsed.job)}`, "success");
-    await appendLoopLog2(directory, replaced ? "replace" : "add", {
-      sessionID,
-      job: parsed.job.name || parsed.job.id,
-      label: jobLabel(parsed.job),
-      scheduleMode: parsed.job.scheduleMode,
-      scheduleSyntax: parsed.job.scheduleSyntax
-    });
-  }
-  return { addLoop };
-}
-// src/source/runtime/session-activity.js
-var activeToolCalls = new Map;
-var sessionParents = new Map;
-var sessionStatuses = new Map;
-var sessionStatusSeenAt = new Map;
-function hasActiveToolCalls(sessionID) {
-  return (activeToolCalls.get(sessionID)?.size || 0) > 0;
-}
-function markToolCallActive(input) {
-  const sessionID = input?.sessionID;
-  const callID = input?.callID;
-  if (typeof sessionID !== "string" || typeof callID !== "string")
-    return;
-  const calls = activeToolCalls.get(sessionID) || new Set;
-  calls.add(callID);
-  activeToolCalls.set(sessionID, calls);
-  sessionStatuses.set(sessionID, "busy");
-  sessionStatusSeenAt.set(sessionID, now());
-}
-function markToolCallFinished(input) {
-  const sessionID = input?.sessionID;
-  const callID = input?.callID;
-  if (typeof sessionID !== "string" || typeof callID !== "string")
-    return;
-  const calls = activeToolCalls.get(sessionID);
-  if (!calls)
-    return;
-  calls.delete(callID);
-  if (!calls.size)
-    activeToolCalls.delete(sessionID);
-}
-function updateSessionRelationship(info, removed = false) {
-  const sessionID = info?.id;
-  if (typeof sessionID !== "string")
-    return;
-  if (removed || typeof info?.parentID !== "string")
-    sessionParents.delete(sessionID);
-  else
-    sessionParents.set(sessionID, info.parentID);
-  if (!removed)
-    updateSessionExecutionContext(info);
-  else
-    deleteSessionExecutionContext(sessionID);
-}
-function updateSessionRelationshipFromEvent(event) {
-  if (!["session.created", "session.updated", "session.deleted"].includes(event?.type))
-    return;
-  updateSessionRelationship(event?.properties?.info, event.type === "session.deleted");
-}
-function isDescendantSession(sessionID, ancestorID) {
-  const visited = new Set;
-  let current = sessionID;
-  while (sessionParents.has(current) && !visited.has(current)) {
-    visited.add(current);
-    current = sessionParents.get(current);
-    if (current === ancestorID)
-      return true;
-  }
-  return false;
-}
-function hasBusyDescendant(sessionID) {
-  for (const childID of sessionParents.keys()) {
-    if (!isDescendantSession(childID, sessionID))
-      continue;
-    const status = sessionStatuses.get(childID);
-    if (status === "busy" || status === "retry" || hasActiveToolCalls(childID))
-      return true;
-  }
-  return false;
-}
-async function refreshSessionRelationships(client, directory) {
-  if (!client?.session?.list)
-    return;
-  try {
-    const sessions = await sdkCall(client.session.list.bind(client.session), { query: { directory } }, { directory }, {});
-    if (Array.isArray(sessions))
-      for (const info of sessions)
-        updateSessionRelationship(info);
-  } catch {}
-}
-function updateToolActivityFromEvent(event) {
-  const props = event?.properties || {};
-  if (event?.type === "message.part.updated") {
-    const part = props.part;
-    if (part?.type !== "tool")
-      return;
-    const sessionID = part.sessionID || props.sessionID;
-    if (["pending", "running"].includes(part.state?.status)) {
-      markToolCallActive({ sessionID, callID: part.callID });
-    }
-    if (["completed", "error"].includes(part.state?.status)) {
-      const identifiers = [...new Set([part.callID, part.id].filter((value) => typeof value === "string"))];
-      for (const callID of identifiers)
-        markToolCallFinished({ sessionID, callID });
-    }
-    return;
-  }
-  const started = ["session.next.shell.started", "session.next.tool.called"].includes(event?.type);
-  const finished = ["session.next.shell.ended", "session.next.tool.success", "session.next.tool.failed"].includes(event?.type);
-  if (started)
-    markToolCallActive(props);
-  if (finished)
-    markToolCallFinished(props);
-}
-function clearSessionActivity(sessionID) {
-  activeToolCalls.delete(sessionID);
-  sessionParents.delete(sessionID);
-  sessionStatuses.delete(sessionID);
-  sessionStatusSeenAt.delete(sessionID);
-  deleteSessionExecutionContext(sessionID);
-}
-
-// src/source/runtime/scheduler.js
-init_jobs();
-init_state();
-
-// src/source/runtime/scheduler-diagnostics.js
-var DEFAULT_DEFERRAL_LOG_THROTTLE_MS = 30000;
-function createSchedulerDiagnostics(options = {}) {
-  const now = typeof options.now === "function" ? options.now : Date.now;
-  const appendLoopLog = typeof options.appendLoopLog === "function" ? options.appendLoopLog : async () => {};
-  const configured = Number(options.throttleMs);
-  const throttleMs = Number.isFinite(configured) && configured >= 0 ? configured : DEFAULT_DEFERRAL_LOG_THROTTLE_MS;
-  const lastLogged = new Map;
-  async function logDeferral(directory, sessionID, reason, extra = {}) {
-    const key = `${sessionID || "unknown"}:${reason || "deferred"}:${extra.source || "runtime"}`;
-    const current = now();
-    const previous = Number(lastLogged.get(key) || 0);
-    if (previous > 0 && current - previous < throttleMs)
-      return false;
-    lastLogged.set(key, current);
-    await appendLoopLog(directory, "deferred", {
-      sessionID,
-      reason,
-      ...extra
-    });
-    return true;
-  }
-  function clearSession(sessionID) {
-    const prefix = `${sessionID || "unknown"}:`;
-    for (const key of lastLogged.keys())
-      if (key.startsWith(prefix))
-        lastLogged.delete(key);
-  }
-  return { logDeferral, clearSession };
-}
-
-// src/source/runtime/scheduler.js
-var DEFAULT_IDLE_DEBOUNCE_MS = 1200;
-var DEFAULT_BUSY_RETRY_MS = 5000;
-var DEFAULT_MIN_DUE_TIMER_MS = 250;
-var DEFAULT_MAX_DUE_TIMER_MS = 2147000000;
-var DEFAULT_HEARTBEAT_MS = 2500;
-var DEFAULT_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
-function createSchedulerRuntime(options = {}) {
-  const idleTimers = new Map;
-  const dueTimers = new Map;
-  const watchdogTimers = new Map;
-  const knownSessions = new Map;
-  let heartbeatTimer;
-  const clock = options.now || now;
-  const readStateFn = options.readState || readState;
-  const setTimeoutFn = options.setTimeout || setTimeout;
-  const clearTimeoutFn = options.clearTimeout || clearTimeout;
-  const setIntervalFn = options.setInterval || setInterval;
-  const clearIntervalFn = options.clearInterval || clearInterval;
-  const idleDebounceMs = options.idleDebounceMs ?? DEFAULT_IDLE_DEBOUNCE_MS;
-  const busyRetryMs = options.busyRetryMs ?? DEFAULT_BUSY_RETRY_MS;
-  const minDueTimerMs = options.minDueTimerMs ?? DEFAULT_MIN_DUE_TIMER_MS;
-  const maxDueTimerMs = options.maxDueTimerMs ?? DEFAULT_MAX_DUE_TIMER_MS;
-  const heartbeatMs = options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
-  const sessionTtlMs = options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS;
-  const errorMessage = (error) => options.errorMessage ? options.errorMessage(error) : error instanceof Error ? error.message : String(error || "unknown error");
-  const appendLog = async (directory, event, extra) => {
-    if (options.appendLoopLog)
-      await options.appendLoopLog(directory, event, extra);
-  };
-  const toast = async (client, message, level) => {
-    if (options.toast)
-      await options.toast(client, message, level);
-  };
-  const diagnostics = createSchedulerDiagnostics({ appendLoopLog: appendLog, now: clock, throttleMs: options.deferralLogThrottleMs });
-  function stopHeartbeatIfIdle() {
-    if (!knownSessions.size && heartbeatTimer) {
-      clearIntervalFn(heartbeatTimer);
-      heartbeatTimer = undefined;
-    }
-  }
-  function startHeartbeat() {
-    if (heartbeatTimer)
-      return;
-    heartbeatTimer = setIntervalFn(() => {
-      for (const [sessionID, info] of [...knownSessions.entries()]) {
-        if (!info || clock() - (info.seenAt || 0) > sessionTtlMs) {
-          knownSessions.delete(sessionID);
-          continue;
-        }
-        Promise.resolve().then(async () => {
-          await options.finalizeActiveRun?.(info.directory, info.client, sessionID, { requireIdle: true, forceStale: true });
-          await options.maybeRunDueJobs?.(info.directory, info.client, sessionID, { heartbeat: true });
-        }).catch((error) => appendLog(info.directory, "heartbeat-error", { sessionID, error: errorMessage(error) }).catch(() => {}));
-      }
-      stopHeartbeatIfIdle();
-    }, heartbeatMs);
-  }
-  function rememberSession(directory, client, sessionID) {
-    if (!sessionID)
-      return;
-    knownSessions.set(sessionID, { directory, client, seenAt: clock() });
-    startHeartbeat();
-  }
-  function cancelIdleWork(sessionID) {
-    const timer = idleTimers.get(sessionID);
-    if (timer)
-      clearTimeoutFn(timer);
-    idleTimers.delete(sessionID);
-  }
-  function cancelDueWork(sessionID) {
-    const timer = dueTimers.get(sessionID);
-    if (timer)
-      clearTimeoutFn(timer);
-    dueTimers.delete(sessionID);
-  }
-  function scheduleIdleWork(directory, client, sessionID) {
-    cancelIdleWork(sessionID);
-    const timer = setTimeoutFn(() => {
-      idleTimers.delete(sessionID);
-      Promise.resolve().then(async () => {
-        if (!await options.sessionIsIdle?.(client, sessionID, directory)) {
-          await diagnostics.logDeferral(directory, sessionID, "session-busy", { source: "idle", retryMs: busyRetryMs });
-          await scheduleDueWork(directory, client, sessionID, busyRetryMs);
-          return;
-        }
-        await options.finalizeActiveRun?.(directory, client, sessionID);
-        if (!await options.sessionIsIdle?.(client, sessionID, directory)) {
-          await diagnostics.logDeferral(directory, sessionID, "session-busy-after-finalize", { source: "idle", retryMs: busyRetryMs });
-          await scheduleDueWork(directory, client, sessionID, busyRetryMs);
-          return;
-        }
-        await options.maybeRunDueJobs?.(directory, client, sessionID);
-      }).catch((error) => {
-        toast(client, `Loop idle handler failed: ${errorMessage(error)}`, "error").catch(() => {});
-        appendLog(directory, "idle-error", { sessionID, error: errorMessage(error) }).catch(() => {});
-      });
-    }, idleDebounceMs);
-    idleTimers.set(sessionID, timer);
-  }
-  async function startWatchdog(directory, client, sessionID) {
-    if (watchdogTimers.has(sessionID))
-      return;
-    const timer = setIntervalFn(() => {
-      Promise.resolve().then(async () => {
-        const state = await readStateFn(directory, sessionID);
-        const delay = nextDueDelay(state, clock());
-        const hasJobs = (state.jobs || []).some((job) => job.enabled !== false && !job.paused && (!isGoalJob(job) || !["completed", "blocked", "cleared"].includes(job.goalStatus)));
-        if (!hasJobs || !Number.isFinite(delay)) {
-          stopWatchdog(sessionID);
-          return;
-        }
-        if (delay <= 0)
-          await options.maybeRunDueJobs?.(directory, client, sessionID);
-        else
-          await scheduleDueWork(directory, client, sessionID);
-      }).catch((error) => appendLog(directory, "watchdog-error", { sessionID, error: errorMessage(error) }).catch(() => {}));
-    }, Math.max(1000, busyRetryMs));
-    watchdogTimers.set(sessionID, timer);
-  }
-  function stopWatchdog(sessionID) {
-    const timer = watchdogTimers.get(sessionID);
-    if (timer)
-      clearIntervalFn(timer);
-    watchdogTimers.delete(sessionID);
-  }
-  async function scheduleDueWork(directory, client, sessionID, minDelayMs = 0) {
-    cancelDueWork(sessionID);
-    const state = await readStateFn(directory, sessionID);
-    const delay = nextDueDelay(state, clock());
-    if (!Number.isFinite(delay))
-      return;
-    const wait = Math.min(Math.max(delay, minDelayMs, minDueTimerMs), maxDueTimerMs);
-    const timer = setTimeoutFn(() => {
-      dueTimers.delete(sessionID);
-      Promise.resolve().then(async () => {
-        if (!await options.sessionIsIdle?.(client, sessionID, directory)) {
-          await diagnostics.logDeferral(directory, sessionID, "session-busy", { source: "due", retryMs: busyRetryMs });
-          await scheduleDueWork(directory, client, sessionID, busyRetryMs);
-          return;
-        }
-        await options.finalizeActiveRun?.(directory, client, sessionID);
-        if (!await options.sessionIsIdle?.(client, sessionID, directory)) {
-          await diagnostics.logDeferral(directory, sessionID, "session-busy-after-finalize", { source: "due", retryMs: busyRetryMs });
-          await scheduleDueWork(directory, client, sessionID, busyRetryMs);
-          return;
-        }
-        await options.maybeRunDueJobs?.(directory, client, sessionID);
-      }).catch((error) => {
-        toast(client, `Loop due timer failed: ${errorMessage(error)}`, "error").catch(() => {});
-        appendLog(directory, "due-timer-error", { sessionID, error: errorMessage(error) }).catch(() => {});
-      });
-    }, wait);
-    dueTimers.set(sessionID, timer);
-    await startWatchdog(directory, client, sessionID);
-  }
-  function sessionIDsForHost(directory, client) {
-    return [...knownSessions.entries()].filter(([, info]) => info?.directory === directory && info?.client === client).map(([sessionID]) => sessionID);
-  }
-  function clearSessionScheduling(sessionID) {
-    cancelIdleWork(sessionID);
-    cancelDueWork(sessionID);
-    stopWatchdog(sessionID);
-    diagnostics.clearSession(sessionID);
-    knownSessions.delete(sessionID);
-    stopHeartbeatIfIdle();
-  }
-  return {
-    rememberSession,
-    scheduleIdleWork,
-    scheduleDueWork,
-    startWatchdog,
-    stopWatchdog,
-    cancelIdleWork,
-    cancelDueWork,
-    sessionIDsForHost,
-    clearSessionScheduling,
-    knownSessionCount: () => knownSessions.size
-  };
-}
-
-// src/source/legacy-v1.js
-init_goal_runtime();
-
-// src/source/runtime/goal-policy.js
-init_jobs();
-init_process();
-function requireFunction5(value, name) {
-  if (typeof value !== "function")
-    throw new TypeError(`createGoalExecutionPolicy requires ${name}`);
-  return value;
-}
-function createGoalExecutionPolicy(options = {}) {
-  const runShellCommand = requireFunction5(options.runShellCommand, "runShellCommand");
-  const dangerousShell = requireFunction5(options.dangerousShell, "dangerousShell");
-  const toast = requireFunction5(options.toast, "toast");
-  const now2 = typeof options.now === "function" ? options.now : now;
-  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
-  async function applyGoalNoProgressGuard(directory, client, sessionID, job, beforeJob) {
-    if (!isGoalJob(job) || ["completed", "blocked"].includes(job.goalStatus) || job.paused || job.enabled === false)
-      return job;
-    const limit = Number(job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS);
-    if (!Number.isFinite(limit) || limit <= 0)
-      return job;
-    if (goalMadeMeaningfulProgress(beforeJob, job)) {
-      job.noProgressCount = 0;
-      job.lastProgressAt = now2();
-      return job;
-    }
-    job.noProgressCount = (job.noProgressCount || 0) + 1;
-    job.lastNoProgressAt = now2();
-    await appendLoopLog2(directory, "goal-no-progress", { sessionID, job: job.name || job.id, count: job.noProgressCount, limit });
-    if (job.noProgressCount >= limit) {
-      job.paused = true;
-      job.goalNoProgressPausedAt = now2();
-      job.goalNoProgressReason = `Paused after ${job.noProgressCount} turn(s) without recorded progress. Resume with /loop-goal-resume after adjusting the goal or evidence.`;
-      await toast(client, job.goalNoProgressReason, "warning");
-      await appendLoopLog2(directory, "goal-no-progress-paused", { sessionID, job: job.name || job.id, count: job.noProgressCount, limit });
-    }
-    return job;
-  }
-  async function runGoalChecks(directory, sessionID, job, client) {
-    if (!isGoalJob(job) || !job.goalChecks?.length || ["completed", "blocked"].includes(job.goalStatus))
-      return job;
-    const results = [];
-    for (const command of job.goalChecks) {
-      if (job.safe && dangerousShell(command)) {
-        results.push({ command, code: -1, output: "Blocked dangerous command in safe mode." });
-        continue;
-      }
-      const result = await runShellCommand(command, directory, job.timeoutMs || 300000);
-      results.push({ command, code: result.code, output: (result.stdout + `
-` + result.stderr).slice(0, 1200) });
-    }
-    job.lastGoalCheckAt = now2();
-    job.lastGoalChecks = results;
-    const allPassed = results.length > 0 && results.every((item) => item.code === 0);
-    if (allPassed) {
-      job.goalChecksPassedAt = now2();
-      job.failureCount = 0;
-      await toast(client, "Goal checks passed.", "success");
-      if (job.goalCompleteWhenChecksPass) {
-        job.goalStatus = "completed";
-        job.enabled = false;
-        job.paused = true;
-        job.goalCompletedAt = now2();
-        job.goalSummary = job.goalSummary || "All configured goal checks passed.";
-        job.goalEvidence = results.map((item) => `${item.command}: exit ${item.code}`).join(`
-`);
-        await appendLoopLog2(directory, "goal-auto-complete", { sessionID, job: job.name || job.id });
-      }
-    } else {
-      job.failureCount = (job.failureCount || 0) + 1;
-      job.lastVerifyFailure = results.map((item) => `${item.command}
-exit=${item.code}
-${item.output}`).join(`
-
-`).slice(0, 4000);
-      await toast(client, "Goal checks still failing; goal will continue on next idle turn.", "warning");
-    }
-    await appendLoopLog2(directory, "goal-checks", { sessionID, job: job.name || job.id, results: results.map((item) => ({ command: item.command, code: item.code })) });
-    return job;
-  }
-  return { runGoalChecks, applyGoalNoProgressGuard };
-}
-
-// src/source/legacy-v1.js
-init_job_workspace();
-
-// src/source/runtime/executor.js
-init_jobs();
-init_state();
-init_process();
-init_job_workspace();
-
-// src/source/runtime/session-status.js
-init_process();
-var DEFAULT_STALE_ACTIVE_RECOVERY_MS = 45000;
-var DEFAULT_SESSION_STATUS_CACHE_MS = 1500;
-function positiveNumber(value, fallback) {
-  const number = Number(value);
-  return Number.isFinite(number) && number > 0 ? number : fallback;
-}
-function nonNegativeNumber(value, fallback) {
-  const number = Number(value);
-  return Number.isFinite(number) && number >= 0 ? number : fallback;
-}
-function settledAssistantCompletion(value) {
-  return value === "completed" || value === "empty";
-}
-function createSessionStatusRuntime(options = {}) {
-  const activeRuns = options.activeRuns;
-  if (!(activeRuns instanceof Map))
-    throw new TypeError("createSessionStatusRuntime requires activeRuns Map");
-  const now2 = typeof options.now === "function" ? options.now : now;
-  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
-  const activeRunCompletionFromMessages2 = typeof options.activeRunCompletionFromMessages === "function" ? options.activeRunCompletionFromMessages : activeRunCompletionFromMessages;
-  const staleActiveRecoveryMs = positiveNumber(options.staleActiveRecoveryMs, DEFAULT_STALE_ACTIVE_RECOVERY_MS);
-  const sessionStatusCacheMs = nonNegativeNumber(options.sessionStatusCacheMs, DEFAULT_SESSION_STATUS_CACHE_MS);
-  function markSessionStatus(sessionID, type, observedAt = now2()) {
-    if (typeof sessionID !== "string" || typeof type !== "string")
-      return false;
-    sessionStatuses.set(sessionID, type);
-    sessionStatusSeenAt.set(sessionID, observedAt);
-    return true;
-  }
-  function clearSessionStatus(sessionID) {
-    sessionStatuses.delete(sessionID);
-    sessionStatusSeenAt.delete(sessionID);
-  }
-  function updateSessionStatusFromEvent(event) {
-    const sessionID = event?.properties?.sessionID;
-    if (typeof sessionID !== "string")
-      return;
-    if (event?.type === "session.idle") {
-      markSessionStatus(sessionID, "idle");
-      return { sessionID, idle: true };
-    }
-    if (event?.type === "session.status") {
-      const status = event?.properties?.status;
-      const type = status && typeof status === "object" ? status.type : undefined;
-      if (typeof type === "string")
-        markSessionStatus(sessionID, type);
-      return { sessionID, idle: type === "idle" };
-    }
-    return;
-  }
-  function staleActiveRun(sessionID) {
-    const active = activeRuns.get(sessionID);
-    if (!active)
-      return false;
-    const age = now2() - (active.startedAt || 0);
-    const configured = Number(active.job?.staleActiveRecoveryMs || active.job?.activeRecoveryMs || 0);
-    const threshold = Number.isFinite(configured) && configured > 0 ? configured : staleActiveRecoveryMs;
-    return age >= threshold;
-  }
-  async function readLiveSessionStatus(client, sessionID, directory) {
-    const statusMethod = client?.session?.status;
-    if (typeof statusMethod !== "function")
-      return;
-    const argsList = [];
-    if (directory)
-      argsList.push({ query: { directory } }, { directory }, { workspace: directory });
-    argsList.push({});
-    let attempted = false;
-    for (const args of argsList) {
-      attempted = true;
-      try {
-        const result = await statusMethod.call(client.session, args);
-        const error = sdkError(result);
-        if (error)
-          continue;
-        const data = sdkData(result);
-        if (!data || typeof data !== "object" || Array.isArray(data))
-          continue;
-        const observedAt = now2();
-        for (const [observedSessionID, observedStatus] of Object.entries(data)) {
-          const observedType = observedStatus && typeof observedStatus === "object" ? observedStatus.type : undefined;
-          if (typeof observedType !== "string")
-            continue;
-          markSessionStatus(observedSessionID, observedType, observedAt);
-        }
-        for (const childID of sessionParents.keys()) {
-          if (!isDescendantSession(childID, sessionID) || data[childID])
-            continue;
-          markSessionStatus(childID, "idle", observedAt);
-        }
-        if (hasBusyDescendant(sessionID))
-          return { type: "busy", source: "descendant" };
-        const status = data?.[sessionID];
-        const type = status && typeof status === "object" ? status.type : undefined;
-        if (typeof type === "string")
-          return { type, source: "sdk" };
-        return { type: "idle", source: "sdk" };
-      } catch {}
-    }
-    return attempted ? { type: "unknown", source: "sdk-error" } : undefined;
-  }
-  async function canFinalizeActiveRun(directory, client, sessionID, active, options = {}) {
-    if (hasActiveToolCalls(sessionID) || hasBusyDescendant(sessionID))
-      return false;
-    if (!options.requireIdle && !options.forceStale) {
-      const completion = await activeRunCompletionFromMessages2(directory, client, sessionID, active);
-      return completion !== "incomplete";
-    }
-    const completion = options.forceStale ? await activeRunCompletionFromMessages2(directory, client, sessionID, active) : undefined;
-    if (settledAssistantCompletion(completion))
-      return true;
-    if (!options.requireIdle)
-      return completion === "unknown" && staleActiveRun(sessionID);
-    const cached = sessionStatuses.get(sessionID);
-    const seenAt = sessionStatusSeenAt.get(sessionID) || 0;
-    const cachedIdleAfterRun = cached === "idle" && seenAt > (active.startedAt || 0);
-    const live = await readLiveSessionStatus(client, sessionID, directory);
-    if (live?.type === "idle")
-      return true;
-    if (live?.type === "unknown" && cachedIdleAfterRun) {
-      return true;
-    }
-    if (live?.type) {
-      if (live.type === "busy" && options.forceStale && completion === "unknown" && staleActiveRun(sessionID))
-        return true;
-      return false;
-    }
-    if (options.forceStale && completion === "unknown" && staleActiveRun(sessionID))
-      return true;
-    return cachedIdleAfterRun;
-  }
-  async function recoverCompletedTailWithoutActiveRun(directory, client, sessionID, liveType, seenAt) {
-    if (activeRuns.has(sessionID))
-      return false;
-    if (liveType !== "busy")
-      return false;
-    if (!seenAt || now2() - seenAt < sessionStatusCacheMs)
-      return false;
-    const completion = await activeRunCompletionFromMessages2(directory, client, sessionID, { startedAt: 0 });
-    if (!settledAssistantCompletion(completion))
-      return false;
-    markSessionStatus(sessionID, "idle");
-    await appendLoopLog2(directory, "status-message-idle-recovery", {
-      sessionID,
-      staleStatus: liveType,
-      statusSeenAt: seenAt,
-      staleForMs: Math.max(0, now2() - seenAt)
-    });
-    return true;
-  }
-  async function sessionStatusType(client, sessionID, directory, options = {}) {
-    if (hasActiveToolCalls(sessionID) || hasBusyDescendant(sessionID)) {
-      markSessionStatus(sessionID, "busy");
-      return "busy";
-    }
-    const cached = sessionStatuses.get(sessionID);
-    const seenAt = sessionStatusSeenAt.get(sessionID) || 0;
-    if (cached === "idle")
-      return cached;
-    if (cached && now2() - seenAt < sessionStatusCacheMs)
-      return cached;
-    const live = await readLiveSessionStatus(client, sessionID, directory);
-    if (live?.type === "unknown") {
-      const conservative = cached === "retry" ? "retry" : "busy";
-      markSessionStatus(sessionID, conservative);
-      return conservative;
-    }
-    if (live?.type) {
-      if (await recoverCompletedTailWithoutActiveRun(directory, client, sessionID, live.type, seenAt))
-        return "idle";
-      if ((live.type === "busy" || live.type === "retry") && options.recoverStaleActive !== false) {
-        const active = activeRuns.get(sessionID);
-        if (active) {
-          const completion = await activeRunCompletionFromMessages2(directory, client, sessionID, active);
-          if (settledAssistantCompletion(completion) || live.type === "busy" && completion === "unknown" && staleActiveRun(sessionID)) {
-            markSessionStatus(sessionID, "idle");
-            const logDetails = {
-              sessionID,
-              job: active.job?.name || active.jobId,
-              startedAt: active.startedAt,
-              ...completion === "completed" ? {} : { staleStatus: live.type }
-            };
-            const recoveryEvent = completion === "empty" ? "status-message-empty-recovery" : completion === "completed" ? "status-message-complete-recovery" : "status-stale-recovery";
-            active.statusRecoveryLogEvents ??= new Set;
-            if (!active.statusRecoveryLogEvents.has(recoveryEvent)) {
-              active.statusRecoveryLogEvents.add(recoveryEvent);
-              await appendLoopLog2(directory, recoveryEvent, logDetails);
-            }
-            return "idle";
-          }
-        }
-      }
-      markSessionStatus(sessionID, live.type);
-      return live.type;
-    }
-    const fallback = activeRuns.has(sessionID) && !staleActiveRun(sessionID) ? "busy" : "idle";
-    markSessionStatus(sessionID, fallback);
-    return fallback;
-  }
-  async function sessionIsIdle(client, sessionID, directory, options = {}) {
-    return await sessionStatusType(client, sessionID, directory, options) === "idle";
-  }
-  return {
-    markSessionStatus,
-    clearSessionStatus,
-    updateSessionStatusFromEvent,
-    staleActiveRun,
-    canFinalizeActiveRun,
-    readLiveSessionStatus,
-    activeRunCompletion: activeRunCompletionFromMessages2,
-    sessionStatusType,
-    sessionIsIdle
-  };
-}
-
-// src/source/runtime/compaction.js
-init_process();
-function createCompactionRuntime(options = {}) {
-  const activeRuns = options.activeRuns;
-  if (!(activeRuns instanceof Map))
-    throw new TypeError("createCompactionRuntime requires activeRuns Map");
-  if (typeof options.finalizeActiveRun !== "function")
-    throw new TypeError("createCompactionRuntime requires finalizeActiveRun");
-  const now2 = typeof options.now === "function" ? options.now : now;
-  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
-  const compactSession2 = typeof options.compactSession === "function" ? options.compactSession : compactSession;
-  const log2 = typeof options.log === "function" ? options.log : log;
-  const errorMessage = typeof options.errorMessage === "function" ? options.errorMessage : sdkErrorMessage;
-  const finalizeActiveRun = options.finalizeActiveRun;
-  const requests = new Map;
-  function begin(sessionID, jobId, resumeAfter = false) {
-    if (typeof sessionID !== "string" || typeof jobId !== "string")
-      return;
-    const request = {
-      jobId,
-      resumeAfter: Boolean(resumeAfter),
-      requestedAt: now2(),
-      startedAt: 0,
-      completedAt: 0
-    };
-    requests.set(sessionID, request);
-    return request;
-  }
-  function getPending(sessionID) {
-    return requests.get(sessionID);
-  }
-  function clear(sessionID) {
-    return requests.delete(sessionID);
-  }
-  function clearForActiveRun(sessionID, active) {
-    const pending = requests.get(sessionID);
-    if (!pending || !active || pending.jobId === active.jobId)
-      requests.delete(sessionID);
-  }
-  function isCompleted(sessionID, jobId) {
-    const pending = requests.get(sessionID);
-    return Boolean(pending && pending.jobId === jobId && pending.completedAt);
-  }
-  async function start(directory, client, sessionID, jobId, model, resumeAfter = false) {
-    begin(sessionID, jobId, resumeAfter);
-    const ok = await compactSession2(directory, client, sessionID, model);
-    if (!ok)
-      clear(sessionID);
-    return ok;
-  }
-  async function maybeCompact(directory, client, sessionID, job) {
-    const dueRuns = job.compactEveryRuns > 0 && (job.runCount || 0) > 0 && (job.runCount || 0) % job.compactEveryRuns === 0 && job.lastCompactRunCount !== job.runCount;
-    const dueTime = job.compactEveryMs > 0 && (!job.lastCompactAt || now2() - job.lastCompactAt >= job.compactEveryMs);
-    if (!dueRuns && !dueTime)
-      return { job, started: false };
-    if (await start(directory, client, sessionID, job.id, job.model, true)) {
-      job.lastCompactAt = now2();
-      job.lastCompactRunCount = job.runCount || 0;
-      return { job, started: true };
-    }
-    return { job, started: false };
-  }
-  async function noteStarted(directory, sessionID) {
-    const pending = requests.get(sessionID);
-    if (!pending)
-      return false;
-    if (!pending.startedAt) {
-      pending.startedAt = now2();
-      requests.set(sessionID, pending);
-      await appendLoopLog2(directory, "compact-started", {
-        sessionID,
-        job: pending.jobId,
-        resumeAfter: pending.resumeAfter
-      });
-    }
-    return true;
-  }
-  async function finalize(directory, client, sessionID) {
-    const pending = requests.get(sessionID);
-    const active = activeRuns.get(sessionID);
-    if (!pending || !active || pending.jobId !== active.jobId)
-      return false;
-    return await finalizeActiveRun(directory, client, sessionID);
-  }
-  async function noteCompleted(directory, client, sessionID) {
-    const pending = requests.get(sessionID);
-    if (!pending)
-      return false;
-    pending.completedAt = now2();
-    requests.set(sessionID, pending);
-    await appendLoopLog2(directory, "compact-event", {
-      sessionID,
-      job: pending.jobId,
-      resumeAfter: pending.resumeAfter
-    });
-    const timer = setTimeout(() => {
-      finalize(directory, client, sessionID).catch((error) => log2(client, "error", "compaction finalization failed", { error: errorMessage(error) }));
-    }, 0);
-    timer.unref?.();
-    return true;
-  }
-  return {
-    begin,
-    getPending,
-    clear,
-    clearForActiveRun,
-    isCompleted,
-    start,
-    maybeCompact,
-    noteStarted,
-    finalize,
-    noteCompleted
-  };
-}
-
-// src/source/runtime/action-dispatch.js
-init_jobs();
-init_process();
-init_job_workspace();
-function requireFunction7(value, label) {
-  if (typeof value !== "function")
-    throw new TypeError(`createActionDispatcher requires ${label}`);
-  return value;
-}
-function createActionDispatcher(options = {}) {
-  const buildPrompt = requireFunction7(options.buildPrompt, "buildPrompt");
-  const startCompaction = requireFunction7(options.compactionRuntime?.start, "compactionRuntime.start");
-  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
-  const sdkCall2 = typeof options.sdkCall === "function" ? options.sdkCall : sdkCall;
-  const normalizedModelRef2 = typeof options.normalizedModelRef === "function" ? options.normalizedModelRef : normalizedModelRef;
-  const fireSdk2 = typeof options.fireSdk === "function" ? options.fireSdk : fireSdk;
-  const compactTuiCommandName2 = typeof options.compactTuiCommandName === "function" ? options.compactTuiCommandName : compactTuiCommandName;
-  const toast2 = typeof options.toast === "function" ? options.toast : toast;
-  const guardLoopOwnedUserMessage2 = typeof options.guardLoopOwnedUserMessage === "function" ? options.guardLoopOwnedUserMessage : guardLoopOwnedUserMessage;
-  const dangerousShell2 = typeof options.dangerousShell === "function" ? options.dangerousShell : dangerousShell;
-  async function fireAction(directory, client, sessionID, job) {
-    const action = String(job.action || "").trim();
-    const kind = actionKind(action, job);
-    const agent = job.agent || "build";
-    const model = normalizedModelRef2(job.model);
-    if (kind === "compact") {
-      const ok = await startCompaction(directory, client, sessionID, job.id, model, false);
-      return { startsAssistantTurn: ok, pause: !ok, reason: "compact_failed", compaction: ok };
-    }
-    if (kind === "command") {
-      const normalized = action.startsWith("/") ? action.slice(1) : action;
-      const [command, argumentsText] = splitFirst(normalized);
-      if (!command) {
-        await toast2(client, "Loop command action is empty. Example: /loop-command 200m /compact", "warning");
-        return { startsAssistantTurn: false, pause: true, reason: "empty_command" };
-      }
-      const tuiCommand = compactTuiCommandName2(command);
-      if (tuiCommand) {
-        guardLoopOwnedUserMessage2(sessionID);
-        const ok = await startCompaction(directory, client, sessionID, job.id, model, false);
-        return { startsAssistantTurn: ok, pause: !ok, reason: "compact_failed", compaction: ok };
-      }
-      guardLoopOwnedUserMessage2(sessionID);
-      const commandBody = { command, arguments: argumentsText, agent };
-      if (model)
-        commandBody.model = `${model.providerID}/${model.modelID}`;
-      await sdkCall2(client.session.command.bind(client.session), { path: { id: sessionID }, body: commandBody }, { path: { sessionID }, body: commandBody }, { sessionID, ...commandBody });
-      return { startsAssistantTurn: true };
-    }
-    if (kind === "shell") {
-      const command = action.replace(/^[!$]\s*/, "").trim();
-      if (job.safe && dangerousShell2(command)) {
-        await toast2(client, `Blocked dangerous shell command in safe mode: ${command}`, "error");
-        await appendLoopLog2(directory, "blocked", { sessionID, job: job.name || job.id, command });
-        return { startsAssistantTurn: false, pause: true, reason: "safe_shell_blocked" };
-      }
-      guardLoopOwnedUserMessage2(sessionID);
-      const shellBody = { command, agent };
-      if (model)
-        shellBody.model = model;
-      const dispatch = fireSdk2(client, "session.shell", client.session.shell.bind(client.session), { path: { id: sessionID }, body: shellBody }, { path: { sessionID }, body: shellBody }, { sessionID, ...shellBody });
-      return { startsAssistantTurn: true, dispatch };
-    }
-    const prompt = await buildPrompt(directory, job);
-    const prefix = kind === "goal" ? "EXPERIMENTAL GOAL MODE CONTINUATION. Continue pursuing the active goal. Do not explain the /loop-goal command. Use the goal tools only when progress/completion/block state is real." : "AUTONOMOUS OPENCODE LOOP ITERATION. Continue the configured task now. Do not explain the /loop command. Do not search for documentation about this plugin. Do not create scheduler files. Do not ask questions. Make reasonable assumptions and work directly.";
-    const promptText = `${prefix}
-
-${prompt}`;
-    guardLoopOwnedUserMessage2(sessionID);
-    const promptBody = { agent, parts: [{ type: "text", text: promptText }] };
-    if (model)
-      promptBody.model = model;
-    const dispatch = fireSdk2(client, "session.prompt", client.session.prompt.bind(client.session), { path: { id: sessionID }, body: promptBody }, { path: { sessionID }, body: promptBody }, { sessionID, ...promptBody });
-    return { startsAssistantTurn: true, dispatch };
-  }
-  return { fireAction };
-}
-
-// src/source/runtime/run-finalization.js
-init_jobs();
-init_state();
-init_process();
-init_goal_runtime();
-init_job_workspace();
-
-// src/source/runtime/terminal-guard.js
-init_continuation();
-function messageText(message) {
-  const parts = Array.isArray(message?.parts) ? message.parts : [];
-  const fromParts = parts.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join(`
-`).trim();
-  if (fromParts)
-    return fromParts;
-  const info = message?.info || message || {};
-  for (const value of [info.text, info.content, info.summary]) {
-    if (typeof value === "string" && value.trim())
-      return value.trim();
-  }
-  return "";
-}
-async function applyTerminalContinuationGuard(directory, client, sessionID, job, options = {}) {
-  const completionBounded = isCompletionBoundedContinuation(job?.action);
-  const continuation = completionBounded || isContinuationShorthand(job?.action);
-  if (job?.scheduleMode !== "idle" || !continuation) {
-    return { job, terminal: false, pausedNow: false, waitingUser: false, waitingUserPausedNow: false };
-  }
-  const messages = await readRecentSessionMessages(client, sessionID, directory, options.messageLimit || 8);
-  if (!messages)
-    return { job, terminal: false, pausedNow: false };
-  const tail = orderedSessionMessages(messages).at(-1);
-  const info = tail?.info || tail || {};
-  if (info.role !== "assistant")
-    return { job, terminal: false, pausedNow: false };
-  const completed = Number(info?.time?.completed || 0);
-  const created = Number(info?.time?.created || 0);
-  const runStarted = Number(job?.lastRunAt || 0);
-  if (!Number.isFinite(completed) || completed <= 0)
-    return { job, terminal: false, pausedNow: false };
-  if (runStarted > 0 && completed < runStarted && (!Number.isFinite(created) || created < runStarted)) {
-    return { job, terminal: false, pausedNow: false };
-  }
-  const text = messageText(tail);
-  const waitingUser = isWaitingUserReply(text);
-  if (waitingUser) {
-    if (job.terminalNoWorkCount)
-      job.terminalNoWorkCount = 0;
-    job.waitingUserCount = (job.waitingUserCount || 0) + 1;
-    job.lastWaitingUserAt = Date.now();
-    job.lastWaitingUserSummary = text.slice(0, 1000);
-    const threshold = Math.max(2, Number(options.waitingUserThreshold) || 2);
-    const waitingUserPausedNow = job.waitingUserCount >= threshold && !job.paused;
-    if (waitingUserPausedNow) {
-      job.paused = true;
-      job.lastFailureReason = "waiting_user";
-    }
-    return { job, terminal: false, pausedNow: false, waitingUser: true, waitingUserPausedNow, text };
-  }
-  if (job.waitingUserCount)
-    job.waitingUserCount = 0;
-  if (!completionBounded) {
-    return { job, terminal: false, pausedNow: false, waitingUser: false, waitingUserPausedNow: false, text };
-  }
-  const terminal = isTerminalNoWorkReply(text);
-  if (!terminal) {
-    if (job.terminalNoWorkCount)
-      job.terminalNoWorkCount = 0;
-    return { job, terminal: false, pausedNow: false, waitingUser: false, waitingUserPausedNow: false, text };
-  }
-  job.terminalNoWorkCount = (job.terminalNoWorkCount || 0) + 1;
-  job.lastTerminalNoWorkAt = Date.now();
-  job.lastTerminalNoWorkSummary = text.slice(0, 1000);
-  const threshold = Math.max(2, Number(options.threshold) || 2);
-  const pausedNow = job.terminalNoWorkCount >= threshold && !job.paused;
-  if (pausedNow) {
-    job.paused = true;
-    job.lastFailureReason = "terminal_no_work";
-  }
-  return { job, terminal: true, pausedNow, waitingUser: false, waitingUserPausedNow: false, text };
-}
-
-// src/source/runtime/run-finalization.js
-function requireFunction8(value, label) {
-  if (typeof value !== "function")
-    throw new TypeError(`createRunFinalizationRuntime requires ${label}`);
-  return value;
-}
-function createRunFinalizationRuntime(options = {}) {
-  const runGoalChecks = requireFunction8(options.runGoalChecks, "runGoalChecks");
-  const applyGoalNoProgressGuard = requireFunction8(options.applyGoalNoProgressGuard, "applyGoalNoProgressGuard");
-  const createCheckpoint = requireFunction8(options.createCheckpoint, "createCheckpoint");
-  const scheduleDueWork = requireFunction8(options.scheduleDueWork, "scheduleDueWork");
-  const now2 = typeof options.now === "function" ? options.now : now;
-  const writeState2 = typeof options.writeState === "function" ? options.writeState : writeState;
-  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
-  const runShellCommand2 = typeof options.runShellCommand === "function" ? options.runShellCommand : runShellCommand;
-  const notifyJob2 = typeof options.notifyJob === "function" ? options.notifyJob : notifyJob;
-  const toast2 = typeof options.toast === "function" ? options.toast : toast;
-  const writeGoalReport2 = typeof options.writeGoalReport === "function" ? options.writeGoalReport : writeGoalReport;
-  const dangerousShell2 = typeof options.dangerousShell === "function" ? options.dangerousShell : dangerousShell;
-  const applyTerminalContinuationGuard2 = typeof options.applyTerminalContinuationGuard === "function" ? options.applyTerminalContinuationGuard : applyTerminalContinuationGuard;
-  async function finalizeJob(directory, client, sessionID, state, job, previousJob) {
-    if (job.infrastructureFailureCount) {
-      job.infrastructureFailureCount = 0;
-      job.lastInfrastructureFailure = "";
-      job.lastInfrastructureError = "";
-      job.lastInfrastructureFailureAt = 0;
-    }
-    if (job.verifyCommand) {
-      const verify = await runShellCommand2(job.verifyCommand, directory, job.timeoutMs || 300000);
-      job.lastVerifyAt = now2();
-      job.lastVerifyCode = verify.code;
-      if (verify.code === 0) {
-        job.failureCount = 0;
-        job.lastVerifyFailure = "";
-        await toast2(client, "Loop verify passed: " + job.verifyCommand, "success");
-      } else {
-        job.failureCount = (job.failureCount || 0) + 1;
-        job.lastVerifyFailure = (job.verifyCommand + `
-exit=` + verify.code + `
-` + verify.stdout + `
-` + verify.stderr).slice(0, 4000);
-        await toast2(client, "Loop verify failed: " + job.verifyCommand, "warning");
-        if (job.pauseOnVerifyFail || job.maxFailures > 0 && job.failureCount >= job.maxFailures) {
-          job.paused = true;
-          await notifyJob2(directory, job, "verify_failed");
-        }
-      }
-      await appendLoopLog2(directory, "verify", {
-        sessionID,
-        job: job.name || job.id,
-        command: job.verifyCommand,
-        code: verify.code,
-        failures: job.failureCount || 0
-      });
-    }
-    if (job.postrunCommand) {
-      if (job.safe && dangerousShell2(job.postrunCommand)) {
-        await appendLoopLog2(directory, "postrun-blocked", {
-          sessionID,
-          job: job.name || job.id,
-          command: job.postrunCommand
-        });
-      } else {
-        const postrun = await runShellCommand2(job.postrunCommand, directory, job.timeoutMs || 300000);
-        job.lastPostrunCode = postrun.code;
-        job.lastPostrunAt = now2();
-        if (postrun.code !== 0) {
-          job.failureCount = (job.failureCount || 0) + 1;
-          job.lastPostrunFailure = (job.postrunCommand + `
-exit=` + postrun.code + `
-` + postrun.stdout + `
-` + postrun.stderr).slice(0, 4000);
-          if (job.maxFailures > 0 && job.failureCount >= job.maxFailures) {
-            job.paused = true;
-            await notifyJob2(directory, job, "postrun_failed");
-          }
-        }
-        await appendLoopLog2(directory, "postrun", {
-          sessionID,
-          job: job.name || job.id,
-          command: job.postrunCommand,
-          code: postrun.code
-        });
-      }
-    }
-    if (isGoalJob(job)) {
-      job = await runGoalChecks(directory, sessionID, job, client);
-      job = await applyGoalNoProgressGuard(directory, client, sessionID, job, previousJob);
-    }
-    const terminal = await applyTerminalContinuationGuard2(directory, client, sessionID, job);
-    job = terminal.job;
-    if (terminal.waitingUserPausedNow) {
-      await appendLoopLog2(directory, "waiting-user", {
-        sessionID,
-        job: job.name || job.id,
-        count: job.waitingUserCount,
-        summary: String(terminal.text || "").slice(0, 1000)
-      });
-      await notifyJob2(directory, job, "waiting_user");
-      await toast2(client, "Loop paused: autonomous continuation is waiting for explicit user approval, access, or action.", "warning");
-    }
-    if (terminal.pausedNow) {
-      await appendLoopLog2(directory, "terminal-no-work", {
-        sessionID,
-        job: job.name || job.id,
-        count: job.terminalNoWorkCount,
-        summary: String(terminal.text || "").slice(0, 1000)
-      });
-      await notifyJob2(directory, job, "terminal_no_work");
-      await toast2(client, "Loop paused: completion-bounded task reported complete with no work remaining twice.", "success");
-    }
-    state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate).filter((candidate) => candidate.enabled !== false || isGoalJob(candidate));
-    await writeState2(directory, sessionID, state);
-    if (isGoalJob(job))
-      await writeGoalReport2(directory, sessionID, job);
-    await createCheckpoint(directory, sessionID, job, client);
-    await scheduleDueWork(directory, client, sessionID);
-    return job;
-  }
-  return { finalizeJob };
-}
-
-// src/source/runtime/run-admission.js
-init_state();
-init_process();
-import path9 from "path";
-init_job_workspace();
-function requireFunction9(value, label) {
-  if (typeof value !== "function")
-    throw new TypeError(`createRunAdmissionRuntime requires ${label}`);
-  return value;
-}
-function createRunAdmissionRuntime(options = {}) {
-  const untilReached = requireFunction9(options.untilReached, "untilReached");
-  const scheduleDueWork = requireFunction9(options.scheduleDueWork, "scheduleDueWork");
-  const now2 = typeof options.now === "function" ? options.now : now;
-  const pathExists2 = typeof options.pathExists === "function" ? options.pathExists : pathExists;
-  const writeState2 = typeof options.writeState === "function" ? options.writeState : writeState;
-  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
-  const runShellCommand2 = typeof options.runShellCommand === "function" ? options.runShellCommand : runShellCommand;
-  const notifyJob2 = typeof options.notifyJob === "function" ? options.notifyJob : notifyJob;
-  const toast2 = typeof options.toast === "function" ? options.toast : toast;
-  const dangerousShell2 = typeof options.dangerousShell === "function" ? options.dangerousShell : dangerousShell;
-  function dueJobs2(state, force = false) {
-    return dueJobs(state, now2(), force);
-  }
-  async function reschedule(directory, client, sessionID) {
-    await scheduleDueWork(directory, client, sessionID);
-  }
-  async function stopAndRemove(directory, client, sessionID, state, job, reason, message, logEvent) {
-    state.jobs = (state.jobs || []).filter((candidate) => candidate.id !== job.id);
-    await writeState2(directory, sessionID, state);
-    await notifyJob2(directory, job, reason);
-    await toast2(client, message, "success");
-    if (logEvent)
-      await appendLoopLog2(directory, logEvent, { sessionID, job: job.name || job.id });
-    await reschedule(directory, client, sessionID);
-    return { admitted: false, reason };
-  }
-  async function admitJob(directory, client, sessionID, state, job) {
-    const runNowRequested = Number(job.runNowRequestedAt || 0) > 0;
-    if (job.maxRuntimeMs > 0 && now2() - Date.parse(job.createdAt || new Date().toISOString()) >= job.maxRuntimeMs) {
-      return await stopAndRemove(directory, client, sessionID, state, job, "max_runtime_reached", `Loop stopped by --max-runtime: ${job.name || job.id}`, "max-runtime");
-    }
-    if (job.stopFile && await pathExists2(path9.resolve(directory, job.stopFile))) {
-      return await stopAndRemove(directory, client, sessionID, state, job, "stop_file", "Loop stopped by --stop-file: " + job.stopFile);
-    }
-    if (await untilReached(directory, job)) {
-      return await stopAndRemove(directory, client, sessionID, state, job, "until_reached", `Loop stopped by --until: ${job.until}`);
-    }
-    if (job.preflightCommand) {
-      if (job.safe && dangerousShell2(job.preflightCommand)) {
-        if (runNowRequested)
-          delete job.runNowRequestedAt;
-        job.paused = true;
-        await writeState2(directory, sessionID, state);
-        await notifyJob2(directory, job, "preflight_blocked");
-        await toast2(client, "Preflight blocked in safe mode and loop paused: " + job.preflightCommand, "error");
-        await reschedule(directory, client, sessionID);
-        return { admitted: false, reason: "preflight_blocked" };
-      }
-      const preflight = await runShellCommand2(job.preflightCommand, directory, job.timeoutMs || 300000);
-      await appendLoopLog2(directory, "preflight", {
-        sessionID,
-        job: job.name || job.id,
-        command: job.preflightCommand,
-        code: preflight.code
-      });
-      if (preflight.code !== 0) {
-        if (runNowRequested)
-          delete job.runNowRequestedAt;
-        job.paused = true;
-        job.failureCount = (job.failureCount || 0) + 1;
-        job.lastPreflightFailure = (job.preflightCommand + `
-exit=` + preflight.code + `
-` + preflight.stdout + `
-` + preflight.stderr).slice(0, 4000);
-        state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-        await writeState2(directory, sessionID, state);
-        await notifyJob2(directory, job, "preflight_failed");
-        await toast2(client, "Preflight failed and loop paused: " + job.preflightCommand, "warning");
-        await reschedule(directory, client, sessionID);
-        return { admitted: false, reason: "preflight_failed" };
-      }
-    }
-    return { admitted: true, job, runNowRequested };
-  }
-  return { dueJobs: dueJobs2, admitJob };
-}
-
-// src/source/runtime/network-recovery.js
-var TRANSIENT_NETWORK_PATTERNS = [
-  /\b(?:408|425|429|500|502|503|504|524)\b/i,
-  /rate[\s_-]?limit|too many requests|overloaded|service[\s_-]?unavailable|provider[_ -]?unavailable/i,
-  /terminated|fetch failed|failed to fetch|network[\s_-]?error|network connection lost/i,
-  /connection (?:error|refused|lost)|socket (?:hang up|connection was closed)|reset before headers/i,
-  /\b(?:enotfound|eai_again|econnrefused|econnreset|etimedout|ehostunreach|enetunreach|epipe)\b/i,
-  /\b(?:request|response|connection|network|stream|read) (?:timeout|timed out|time out)\b/i,
-  /\btimeout(?:error)?\b/i
-];
-function errorText(value) {
-  if (value instanceof Error)
-    return `${value.name}: ${value.message}`;
-  if (typeof value === "string")
-    return value;
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-function isTransientNetworkError(value) {
-  const text = errorText(value);
-  return TRANSIENT_NETWORK_PATTERNS.some((pattern) => pattern.test(text));
-}
-function networkRetryDelayMs(attempt, baseMs = 5000, maxMs = 60000) {
-  const safeAttempt = Math.max(1, Math.floor(Number(attempt) || 1));
-  const safeBase = Math.max(1, Math.floor(Number(baseMs) || 5000));
-  const safeMax = Math.max(safeBase, Math.floor(Number(maxMs) || 60000));
-  return Math.min(safeMax, safeBase * 2 ** Math.min(8, safeAttempt - 1));
-}
-function refundInfrastructureRun(job, snapshot = {}, input = {}) {
-  const chargedCount = Number(snapshot.runCount ?? job.runCount ?? 0);
-  const currentCount = Number(job.runCount || 0);
-  if (chargedCount > 0 && currentCount >= chargedCount)
-    job.runCount = Math.max(0, currentCount - 1);
-  if (Number.isFinite(Number(snapshot.previousLastRunAt)))
-    job.lastRunAt = Number(snapshot.previousLastRunAt);
-  if (snapshot.disabledByMaxRuns && job.maxRuns > 0 && job.runCount < job.maxRuns)
-    job.enabled = true;
-  job.infrastructureFailureCount = (job.infrastructureFailureCount || 0) + 1;
-  job.lastInfrastructureFailure = String(input.reason || "transient_network_failure").slice(0, 120);
-  job.lastInfrastructureError = errorText(input.error).slice(0, 4000);
-  job.lastInfrastructureFailureAt = Number(input.now || Date.now());
-  return job;
-}
-
-// src/source/runtime/empty-turn.js
-init_jobs();
-var DEFAULT_MAX_EMPTY_TURNS = 2;
-function guardsEmptyAssistantTurn(job) {
-  const kind = actionKind(job?.action, job || {});
-  return kind === "prompt" || kind === "goal";
-}
-function emptyTurnLimit(job) {
-  const configured = Number(job?.maxEmptyTurns || 0);
-  if (Number.isFinite(configured) && configured > 0)
-    return Math.max(1, Math.floor(configured));
-  return DEFAULT_MAX_EMPTY_TURNS;
-}
-function refundEmptyAssistantTurn(job, active = {}, timestamp = Date.now()) {
-  const chargedCount = Number(active?.job?.runCount ?? job?.runCount ?? 0);
-  const currentCount = Number(job?.runCount || 0);
-  if (chargedCount > 0 && currentCount >= chargedCount)
-    job.runCount = Math.max(0, currentCount - 1);
-  if (Number.isFinite(Number(active?.previousLastRunAt)))
-    job.lastRunAt = Number(active.previousLastRunAt);
-  if (active?.disabledByMaxRuns && Number(job?.maxRuns || 0) > 0 && Number(job?.runCount || 0) < Number(job.maxRuns)) {
-    job.enabled = true;
-  }
-  job.emptyTurnCount = Number(job.emptyTurnCount || 0) + 1;
-  job.lastEmptyTurnAt = Number(timestamp) || Date.now();
-  job.lastFailureReason = "empty_turn";
-  const limit = emptyTurnLimit(job);
-  const paused = job.emptyTurnCount >= limit;
-  if (paused) {
-    job.paused = true;
-    delete job.runNowRequestedAt;
-  } else {
-    job.runNowRequestedAt = Math.max(1, Number(timestamp) || Date.now());
-  }
-  return { job, paused, count: job.emptyTurnCount, limit };
-}
-function clearEmptyAssistantTurnStreak(job) {
-  if (!job)
-    return job;
-  job.emptyTurnCount = 0;
-  if (job.lastFailureReason === "empty_turn")
-    delete job.lastFailureReason;
-  return job;
-}
-
-// src/source/runtime/executor.js
-var DEFAULT_ACTIVE_GUARD_MS = 45000;
-var DEFAULT_BUSY_RETRY_MS2 = 5000;
-var DEFAULT_PROVIDER_RETRY_WATCHDOG_MS = 2 * 60000;
-var DEFAULT_NETWORK_RETRY_MAX_MS = 60000;
-function requireFunction10(value, label) {
-  if (typeof value !== "function")
-    throw new TypeError(`createLoopExecutor requires ${label}`);
-  return value;
-}
-function sessionErrorDetails(event, fallbackMessage) {
-  if (event?.type !== "session.error")
-    return;
-  const sessionID = event?.properties?.sessionID;
-  if (typeof sessionID !== "string" || !sessionID)
-    return;
-  const error = event?.properties?.error;
-  const name = error && typeof error === "object" && typeof error.name === "string" ? error.name : "SessionError";
-  const data = error && typeof error === "object" && error.data && typeof error.data === "object" ? error.data : undefined;
-  const message = typeof data?.message === "string" && data.message.trim() ? data.message.trim() : fallbackMessage(error);
-  return {
-    sessionID,
-    error,
-    name,
-    message,
-    aborted: name === "MessageAbortedError",
-    retryable: name === "APIError" && data?.isRetryable === true
-  };
-}
-function createLoopExecutor(options = {}) {
-  const workspace = options.workspace || {};
-  const goalPolicy = options.goalPolicy || {};
-  const scheduler = options.scheduler || {};
-  const buildPrompt = requireFunction10(workspace.buildPrompt, "workspace.buildPrompt");
-  const ensureBranch = requireFunction10(workspace.ensureBranch, "workspace.ensureBranch");
-  const watchChanged = requireFunction10(workspace.watchChanged, "workspace.watchChanged");
-  const untilReached = requireFunction10(workspace.untilReached, "workspace.untilReached");
-  const createCheckpoint = requireFunction10(workspace.createCheckpoint, "workspace.createCheckpoint");
-  const runGoalChecks = requireFunction10(goalPolicy.runGoalChecks, "goalPolicy.runGoalChecks");
-  const applyGoalNoProgressGuard = requireFunction10(goalPolicy.applyGoalNoProgressGuard, "goalPolicy.applyGoalNoProgressGuard");
-  const rememberSession = requireFunction10(scheduler.rememberSession, "scheduler.rememberSession");
-  const scheduleDueWork = requireFunction10(scheduler.scheduleDueWork, "scheduler.scheduleDueWork");
-  const now2 = typeof options.now === "function" ? options.now : now;
-  const readState2 = typeof options.readState === "function" ? options.readState : readState;
-  const writeState2 = typeof options.writeState === "function" ? options.writeState : writeState;
-  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
-  const runShellCommand2 = typeof options.runShellCommand === "function" ? options.runShellCommand : runShellCommand;
-  const notifyJob2 = typeof options.notifyJob === "function" ? options.notifyJob : notifyJob;
-  const errorMessage = typeof options.errorMessage === "function" ? options.errorMessage : sdkErrorMessage;
-  const fireSdk2 = typeof options.fireSdk === "function" ? options.fireSdk : fireSdk;
-  const log2 = typeof options.log === "function" ? options.log : log;
-  const toast2 = typeof options.toast === "function" ? options.toast : toast;
-  const dangerousShell2 = typeof options.dangerousShell === "function" ? options.dangerousShell : dangerousShell;
-  const activeGuardMs = Number.isFinite(Number(options.activeGuardMs)) && Number(options.activeGuardMs) > 0 ? Number(options.activeGuardMs) : DEFAULT_ACTIVE_GUARD_MS;
-  const busyRetryMs = Number.isFinite(Number(options.busyRetryMs)) && Number(options.busyRetryMs) > 0 ? Number(options.busyRetryMs) : DEFAULT_BUSY_RETRY_MS2;
-  const providerRetryWatchdogMs = Number.isFinite(Number(options.providerRetryWatchdogMs)) && Number(options.providerRetryWatchdogMs) > 0 ? Number(options.providerRetryWatchdogMs) : DEFAULT_PROVIDER_RETRY_WATCHDOG_MS;
-  const networkRetryMaxMs = Number.isFinite(Number(options.networkRetryMaxMs)) && Number(options.networkRetryMaxMs) > 0 ? Number(options.networkRetryMaxMs) : DEFAULT_NETWORK_RETRY_MAX_MS;
-  const activeRuns = new Map;
-  const runLocks = new Map;
-  const retryRuns = new Map;
-  const statusRuntime = createSessionStatusRuntime({
-    activeRuns,
-    appendLoopLog: appendLoopLog2,
-    now: now2,
-    activeRunCompletionFromMessages: options.activeRunCompletionFromMessages,
-    staleActiveRecoveryMs: options.staleActiveRecoveryMs,
-    sessionStatusCacheMs: options.sessionStatusCacheMs
-  });
-  const {
-    updateSessionStatusFromEvent,
-    staleActiveRun,
-    canFinalizeActiveRun,
-    activeRunCompletion,
-    sessionStatusType,
-    sessionIsIdle,
-    markSessionStatus,
-    clearSessionStatus
-  } = statusRuntime;
-  const compactionRuntime = createCompactionRuntime({
-    activeRuns,
-    finalizeActiveRun,
-    appendLoopLog: appendLoopLog2,
-    compactSession: options.compactSession,
-    log: log2,
-    errorMessage,
-    now: now2
-  });
-  const actionDispatcher = createActionDispatcher({
-    buildPrompt,
-    compactionRuntime,
-    appendLoopLog: appendLoopLog2,
-    sdkCall: options.sdkCall,
-    normalizedModelRef: options.normalizedModelRef,
-    fireSdk: options.fireSdk,
-    compactTuiCommandName: options.compactTuiCommandName,
-    toast: toast2,
-    guardLoopOwnedUserMessage: options.guardLoopOwnedUserMessage,
-    dangerousShell: dangerousShell2
-  });
-  const finalizationRuntime = createRunFinalizationRuntime({
-    runGoalChecks,
-    applyGoalNoProgressGuard,
-    createCheckpoint,
-    scheduleDueWork,
-    now: now2,
-    writeState: writeState2,
-    appendLoopLog: appendLoopLog2,
-    runShellCommand: runShellCommand2,
-    notifyJob: notifyJob2,
-    toast: toast2,
-    writeGoalReport: options.writeGoalReport,
-    dangerousShell: dangerousShell2
-  });
-  const admissionRuntime = createRunAdmissionRuntime({
-    untilReached,
-    scheduleDueWork,
-    now: now2,
-    pathExists: options.pathExists,
-    writeState: writeState2,
-    appendLoopLog: appendLoopLog2,
-    runShellCommand: runShellCommand2,
-    notifyJob: notifyJob2,
-    toast: toast2,
-    dangerousShell: dangerousShell2
-  });
-  const dueJobs = admissionRuntime.dueJobs;
-  function clearActiveRun(sessionID) {
-    const active = activeRuns.get(sessionID);
-    if (active?.timer)
-      clearTimeout(active.timer);
-    compactionRuntime.clearForActiveRun(sessionID, active);
-    activeRuns.delete(sessionID);
-    retryRuns.delete(sessionID);
-  }
-  function disposeSession(sessionID) {
-    clearActiveRun(sessionID);
-    runLocks.delete(sessionID);
-    compactionRuntime.clear(sessionID);
-    clearSessionStatus(sessionID);
-  }
-  async function persistInfrastructureRefund(directory, sessionID, active, input = {}) {
-    const state = await readState2(directory, sessionID);
-    const job = (state.jobs || []).find((candidate) => candidate.id === active.jobId);
-    if (!job)
-      return { job: undefined, delayMs: busyRetryMs };
-    refundInfrastructureRun(job, {
-      runCount: active.job?.runCount,
-      previousLastRunAt: active.previousLastRunAt,
-      disabledByMaxRuns: active.disabledByMaxRuns
-    }, {
-      reason: input.reason,
-      error: input.error,
-      now: now2()
-    });
-    state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-    await writeState2(directory, sessionID, state);
-    const delayMs = networkRetryDelayMs(job.infrastructureFailureCount || 1, busyRetryMs, networkRetryMaxMs);
-    return { job, delayMs };
-  }
-  async function recoverActiveDispatchFailure(directory, client, sessionID, jobId, runToken, error) {
-    const active = activeRuns.get(sessionID);
-    if (!active || active.jobId !== jobId || active.runToken !== runToken)
-      return false;
-    const transient = isTransientNetworkError(error);
-    const snapshot = active;
-    clearActiveRun(sessionID);
-    clearSessionStatus(sessionID);
-    const message = errorMessage(error);
-    let state = await readState2(directory, sessionID);
-    let job = (state.jobs || []).find((candidate) => candidate.id === jobId);
-    let retryDelay = busyRetryMs;
-    if (job) {
-      if (transient) {
-        const refunded = await persistInfrastructureRefund(directory, sessionID, snapshot, {
-          reason: "dispatch_failed_transient",
-          error
-        });
-        job = refunded.job;
-        retryDelay = refunded.delayMs;
-        state = await readState2(directory, sessionID);
-      } else {
-        job.failureCount = (job.failureCount || 0) + 1;
-        job.lastFailureReason = "dispatch_failed";
-        job.lastDispatchFailure = message.slice(0, 4000);
-        job.lastDispatchFailureAt = now2();
-        if (job.maxFailures > 0 && job.failureCount >= job.maxFailures) {
-          job.paused = true;
-          await notifyJob2(directory, job, "dispatch_failed");
-        }
-        state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-        await writeState2(directory, sessionID, state);
-      }
-    }
-    await appendLoopLog2(directory, transient ? "network-dispatch-error" : "dispatch-error", {
-      sessionID,
-      job: job?.name || jobId,
-      error: message,
-      ...transient ? { retryInMs: retryDelay } : {}
-    });
-    if (transient) {
-      await toast2(client, `Loop network dispatch failed; retrying when the session recovers: ${message}`, "warning");
-    } else {
-      await toast2(client, `Loop dispatch failed${job?.paused ? " and paused" : ""}: ${message}`, job?.paused ? "error" : "warning");
-    }
-    await scheduleDueWork(directory, client, sessionID, retryDelay);
-    return true;
-  }
-  async function handleSessionError(directory, client, event) {
-    const details = sessionErrorDetails(event, errorMessage);
-    if (!details || details.aborted)
-      return false;
-    const active = activeRuns.get(details.sessionID);
-    if (!active || active.compactionOnly)
-      return false;
-    const snapshot = active;
-    clearActiveRun(details.sessionID);
-    clearSessionStatus(details.sessionID);
-    if (details.retryable) {
-      const refunded = await persistInfrastructureRefund(directory, details.sessionID, snapshot, {
-        reason: "session_error_retryable",
-        error: details.message
-      });
-      await appendLoopLog2(directory, "provider-session-error-retry", {
-        sessionID: details.sessionID,
-        job: refunded.job?.name || snapshot.jobId,
-        errorName: details.name,
-        error: details.message,
-        retryInMs: refunded.delayMs
-      });
-      await toast2(client, `Loop provider turn failed after OpenCode retries; the logical run was refunded and will retry with backoff: ${details.message}`, "warning");
-      await scheduleDueWork(directory, client, details.sessionID, refunded.delayMs);
-      return true;
-    }
-    const state = await readState2(directory, details.sessionID);
-    const job = (state.jobs || []).find((candidate) => candidate.id === snapshot.jobId);
-    if (job) {
-      job.failureCount = (job.failureCount || 0) + 1;
-      job.paused = true;
-      job.lastFailureReason = "session_error";
-      job.lastSessionErrorName = details.name;
-      job.lastSessionError = details.message.slice(0, 4000);
-      job.lastSessionErrorAt = now2();
-      state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-      await writeState2(directory, details.sessionID, state);
-      await notifyJob2(directory, job, "session_error");
-    }
-    await appendLoopLog2(directory, "session-error", {
-      sessionID: details.sessionID,
-      job: job?.name || snapshot.jobId,
-      errorName: details.name,
-      error: details.message,
-      paused: Boolean(job?.paused)
-    });
-    await toast2(client, `Loop paused after a terminal OpenCode session error: ${details.message}`, "error");
-    await scheduleDueWork(directory, client, details.sessionID);
-    return true;
-  }
-  async function recoverStuckProviderRetry(directory, client, sessionID) {
-    const active = activeRuns.get(sessionID);
-    if (!active || active.compactionOnly) {
-      retryRuns.delete(sessionID);
-      return false;
-    }
-    const current = retryRuns.get(sessionID);
-    if (!current || current.runToken !== active.runToken) {
-      retryRuns.set(sessionID, { runToken: active.runToken, since: now2() });
-      return false;
-    }
-    if (now2() - current.since < providerRetryWatchdogMs)
-      return false;
-    const snapshot = active;
-    try {
-      if (client?.session?.abort) {
-        await fireSdk2(client, "session.abort provider retry watchdog", client.session.abort.bind(client.session), { path: { id: sessionID }, body: {} }, { path: { sessionID }, body: {} }, { sessionID });
-      }
-    } catch {}
-    clearActiveRun(sessionID);
-    clearSessionStatus(sessionID);
-    const refunded = await persistInfrastructureRefund(directory, sessionID, snapshot, {
-      reason: "provider_retry_watchdog",
-      error: `OpenCode session.status stayed retry for ${providerRetryWatchdogMs}ms`
-    });
-    await appendLoopLog2(directory, "provider-retry-recovery", {
-      sessionID,
-      job: refunded.job?.name || snapshot.jobId,
-      retryForMs: now2() - current.since,
-      retryInMs: refunded.delayMs
-    });
-    await toast2(client, "Loop provider retry exceeded the watchdog; the Loop-owned turn was released and will retry with backoff.", "warning");
-    await scheduleDueWork(directory, client, sessionID, refunded.delayMs);
-    return true;
-  }
-  async function finalizeActiveRun(directory, client, sessionID, finalizeOptions = {}) {
-    const active = activeRuns.get(sessionID);
-    if (!active)
-      return;
-    if (!await canFinalizeActiveRun(directory, client, sessionID, active, finalizeOptions))
-      return false;
-    const completion = await activeRunCompletion(directory, client, sessionID, active);
-    const recoveredStale = staleActiveRun(sessionID);
-    if (active.compactionOnly) {
-      const pending = compactionRuntime.getPending(sessionID);
-      clearActiveRun(sessionID);
-      clearSessionStatus(sessionID);
-      await appendLoopLog2(directory, pending?.completedAt ? "compact-finished" : "compact-idle-fallback", {
-        sessionID,
-        job: active.job?.name || active.jobId,
-        startedAt: active.startedAt,
-        nativeEvent: Boolean(pending?.completedAt)
-      });
-      await scheduleDueWork(directory, client, sessionID);
-      return true;
-    }
-    clearActiveRun(sessionID);
-    const state = await readState2(directory, sessionID);
-    let job = (state.jobs || []).find((candidate) => candidate.id === active.jobId);
-    if (!job)
-      return;
-    job.lastFinishedAt = now2();
-    if (completion === "empty" && guardsEmptyAssistantTurn(job)) {
-      const empty = refundEmptyAssistantTurn(job, active, now2());
-      state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-      await writeState2(directory, sessionID, state);
-      await appendLoopLog2(directory, "empty-assistant-turn", {
-        sessionID,
-        job: job.name || job.id,
-        count: empty.count,
-        limit: empty.limit,
-        paused: empty.paused,
-        refunded: true
-      });
-      if (empty.paused) {
-        await notifyJob2(directory, job, "empty_turn");
-        await toast2(client, "Loop paused after " + empty.count + " consecutive completed assistant turns with no visible output or tool activity. Resume after changing the model/prompt or use /loop-resume.", "warning");
-        await scheduleDueWork(directory, client, sessionID);
-      } else {
-        await toast2(client, "Loop received an empty completed assistant turn; the logical run was refunded and will retry once.", "warning");
-        await scheduleDueWork(directory, client, sessionID, busyRetryMs);
-      }
-      return true;
-    }
-    if (completion === "completed")
-      clearEmptyAssistantTurnStreak(job);
-    if (recoveredStale) {
-      await appendLoopLog2(directory, "active-stale-recovery", {
-        sessionID,
-        job: job.name || job.id,
-        startedAt: active.startedAt
-      });
-    }
-    await finalizationRuntime.finalizeJob(directory, client, sessionID, state, job, active.job);
-    return true;
-  }
-  const fireAction = actionDispatcher.fireAction;
-  async function maybeRunDueJobs(directory, client, sessionID, runOptions = {}) {
-    rememberSession(directory, client, sessionID);
-    const reschedule = async (minDelayMs = 0) => {
-      await scheduleDueWork(directory, client, sessionID, minDelayMs);
-    };
-    if (runLocks.has(sessionID)) {
-      await reschedule(busyRetryMs);
-      return;
-    }
-    runLocks.set(sessionID, now2());
-    let job;
-    let previousLastRunAt = 0;
-    let disabledByMaxRuns = false;
-    try {
-      await finalizeActiveRun(directory, client, sessionID, { requireIdle: true, forceStale: true });
-      const statusType = await sessionStatusType(client, sessionID, directory);
-      if (statusType !== "idle") {
-        if (statusType === "retry") {
-          if (await recoverStuckProviderRetry(directory, client, sessionID))
-            return;
-        } else {
-          retryRuns.delete(sessionID);
-        }
-        if (runOptions.force)
-          await toast2(client, "Loop queued: session is busy; it will run on the next idle check.", "info");
-        await reschedule(busyRetryMs);
-        return;
-      }
-      retryRuns.delete(sessionID);
-      const active = activeRuns.get(sessionID);
-      const activeAge = active ? now2() - (active.startedAt || 0) : 0;
-      const activeGuard = active?.job?.timeoutMs || active?.job?.activeRecoveryMs || activeGuardMs;
-      if (active && active.job?.noOverlap !== false && activeAge < activeGuard) {
-        await reschedule(busyRetryMs);
-        return;
-      }
-      if (active && activeAge >= activeGuard)
-        clearActiveRun(sessionID);
-      const state = await readState2(directory, sessionID);
-      for (const candidate of state.jobs || []) {
-        if (candidate.watchPaths?.length && !candidate.paused && candidate.enabled && await watchChanged(directory, candidate)) {
-          candidate.watchTriggered = true;
-        }
-      }
-      const due = dueJobs(state, Boolean(runOptions.force));
-      if (!due.length) {
-        await writeState2(directory, sessionID, state);
-        await reschedule();
-        return;
-      }
-      job = due[0];
-      const admission = await admissionRuntime.admitJob(directory, client, sessionID, state, job);
-      if (!admission.admitted)
-        return;
-      job = admission.job;
-      const runNowRequested = admission.runNowRequested;
-      job = await ensureBranch(directory, job, client, sessionID);
-      const compactResult = await compactionRuntime.maybeCompact(directory, client, sessionID, job);
-      job = compactResult.job;
-      if (compactResult.started) {
-        state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-        await writeState2(directory, sessionID, state);
-        let timer;
-        if (job.timeoutMs > 0) {
-          timer = setTimeout(() => {
-            fireSdk2(client, "session.abort", client.session.abort.bind(client.session), { path: { id: sessionID }, body: {} }, { path: { sessionID }, body: {} }, { sessionID });
-            toast2(client, `Loop compact timeout fired: ${job.name || job.id}`, "warning").catch(() => {});
-          }, job.timeoutMs);
-        }
-        const runToken = `${job.id}:compact:${now2().toString(36)}:${Math.random().toString(16).slice(2)}`;
-        activeRuns.set(sessionID, { jobId: job.id, job, startedAt: now2(), timer, runToken, compactionOnly: true });
-        if (compactionRuntime.isCompleted(sessionID, job.id)) {
-          await compactionRuntime.finalize(directory, client, sessionID);
-          return;
-        }
-        markSessionStatus(sessionID, "busy");
-        await reschedule(busyRetryMs);
-        return;
-      }
-      if (runNowRequested)
-        delete job.runNowRequestedAt;
-      job.watchTriggered = false;
-      previousLastRunAt = Number(job.lastRunAt || 0);
-      job.lastRunAt = now2();
-      job.runCount = (job.runCount || 0) + 1;
-      disabledByMaxRuns = job.maxRuns > 0 && job.runCount >= job.maxRuns;
-      if (disabledByMaxRuns) {
-        job.enabled = false;
-        await notifyJob2(directory, job, "max_runs_reached");
-      }
-      state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-      await writeState2(directory, sessionID, state);
-      await appendLoopLog2(directory, "run", { sessionID, job: job.name || job.id, runCount: job.runCount });
-      await toast2(client, `Loop running: ${job.name || job.id}`, "info");
-      try {
-        const result = await fireAction(directory, client, sessionID, job);
-        if (!result.startsAssistantTurn) {
-          const fresh = await readState2(directory, sessionID);
-          if (result.pause) {
-            fresh.jobs = (fresh.jobs || []).map((candidate) => candidate.id === job.id ? {
-              ...candidate,
-              paused: true,
-              failureCount: (candidate.failureCount || 0) + 1,
-              lastFailureReason: result.reason || "action_did_not_start"
-            } : candidate);
-          }
-          fresh.jobs = (fresh.jobs || []).filter((candidate) => candidate.enabled !== false || isGoalJob(candidate));
-          await writeState2(directory, sessionID, fresh);
-          await reschedule();
-          return;
-        }
-        let timer;
-        if (job.timeoutMs > 0) {
-          timer = setTimeout(() => {
-            fireSdk2(client, "session.abort", client.session.abort.bind(client.session), { path: { id: sessionID }, body: {} }, { path: { sessionID }, body: {} }, { sessionID });
-            toast2(client, `Loop timeout fired: ${job.name || job.id}`, "warning").catch(() => {});
-          }, job.timeoutMs);
-        }
-        const runToken = `${job.id}:${now2().toString(36)}:${Math.random().toString(16).slice(2)}`;
-        activeRuns.set(sessionID, {
-          jobId: job.id,
-          job,
-          startedAt: now2(),
-          timer,
-          runToken,
-          compactionAction: result.compaction === true,
-          previousLastRunAt,
-          disabledByMaxRuns
-        });
-        if (result.compaction && compactionRuntime.isCompleted(sessionID, job.id)) {
-          await compactionRuntime.finalize(directory, client, sessionID);
-          return;
-        }
-        if (result.dispatch) {
-          result.dispatch.catch((error) => {
-            recoverActiveDispatchFailure(directory, client, sessionID, job.id, runToken, error).catch((recoveryError) => log2(client, "error", "dispatch recovery failed", { error: errorMessage(recoveryError) }));
-          });
-        }
-        markSessionStatus(sessionID, "busy");
-        await reschedule(busyRetryMs);
-      } catch (error) {
-        clearActiveRun(sessionID);
-        if (isTransientNetworkError(error) && job) {
-          const stateAfterFailure = await readState2(directory, sessionID);
-          const persisted = (stateAfterFailure.jobs || []).find((candidate) => candidate.id === job.id);
-          if (persisted) {
-            refundInfrastructureRun(persisted, {
-              runCount: job.runCount,
-              previousLastRunAt,
-              disabledByMaxRuns
-            }, { reason: "action_dispatch_transient", error, now: now2() });
-            stateAfterFailure.jobs = (stateAfterFailure.jobs || []).map((candidate) => candidate.id === persisted.id ? persisted : candidate);
-            await writeState2(directory, sessionID, stateAfterFailure);
-            const delayMs = networkRetryDelayMs(persisted.infrastructureFailureCount || 1, busyRetryMs, networkRetryMaxMs);
-            await appendLoopLog2(directory, "network-action-error", { sessionID, job: persisted.name || persisted.id, error: errorMessage(error), retryInMs: delayMs });
-            await toast2(client, "Loop action hit a transient network failure; the logical run was refunded and will retry.", "warning");
-            await reschedule(delayMs);
-            return;
-          }
-        }
-        await toast2(client, `Loop job failed: ${error instanceof Error ? error.message : String(error)}`, "error");
-        await appendLoopLog2(directory, "error", {
-          sessionID,
-          job: job?.name || job?.id,
-          error: error instanceof Error ? error.message : String(error)
-        });
-        await reschedule(busyRetryMs);
-      }
-    } finally {
-      runLocks.delete(sessionID);
-    }
-  }
-  return {
-    dueJobs,
-    clearActiveRun,
-    disposeSession,
-    recoverActiveDispatchFailure,
-    handleSessionError,
-    recoverStuckProviderRetry,
-    finalizeActiveRun,
-    fireAction,
-    maybeRunDueJobs,
-    sessionStatusType,
-    sessionIsIdle,
-    updateSessionStatusFromEvent,
-    markSessionStatus,
-    clearSessionStatus,
-    noteLoopCompactionStarted: compactionRuntime.noteStarted,
-    noteLoopCompactionCompleted: compactionRuntime.noteCompleted,
-    getActiveRun: (sessionID) => activeRuns.get(sessionID),
-    isRunLocked: (sessionID) => runLocks.has(sessionID)
-  };
-}
-
-// src/source/runtime/goal-steering.js
-init_jobs();
-init_state();
-init_process();
-var DEFAULT_STEERING_SUPPRESSION_MS = 5 * 60000;
-var DEFAULT_SEEN_USER_MESSAGE_MS = 10 * 60000;
-function requireFunction11(value, label) {
-  if (typeof value !== "function")
-    throw new TypeError(`createGoalSteeringRuntime requires ${label}`);
-  return value;
-}
-function messageInfo(event) {
-  if (!["message.updated", "message.created"].includes(String(event?.type || "")))
-    return;
-  const props = event?.properties || {};
-  return props.info || props.message || props;
-}
-function userMessageFromEvent(event) {
-  const info = messageInfo(event);
-  if (!info || info.role !== "user")
-    return;
-  const props = event?.properties || {};
-  const sessionID = info.sessionID || props.sessionID;
-  if (typeof sessionID !== "string" || !sessionID)
-    return;
-  const messageID = typeof (info.id || props.messageID) === "string" ? info.id || props.messageID : "";
-  return { sessionID, messageID };
-}
-function assistantMessageFromEvent(event) {
-  const info = messageInfo(event);
-  if (!info || info.role !== "assistant")
-    return;
-  const props = event?.properties || {};
-  const sessionID = info.sessionID || props.sessionID;
-  if (typeof sessionID !== "string" || !sessionID)
-    return;
-  const parentID = typeof (info.parentID || props.parentID) === "string" ? info.parentID || props.parentID : "";
-  const createdAt = Number(info?.time?.created || 0);
-  return { sessionID, parentID, createdAt: Number.isFinite(createdAt) ? createdAt : 0 };
-}
-function activeGoalJobs(state) {
-  return (state?.jobs || []).filter((job) => {
-    if (!isGoalJob(job))
-      return false;
-    if (job.paused || job.enabled === false)
-      return false;
-    return !["completed", "blocked", "cleared"].includes(job.goalStatus);
-  });
-}
-function createGoalSteeringRuntime(options = {}) {
-  const getActiveRun = requireFunction11(options.getActiveRun, "getActiveRun");
-  const clearActiveRun = requireFunction11(options.clearActiveRun, "clearActiveRun");
-  const isLoopOwnedUserMessage = typeof options.isLoopOwnedUserMessage === "function" ? options.isLoopOwnedUserMessage : () => false;
-  const readState2 = typeof options.readState === "function" ? options.readState : readState;
-  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
-  const fireSdk2 = typeof options.fireSdk === "function" ? options.fireSdk : fireSdk;
-  const now2 = typeof options.now === "function" ? options.now : now;
-  const suppressionMs = Number.isFinite(Number(options.suppressionMs)) && Number(options.suppressionMs) > 0 ? Number(options.suppressionMs) : DEFAULT_STEERING_SUPPRESSION_MS;
-  const seenUserMessageMs = Number.isFinite(Number(options.seenUserMessageMs)) && Number(options.seenUserMessageMs) > 0 ? Number(options.seenUserMessageMs) : DEFAULT_SEEN_USER_MESSAGE_MS;
-  const compactingSessions = new Set;
-  const pendingSteering = new Map;
-  const seenUserMessages = new Map;
-  function pendingForSession(sessionID) {
-    const entry = pendingSteering.get(sessionID);
-    if (!entry)
-      return;
-    if (entry.expiresAt <= now2()) {
-      pendingSteering.delete(sessionID);
-      return;
-    }
-    return entry;
-  }
-  function shouldSuppressIdle(sessionID) {
-    return Boolean(pendingForSession(sessionID));
-  }
-  function seenKey(sessionID, messageID) {
-    return messageID ? `${sessionID}\x00${messageID}` : "";
-  }
-  function alreadyHandled(sessionID, messageID) {
-    const key = seenKey(sessionID, messageID);
-    if (!key)
-      return false;
-    const expiresAt = seenUserMessages.get(key);
-    if (!expiresAt)
-      return false;
-    if (expiresAt <= now2()) {
-      seenUserMessages.delete(key);
-      return false;
-    }
-    return true;
-  }
-  function rememberHandled(sessionID, messageID) {
-    const key = seenKey(sessionID, messageID);
-    if (!key)
-      return;
-    const current = now2();
-    seenUserMessages.set(key, current + seenUserMessageMs);
-    for (const [candidate, expiresAt] of seenUserMessages.entries()) {
-      if (expiresAt <= current)
-        seenUserMessages.delete(candidate);
-    }
-  }
-  function observeAssistantMessage(event) {
-    const assistant = assistantMessageFromEvent(event);
-    if (!assistant)
-      return false;
-    const entry = pendingForSession(assistant.sessionID);
-    if (!entry)
-      return false;
-    const matchesMessage = entry.messageID && assistant.parentID === entry.messageID;
-    const matchesFallback = !entry.messageID && (!assistant.createdAt || assistant.createdAt >= entry.armedAt);
-    if (!matchesMessage && !matchesFallback)
-      return false;
-    pendingSteering.delete(assistant.sessionID);
-    return true;
-  }
-  async function handleUserMessage(directory, client, user) {
-    const sessionID = typeof user?.sessionID === "string" ? user.sessionID : "";
-    const messageID = typeof user?.messageID === "string" ? user.messageID : "";
-    if (!sessionID)
-      return;
-    if (alreadyHandled(sessionID, messageID))
-      return { handled: false, duplicate: true, sessionID, messageID };
-    rememberHandled(sessionID, messageID);
-    if (isLoopOwnedUserMessage(sessionID, messageID)) {
-      return { handled: false, loopOwned: true, sessionID, messageID };
-    }
-    const state = await readState2(directory, sessionID);
-    const goals = activeGoalJobs(state);
-    if (!goals.length)
-      return { handled: false, sessionID, messageID };
-    const active = getActiveRun(sessionID);
-    const activeGoalIDs = new Set(goals.map((goal) => goal.id));
-    const canPreempt = !compactingSessions.has(sessionID) && active && activeGoalIDs.has(active.jobId) && isGoalJob(active.job) && typeof client?.session?.abort === "function";
-    let preempted = false;
-    let abortError = "";
-    if (canPreempt) {
-      pendingSteering.set(sessionID, {
-        messageID,
-        goalID: active.jobId,
-        armedAt: now2(),
-        expiresAt: now2() + suppressionMs
-      });
-      try {
-        await fireSdk2(client, "session.abort", client.session.abort.bind(client.session), { path: { id: sessionID }, body: {} }, { path: { sessionID }, body: {} }, { sessionID });
-        if (getActiveRun(sessionID) === active)
-          clearActiveRun(sessionID);
-        preempted = true;
-      } catch (error) {
-        pendingSteering.delete(sessionID);
-        abortError = error instanceof Error ? error.message : String(error);
-      }
-    }
-    await appendLoopLog2(directory, "goal-user-steering", {
-      sessionID,
-      messageID,
-      goals: goals.length,
-      preempted,
-      ...abortError ? { abortError } : {}
-    });
-    return { handled: true, preempted, sessionID, messageID };
-  }
-  async function handleEvent(directory, client, event) {
-    observeAssistantMessage(event);
-    const user = userMessageFromEvent(event);
-    if (!user)
-      return;
-    if (alreadyHandled(user.sessionID, user.messageID))
-      return { handled: false, duplicate: true, ...user };
-    return { handled: false, reason: "untrusted-message-event", ...user };
-  }
-  function setCompacting(sessionID, value = true) {
-    if (typeof sessionID !== "string" || !sessionID)
-      return;
-    if (value)
-      compactingSessions.add(sessionID);
-    else
-      compactingSessions.delete(sessionID);
-  }
-  function clearSession(sessionID) {
-    compactingSessions.delete(sessionID);
-    pendingSteering.delete(sessionID);
-    const prefix = `${sessionID}\x00`;
-    for (const key of seenUserMessages.keys())
-      if (key.startsWith(prefix))
-        seenUserMessages.delete(key);
-  }
-  return {
-    handleUserMessage,
-    handleEvent,
-    observeAssistantMessage,
-    shouldSuppressIdle,
-    hasPendingSteering: shouldSuppressIdle,
-    pendingForSession,
-    setCompacting,
-    clearSession
-  };
-}
-
-// src/source/legacy-v1.js
-var DEFAULT_ACTIVE_GUARD_MS2 = 45000;
-var workspaceRuntime = createJobWorkspaceRuntime({ toast });
-var { snapshotPaths } = workspaceRuntime;
-var goalPolicy = createGoalExecutionPolicy({ runShellCommand, dangerousShell, toast, appendLoopLog, now });
-var schedulerRuntime;
-var goalSteeringRuntime;
-var schedulerBridge = {
-  rememberSession: (...args) => schedulerRuntime.rememberSession(...args),
-  scheduleDueWork: (...args) => schedulerRuntime.scheduleDueWork(...args)
-};
-var executorRuntime = createLoopExecutor({
-  workspace: workspaceRuntime,
-  goalPolicy,
-  scheduler: schedulerBridge,
-  toast,
-  log,
-  appendLoopLog,
-  errorMessage: sdkErrorMessage,
-  now
-});
-var {
-  clearActiveRun,
-  handleSessionError,
-  finalizeActiveRun,
-  maybeRunDueJobs: runDueJobs,
-  sessionIsIdle,
-  updateSessionStatusFromEvent,
-  noteLoopCompactionStarted,
-  noteLoopCompactionCompleted
-} = executorRuntime;
-async function maybeRunDueJobs(directory, client, sessionID, runOptions) {
-  if (goalSteeringRuntime?.shouldSuppressIdle(sessionID))
-    return;
-  return await runDueJobs(directory, client, sessionID, runOptions);
-}
-schedulerRuntime = createSchedulerRuntime({
-  sessionIsIdle,
-  finalizeActiveRun,
-  maybeRunDueJobs,
-  appendLoopLog,
-  toast,
-  errorMessage: sdkErrorMessage
-});
-var { rememberSession, scheduleIdleWork, scheduleDueWork, stopWatchdog, cancelDueWork } = schedulerRuntime;
-goalSteeringRuntime = createGoalSteeringRuntime({
-  getActiveRun: executorRuntime.getActiveRun,
-  clearActiveRun,
-  isLoopOwnedUserMessage: loopOwnedUserMessageGuardActive,
-  appendLoopLog,
-  now
-});
-var { addLoop } = createLoopRegistration({
-  snapshotPaths,
-  scheduleDueWork,
-  scheduleIdleWork,
-  toast,
-  say,
-  defaultActiveGuardMs: DEFAULT_ACTIVE_GUARD_MS2
-});
-var {
-  addGoal,
-  statusGoal,
-  pauseGoal,
-  resumeGoal,
-  clearGoal,
-  completeGoalCommand,
-  blockGoalCommand
-} = createGoalCommandHandlers({
-  addLoop,
-  scheduleDueWork,
-  scheduleIdleWork,
-  toast,
-  say
-});
-var {
-  stopLoop,
-  updateJobState,
-  statusLoop,
-  logsLoop,
-  helpLoop,
-  runNow,
-  doctorLoop,
-  initLoop,
-  exportLoop
-} = createLoopCommandHandlers({
-  clearActiveRun,
-  cancelDueWork,
-  stopWatchdog,
-  scheduleDueWork,
-  maybeRunDueJobs,
-  toast,
-  say,
-  now
-});
-var handleCommand = createCommandRouter({
-  rememberSession,
-  handlers: {
-    addGoal,
-    statusGoal,
-    pauseGoal,
-    resumeGoal,
-    clearGoal,
-    completeGoalCommand,
-    blockGoalCommand,
-    addLoop,
-    stopLoop,
-    statusLoop,
-    logsLoop,
-    helpLoop,
-    runNow,
-    updateJobState,
-    doctorLoop,
-    initLoop,
-    exportLoop
-  }
-});
-function disposeRuntime(directory, client) {
-  const sessions = schedulerRuntime.sessionIDsForHost(directory, client);
-  for (const sessionID of sessions) {
-    executorRuntime.disposeSession(sessionID);
-    schedulerRuntime.clearSessionScheduling(sessionID);
-    goalSteeringRuntime.clearSession(sessionID);
-    clearLoopOwnedUserMessageGuard(sessionID);
-    clearSessionActivity(sessionID);
-    clearCommandLifecycle(sessionID);
-  }
-}
-function steeringToolRejection(sessionID) {
-  if (!goalSteeringRuntime.hasPendingSteering(sessionID))
-    return;
-  return {
-    title: "Goal steering pending",
-    output: "Goal lifecycle update deferred because queued user steering is pending. The experimental Goal remains active and unchanged."
-  };
-}
-async function dedicatedGoalToolRejection(directory, sessionID) {
-  const goal = await findDedicatedGoalForSession(directory, sessionID);
-  if (!goal || goal.status === "completed")
-    return;
-  return {
-    title: "Dedicated Goal owns lifecycle",
-    output: [
-      `A dedicated OpenCode Goal is persisted for this session (status=${String(goal.status || "unknown")}).`,
-      "The opencode_loop_goal_* tools control only experimental /loop-goal jobs and will not mutate the dedicated Goal.",
-      "Use opencode_goal_progress for checkpoints, opencode_goal_wait_for_user when user/manual input is required, opencode_goal_blocked for a genuine blocker, or opencode_goal_complete for verified completion."
-    ].join(`
-`)
-  };
-}
-function goalTools(defaultDirectory) {
-  return {
-    opencode_loop_goal_complete: tool({
-      description: "Experimental /loop-goal ONLY: mark the current OpenCode Loop experimental goal as completed. Never use this tool to control a dedicated @bybrawe/opencode-goal Goal; use opencode_goal_complete there. Use only after acceptance criteria are satisfied and you have evidence from tests, typecheck, build, or code inspection.",
-      args: {
-        summary: tool.schema.string().describe("Short human-readable summary of what was completed."),
-        evidence: tool.schema.string().describe("Concrete evidence that the goal is complete, such as commands run, passing checks, files changed, and important results.")
-      },
-      execute: async (args, context) => {
-        const directory = context.directory || defaultDirectory;
-        const dedicated = await dedicatedGoalToolRejection(directory, context.sessionID);
-        if (dedicated)
-          return dedicated;
-        const steering = steeringToolRejection(context.sessionID);
-        if (steering)
-          return steering;
-        const result = await setGoalComplete(directory, context.sessionID, args);
-        return { title: result.ok ? "Goal completed" : result.rejected ? "Goal completion rejected" : "Goal not found", output: result.message };
-      }
-    }),
-    opencode_loop_goal_blocked: tool({
-      description: "Experimental /loop-goal ONLY: mark the current OpenCode Loop experimental goal as blocked. Never use this tool for a dedicated @bybrawe/opencode-goal Goal; use opencode_goal_wait_for_user for user/manual input or opencode_goal_blocked for a genuine dedicated-Goal blocker.",
-      args: {
-        reason: tool.schema.string().describe("Why the goal is blocked."),
-        needed: tool.schema.string().describe("What user input, credential, decision, or manual action is needed to continue.")
-      },
-      execute: async (args, context) => {
-        const directory = context.directory || defaultDirectory;
-        const dedicated = await dedicatedGoalToolRejection(directory, context.sessionID);
-        if (dedicated)
-          return dedicated;
-        const steering = steeringToolRejection(context.sessionID);
-        if (steering)
-          return steering;
-        const result = await setGoalBlocked(directory, context.sessionID, args);
-        return { title: result.ok ? "Goal blocked" : "Goal not found", output: result.message };
-      }
-    }),
-    opencode_loop_goal_progress: tool({
-      description: "Experimental /loop-goal ONLY: record meaningful progress on the current OpenCode Loop experimental goal. Never use this tool for a dedicated @bybrawe/opencode-goal Goal; use opencode_goal_progress there.",
-      args: {
-        summary: tool.schema.string().describe("What useful progress was made."),
-        next: tool.schema.string().describe("The next step toward completing the goal.")
-      },
-      execute: async (args, context) => {
-        const directory = context.directory || defaultDirectory;
-        const dedicated = await dedicatedGoalToolRejection(directory, context.sessionID);
-        if (dedicated)
-          return dedicated;
-        const steering = steeringToolRejection(context.sessionID);
-        if (steering)
-          return steering;
-        const result = await setGoalProgress(directory, context.sessionID, args);
-        return { title: result.ok ? "Goal progress" : "Goal not found", output: result.message };
-      }
-    })
-  };
-}
-var OpenCodeLoopPlugin = async ({ client, directory }) => {
-  const bootstrap = setTimeout(() => {
-    log(client, "info", "Plugin initialized", { directory }).catch(() => {});
-    refreshSessionRelationships(client, directory).catch(() => {});
-  }, 0);
-  bootstrap.unref?.();
-  return {
-    dispose: async () => {
-      disposeRuntime(directory, client);
-    },
-    tool: goalTools(directory),
-    "command.execute.before": async (input, output) => {
-      await handleCommand(directory, client, input, undefined, undefined, output);
-    },
-    "chat.message": async (input, output) => {
-      const steering = await goalSteeringRuntime.handleUserMessage(directory, client, {
-        sessionID: input?.sessionID,
-        messageID: input?.messageID || output?.message?.id
-      });
-      if (steering?.handled && steering.sessionID)
-        rememberSession(directory, client, steering.sessionID);
-    },
-    "tool.execute.before": async (input) => {
-      markToolCallActive(input);
-    },
-    "tool.execute.after": async (input) => {
-      markToolCallFinished(input);
-    },
-    "experimental.session.compacting": async (input) => {
-      goalSteeringRuntime.setCompacting(input?.sessionID);
-      await noteLoopCompactionStarted(directory, input?.sessionID);
-    },
-    event: async ({ event }) => {
-      if (["session.compacted", "session.error", "session.deleted"].includes(event?.type)) {
-        goalSteeringRuntime.setCompacting(event?.properties?.sessionID || event?.properties?.info?.id, false);
-      }
-      if (event.type === "session.compacted")
-        await noteLoopCompactionCompleted(directory, client, event?.properties?.sessionID);
-      updateSessionRelationshipFromEvent(event);
-      if (event.type === "message.updated")
-        updateSessionExecutionContext(event?.properties?.info);
-      updateToolActivityFromEvent(event);
-      if (event.type === "command.executed") {
-        const props = event.properties || {};
-        await handleCommand(directory, client, props, props.name, props.arguments, undefined, "event");
-      }
-      const steering = await goalSteeringRuntime.handleEvent(directory, client, event);
-      if (steering?.handled && steering.sessionID)
-        rememberSession(directory, client, steering.sessionID);
-      if (event.type === "session.error") {
-        const handledError = await handleSessionError(directory, client, event);
-        if (handledError && event?.properties?.sessionID)
-          rememberSession(directory, client, event.properties.sessionID);
-      }
-      const statusUpdate = updateSessionStatusFromEvent(event);
-      if (statusUpdate?.sessionID)
-        rememberSession(directory, client, statusUpdate.sessionID);
-      if (statusUpdate?.idle && !goalSteeringRuntime.shouldSuppressIdle(statusUpdate.sessionID)) {
-        scheduleIdleWork(directory, client, statusUpdate.sessionID);
-      }
-    }
-  };
-};
-var legacy_v1_default = OpenCodeLoopPlugin;
-
-// src/source/runtime/session-registry.js
-var DEFAULT_SESSION_STALE_MS = 12 * 60 * 60 * 1000;
-function sessionKey(sessionID) {
-  return String(sessionID || "").trim();
-}
-function createSessionRegistry({ now = Date.now, staleAfterMs = DEFAULT_SESSION_STALE_MS } = {}) {
-  if (typeof now !== "function")
-    throw new TypeError("session registry requires a clock function");
-  if (!Number.isFinite(staleAfterMs) || staleAfterMs < 0)
-    throw new TypeError("session registry requires a non-negative staleAfterMs");
-  const sessions = new Map;
-  function observeExternal(sessionID, runtime) {
-    const key = sessionKey(sessionID);
-    if (!key)
-      throw new TypeError("session registry requires a session ID");
-    const seenAt = Number(now());
-    if (!Number.isFinite(seenAt))
-      throw new TypeError("session registry clock must return a finite number");
-    const entry = Object.freeze({ sessionID: key, runtime, seenAt });
-    sessions.set(key, entry);
-    return entry;
-  }
-  function peek(sessionID) {
-    return sessions.get(sessionKey(sessionID));
-  }
-  function remove(sessionID, expectedRuntime) {
-    const key = sessionKey(sessionID);
-    const current = sessions.get(key);
-    if (!current)
-      return false;
-    if (arguments.length > 1 && current.runtime !== expectedRuntime)
-      return false;
-    return sessions.delete(key);
-  }
-  function pruneStale(at = now()) {
-    const timestamp = Number(at);
-    if (!Number.isFinite(timestamp))
-      throw new TypeError("session registry prune time must be finite");
-    const removed = [];
-    for (const [key, entry] of sessions) {
-      if (timestamp - entry.seenAt < staleAfterMs)
-        continue;
-      sessions.delete(key);
-      removed.push(key);
-    }
-    return removed;
-  }
-  function entries() {
-    return [...sessions.values()];
-  }
-  return Object.freeze({
-    observeExternal,
-    peek,
-    remove,
-    pruneStale,
-    entries
-  });
-}
-
-// src/source/runtime/scope.js
-function createRuntimeScope() {
-  const controller = new AbortController;
-  const cleanups = new Set;
-  let disposed = false;
-  function track(cleanup) {
-    if (typeof cleanup !== "function")
-      throw new TypeError("runtime scope cleanup must be a function");
-    if (disposed) {
-      cleanup();
-      return () => false;
-    }
-    const entry = { cleanup };
-    cleanups.add(entry);
-    let tracked = true;
-    return () => {
-      if (!tracked)
-        return false;
-      tracked = false;
-      return cleanups.delete(entry);
-    };
-  }
-  function guard(callback) {
-    if (typeof callback !== "function")
-      throw new TypeError("runtime scope guard requires a function");
-    return function(...args) {
-      if (disposed)
-        return;
-      return callback.apply(this, args);
-    };
-  }
-  function dispose(reason) {
-    if (disposed)
-      return false;
-    disposed = true;
-    controller.abort(reason);
-    const errors = [];
-    for (const entry of [...cleanups].reverse()) {
-      cleanups.delete(entry);
-      try {
-        entry.cleanup();
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    if (errors.length)
-      throw new AggregateError(errors, "runtime scope cleanup failed");
-    return true;
-  }
-  return Object.freeze({
-    signal: controller.signal,
-    isActive: () => !disposed,
-    track,
-    guard,
-    dispose
-  });
-}
-
-// src/source/runtime/timers.js
-function createOwnedTimer(scope, callback, delay, repeat, api, ref) {
-  if (!scope?.isActive?.())
-    return;
-  let active = true;
-  let release;
-  let handle;
-  const invoke = scope.guard((...args) => {
-    if (!active)
-      return;
-    if (!repeat) {
-      active = false;
-      release?.();
-    }
-    callback(...args);
-  });
-  handle = repeat ? api.setInterval(invoke, delay) : api.setTimeout(invoke, delay);
-  release = scope.track(() => {
-    if (repeat)
-      api.clearInterval(handle);
-    else
-      api.clearTimeout(handle);
-  });
-  if (!ref)
-    handle?.unref?.();
-  return Object.freeze({
-    handle,
-    cancel() {
-      if (!active)
-        return false;
-      active = false;
-      if (repeat)
-        api.clearInterval(handle);
-      else
-        api.clearTimeout(handle);
-      release();
-      return true;
-    }
-  });
-}
-function createRuntimeTimers(scope, api = globalThis) {
-  return Object.freeze({
-    timeout(callback, delay, options = {}) {
-      return createOwnedTimer(scope, callback, delay, false, api, options.ref !== false);
-    },
-    interval(callback, delay, options = {}) {
-      return createOwnedTimer(scope, callback, delay, true, api, options.ref !== false);
-    }
-  });
-}
-
-// src/source/runtime/session-manager.js
-function defaultRuntimeFactory({ sessionID, timerAPI }) {
-  const scope = createRuntimeScope();
-  return Object.freeze({
-    sessionID,
-    scope,
-    timers: createRuntimeTimers(scope, timerAPI),
-    dispose: (reason) => scope.dispose(reason)
-  });
-}
-function validateRuntime(runtime, sessionID) {
-  if (!runtime || runtime.sessionID !== sessionID)
-    throw new TypeError("session runtime factory must preserve the session ID");
-  if (typeof runtime?.scope?.isActive !== "function")
-    throw new TypeError("session runtime factory must provide an active scope");
-  if (typeof runtime.dispose !== "function")
-    throw new TypeError("session runtime factory must provide dispose()");
-  return runtime;
-}
-function createSessionRuntimeManager({
-  now = Date.now,
-  staleAfterMs = DEFAULT_SESSION_STALE_MS,
-  timerAPI = globalThis,
-  runtimeFactory = defaultRuntimeFactory
-} = {}) {
-  if (typeof runtimeFactory !== "function")
-    throw new TypeError("session runtime manager requires a runtime factory");
-  const registry = createSessionRegistry({ now, staleAfterMs });
-  let disposed = false;
-  function observeExternal(sessionID) {
-    if (disposed)
-      throw new Error("session runtime manager is disposed");
-    const key = String(sessionID || "").trim();
-    if (!key)
-      throw new TypeError("session runtime manager requires a session ID");
-    const current = registry.peek(key);
-    const runtime = current?.runtime?.scope?.isActive?.() ? current.runtime : validateRuntime(runtimeFactory({ sessionID: key, timerAPI }), key);
-    registry.observeExternal(key, runtime);
-    return runtime;
-  }
-  function peek(sessionID) {
-    return registry.peek(sessionID)?.runtime;
-  }
-  function entries() {
-    return registry.entries();
-  }
-  function remove(sessionID, { expectedRuntime, reason } = {}) {
-    const current = registry.peek(sessionID);
-    if (!current)
-      return false;
-    if (expectedRuntime !== undefined && current.runtime !== expectedRuntime)
-      return false;
-    if (!registry.remove(sessionID, current.runtime))
-      return false;
-    current.runtime.dispose(reason);
-    return true;
-  }
-  function pruneStale(at = now()) {
-    const before = new Map(registry.entries().map((entry) => [entry.sessionID, entry.runtime]));
-    const removed = registry.pruneStale(at);
-    const errors = [];
-    for (const sessionID of removed) {
-      try {
-        before.get(sessionID)?.dispose("stale-session");
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    if (errors.length)
-      throw new AggregateError(errors, "stale session cleanup failed");
-    return removed;
-  }
-  function dispose(reason) {
-    if (disposed)
-      return false;
-    disposed = true;
-    const errors = [];
-    for (const entry of registry.entries()) {
-      registry.remove(entry.sessionID, entry.runtime);
-      try {
-        entry.runtime.dispose(reason);
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    if (errors.length)
-      throw new AggregateError(errors, "session runtime manager cleanup failed");
-    return true;
-  }
-  return Object.freeze({
-    observeExternal,
-    peek,
-    entries,
-    remove,
-    pruneStale,
-    dispose
-  });
-}
-
-// src/source/runtime/events.js
-function record(value) {
-  return value && typeof value === "object" ? value : undefined;
-}
-function text(value) {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-function envelope(input) {
-  const outer = record(input);
-  if (!outer)
-    return;
-  const payload = record(outer.payload);
-  if (payload && text(payload.type)) {
-    return { directory: text(outer.directory), event: payload };
-  }
-  const wrappedEvent = record(outer.event);
-  if (wrappedEvent && text(wrappedEvent.type)) {
-    return { directory: text(outer.directory), event: wrappedEvent };
-  }
-  if (!text(outer.type))
-    return;
-  return { directory: undefined, event: outer };
-}
-function freezeEvent(value) {
-  return Object.freeze(value);
-}
-function normalizeOpenCodeEvent(input) {
-  const parsed = envelope(input);
-  if (!parsed)
-    return;
-  const { directory, event } = parsed;
-  const properties = record(event.properties) || {};
-  if (event.type === "session.status") {
-    const sessionID = text(properties.sessionID);
-    const status = text(record(properties.status)?.type);
-    if (!sessionID || !status)
-      return;
-    return freezeEvent({ kind: "session", action: "status", sessionID, directory, status });
-  }
-  if (event.type === "session.idle" || event.type === "session.compacted") {
-    const sessionID = text(properties.sessionID);
-    if (!sessionID)
-      return;
-    return freezeEvent({
-      kind: "session",
-      action: event.type === "session.idle" ? "idle" : "compacted",
-      sessionID,
-      directory
-    });
-  }
-  if (event.type === "session.created" || event.type === "session.updated" || event.type === "session.deleted") {
-    const info = record(properties.info);
-    const sessionID = text(info?.id);
-    if (!sessionID)
-      return;
-    return freezeEvent({
-      kind: "session",
-      action: event.type.slice("session.".length),
-      sessionID,
-      directory: directory || text(info?.directory),
-      parentID: text(info?.parentID)
-    });
-  }
-  if (event.type === "session.error") {
-    const sessionID = text(properties.sessionID);
-    if (!sessionID)
-      return;
-    return freezeEvent({ kind: "session", action: "error", sessionID, directory });
-  }
-  if (event.type === "message.updated") {
-    const info = record(properties.info);
-    const sessionID = text(info?.sessionID);
-    const messageID = text(info?.id);
-    const role = text(info?.role);
-    if (!sessionID || !messageID || !role)
-      return;
-    const time = record(info?.time);
-    return freezeEvent({
-      kind: "message",
-      action: "updated",
-      sessionID,
-      directory,
-      messageID,
-      role,
-      completedAt: Number.isFinite(time?.completed) ? time.completed : undefined,
-      finish: text(info?.finish)
-    });
-  }
-  if (event.type === "command.executed") {
-    const sessionID = text(properties.sessionID);
-    const name = text(properties.name);
-    if (!sessionID || !name)
-      return;
-    return freezeEvent({
-      kind: "command",
-      action: "executed",
-      sessionID,
-      directory,
-      name,
-      arguments: typeof properties.arguments === "string" ? properties.arguments : "",
-      messageID: text(properties.messageID)
-    });
-  }
-  if (event.type === "server.instance.disposed") {
-    const disposedDirectory = directory || text(properties.directory);
-    if (!disposedDirectory)
-      return;
-    return freezeEvent({ kind: "server", action: "disposed", directory: disposedDirectory });
-  }
-  return;
-}
-
-// src/source/runtime/observer.js
-function observeRuntimeEvent(manager, input) {
-  const event = normalizeOpenCodeEvent(input);
-  if (!event || !manager)
-    return event;
-  try {
-    if (event.kind === "server" && event.action === "disposed") {
-      manager.dispose?.("server-disposed");
-      return event;
-    }
-    if (!event.sessionID)
-      return event;
-    if (event.kind === "session" && event.action === "deleted") {
-      manager.remove?.(event.sessionID, { reason: "session-deleted" });
-      return event;
-    }
-    manager.observeExternal?.(event.sessionID);
-  } catch {}
-  return event;
-}
-
-// src/source/v1.js
-var clientGenerations = new WeakMap;
-function reserveClientGeneration(client, directory) {
-  if (!client || typeof client !== "object")
-    return () => true;
-  let generations = clientGenerations.get(client);
-  if (!generations) {
-    generations = new Map;
-    clientGenerations.set(client, generations);
-  }
-  const key = String(directory || "");
-  const generation = (generations.get(key) || 0) + 1;
-  generations.set(key, generation);
-  return () => generations.get(key) === generation;
-}
-function scopedClient(client) {
-  if (!client || typeof client !== "object")
-    return client;
-  return new Proxy(client, {
-    get(target, property) {
-      const value = Reflect.get(target, property, target);
-      return typeof value === "function" ? value.bind(target) : value;
-    }
-  });
-}
-function scheduleLegacyCleanup(dispose, isCurrentGeneration) {
-  for (const delay of [0, 25, 100, 500, 2000, 1e4, 30000]) {
-    const timer = setTimeout(() => {
-      if (!isCurrentGeneration())
-        return;
-      Promise.resolve(dispose()).catch(() => {});
-    }, delay);
-    timer.unref?.();
-  }
-}
-var OpenCodeLoopPlugin2 = async (input = {}) => {
-  const realClient = input?.client;
-  const isCurrentGeneration = reserveClientGeneration(realClient, input?.directory);
-  const client = scopedClient(realClient);
-  const hooks = await legacy_v1_default({ ...input, client });
-  const legacyDispose = typeof hooks?.dispose === "function" ? hooks.dispose.bind(hooks) : undefined;
-  if (!legacyDispose)
-    return hooks;
-  const runtimeManager = createSessionRuntimeManager();
-  const legacyEvent = typeof hooks?.event === "function" ? hooks.event.bind(hooks) : undefined;
-  let disposed = false;
-  return {
-    ...hooks,
-    ...legacyEvent ? {
-      event: async (payload) => {
-        observeRuntimeEvent(runtimeManager, payload);
-        return await legacyEvent(payload);
-      }
-    } : {},
-    dispose: async () => {
-      if (disposed)
-        return;
-      disposed = true;
-      try {
-        runtimeManager.dispose("plugin-disposed");
-      } catch {}
-      await legacyDispose();
-      scheduleLegacyCleanup(legacyDispose, isCurrentGeneration);
-    }
-  };
-};
-var v1_default = OpenCodeLoopPlugin2;
-
-// src/source/opencode2/native-plugin.js
-import path12 from "path";
-
 // src/source/opencode2/native-shell.js
-import { spawn as spawn2 } from "child_process";
+import { spawn } from "child_process";
 import { randomUUID } from "crypto";
 function createNativeShellHost({ directory, onTerminal, onError = () => {} } = {}) {
   if (!directory || typeof onTerminal !== "function")
@@ -5273,7 +1104,7 @@ function createNativeShellHost({ directory, onTerminal, onError = () => {} } = {
     if (task.settled || !task.child.pid)
       return;
     if (process.platform === "win32") {
-      const killer = spawn2("taskkill", ["/pid", String(task.child.pid), "/t", "/f"], { windowsHide: true, stdio: "ignore" });
+      const killer = spawn("taskkill", ["/pid", String(task.child.pid), "/t", "/f"], { windowsHide: true, stdio: "ignore" });
       killer.once("error", (error) => {
         report(error);
         try {
@@ -5306,7 +1137,7 @@ function createNativeShellHost({ directory, onTerminal, onError = () => {} } = {
     if (!request?.sessionID || typeof request.command !== "string" || !request.command.trim())
       throw new TypeError("Native shell requires sessionID and command");
     const shellID = request.id || `shell_loop_${randomUUID().replaceAll("-", "")}`;
-    const child = spawn2(request.command, { cwd: directory, shell: true, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(request.command, { cwd: directory, shell: true, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     const task = { child, settled: false, timedOut: false, cancelled: false, stdout: "", stderr: "" };
     task.closed = new Promise((resolve) => {
       task.resolve = resolve;
@@ -5372,15 +1203,15 @@ import { randomUUID as randomUUID2 } from "crypto";
 // src/source/opencode2/native-companion.js
 import { createHash } from "crypto";
 import { lstat, readFile } from "fs/promises";
-import path10 from "path";
+import path from "path";
 async function nativeGoalReservesSession(directory, sessionID) {
   const shard = createHash("sha256").update(sessionID).digest("hex").slice(0, 32);
-  const root = path10.resolve(directory);
+  const root = path.resolve(directory);
   const parts = [".opencode", "goals", `${shard}.json`];
   let file = root;
   try {
     for (const part of parts) {
-      file = path10.join(file, part);
+      file = path.join(file, part);
       const info = await lstat(file);
       if (info.isSymbolicLink())
         return true;
@@ -5444,7 +1275,7 @@ ${lines.join(`
 init_process();
 init_job_workspace();
 import { stat } from "fs/promises";
-import path11 from "path";
+import path6 from "path";
 function createNativeJobPolicy(options = {}) {
   const now = options.now || Date.now;
   const run = options.runShellCommand || runShellCommand;
@@ -5478,7 +1309,7 @@ function createNativeJobPolicy(options = {}) {
     }
     if (job.stopFile) {
       try {
-        await stat(path11.resolve(scope.directory, job.stopFile));
+        await stat(path6.resolve(scope.directory, job.stopFile));
         job.enabled = false;
         return pause(job, "stop-file");
       } catch (error) {
@@ -6083,6 +1914,385 @@ ${await policy.buildPrompt(scope.directory, job)}`, delivery: "queue", metadata:
   return Object.freeze({ onEvent, wake, dispose, scheduledCount: () => [...scopes.values()].filter((scope) => scope.timer !== undefined).length });
 }
 
+// src/source/runtime/events.js
+function record(value) {
+  return value && typeof value === "object" ? value : undefined;
+}
+function text(value) {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+function envelope(input) {
+  const outer = record(input);
+  if (!outer)
+    return;
+  const payload = record(outer.payload);
+  if (payload && text(payload.type)) {
+    return { directory: text(outer.directory), event: payload };
+  }
+  const wrappedEvent = record(outer.event);
+  if (wrappedEvent && text(wrappedEvent.type)) {
+    return { directory: text(outer.directory), event: wrappedEvent };
+  }
+  if (!text(outer.type))
+    return;
+  return { directory: undefined, event: outer };
+}
+function freezeEvent(value) {
+  return Object.freeze(value);
+}
+function normalizeOpenCodeEvent(input) {
+  const parsed = envelope(input);
+  if (!parsed)
+    return;
+  const { directory, event } = parsed;
+  const properties = record(event.properties) || {};
+  if (event.type === "session.status") {
+    const sessionID = text(properties.sessionID);
+    const status = text(record(properties.status)?.type);
+    if (!sessionID || !status)
+      return;
+    return freezeEvent({ kind: "session", action: "status", sessionID, directory, status });
+  }
+  if (event.type === "session.idle" || event.type === "session.compacted") {
+    const sessionID = text(properties.sessionID);
+    if (!sessionID)
+      return;
+    return freezeEvent({
+      kind: "session",
+      action: event.type === "session.idle" ? "idle" : "compacted",
+      sessionID,
+      directory
+    });
+  }
+  if (event.type === "session.created" || event.type === "session.updated" || event.type === "session.deleted") {
+    const info = record(properties.info);
+    const sessionID = text(info?.id);
+    if (!sessionID)
+      return;
+    return freezeEvent({
+      kind: "session",
+      action: event.type.slice("session.".length),
+      sessionID,
+      directory: directory || text(info?.directory),
+      parentID: text(info?.parentID)
+    });
+  }
+  if (event.type === "session.error") {
+    const sessionID = text(properties.sessionID);
+    if (!sessionID)
+      return;
+    return freezeEvent({ kind: "session", action: "error", sessionID, directory });
+  }
+  if (event.type === "message.updated") {
+    const info = record(properties.info);
+    const sessionID = text(info?.sessionID);
+    const messageID = text(info?.id);
+    const role = text(info?.role);
+    if (!sessionID || !messageID || !role)
+      return;
+    const time = record(info?.time);
+    return freezeEvent({
+      kind: "message",
+      action: "updated",
+      sessionID,
+      directory,
+      messageID,
+      role,
+      completedAt: Number.isFinite(time?.completed) ? time.completed : undefined,
+      finish: text(info?.finish)
+    });
+  }
+  if (event.type === "command.executed") {
+    const sessionID = text(properties.sessionID);
+    const name = text(properties.name);
+    if (!sessionID || !name)
+      return;
+    return freezeEvent({
+      kind: "command",
+      action: "executed",
+      sessionID,
+      directory,
+      name,
+      arguments: typeof properties.arguments === "string" ? properties.arguments : "",
+      messageID: text(properties.messageID)
+    });
+  }
+  if (event.type === "server.instance.disposed") {
+    const disposedDirectory = directory || text(properties.directory);
+    if (!disposedDirectory)
+      return;
+    return freezeEvent({ kind: "server", action: "disposed", directory: disposedDirectory });
+  }
+  return;
+}
+
+// src/source/runtime/session-registry.js
+var DEFAULT_SESSION_STALE_MS = 12 * 60 * 60 * 1000;
+function sessionKey(sessionID) {
+  return String(sessionID || "").trim();
+}
+function createSessionRegistry({ now = Date.now, staleAfterMs = DEFAULT_SESSION_STALE_MS } = {}) {
+  if (typeof now !== "function")
+    throw new TypeError("session registry requires a clock function");
+  if (!Number.isFinite(staleAfterMs) || staleAfterMs < 0)
+    throw new TypeError("session registry requires a non-negative staleAfterMs");
+  const sessions = new Map;
+  function observeExternal(sessionID, runtime) {
+    const key = sessionKey(sessionID);
+    if (!key)
+      throw new TypeError("session registry requires a session ID");
+    const seenAt = Number(now());
+    if (!Number.isFinite(seenAt))
+      throw new TypeError("session registry clock must return a finite number");
+    const entry = Object.freeze({ sessionID: key, runtime, seenAt });
+    sessions.set(key, entry);
+    return entry;
+  }
+  function peek(sessionID) {
+    return sessions.get(sessionKey(sessionID));
+  }
+  function remove(sessionID, expectedRuntime) {
+    const key = sessionKey(sessionID);
+    const current = sessions.get(key);
+    if (!current)
+      return false;
+    if (arguments.length > 1 && current.runtime !== expectedRuntime)
+      return false;
+    return sessions.delete(key);
+  }
+  function pruneStale(at = now()) {
+    const timestamp = Number(at);
+    if (!Number.isFinite(timestamp))
+      throw new TypeError("session registry prune time must be finite");
+    const removed = [];
+    for (const [key, entry] of sessions) {
+      if (timestamp - entry.seenAt < staleAfterMs)
+        continue;
+      sessions.delete(key);
+      removed.push(key);
+    }
+    return removed;
+  }
+  function entries() {
+    return [...sessions.values()];
+  }
+  return Object.freeze({
+    observeExternal,
+    peek,
+    remove,
+    pruneStale,
+    entries
+  });
+}
+
+// src/source/runtime/scope.js
+function createRuntimeScope() {
+  const controller = new AbortController;
+  const cleanups = new Set;
+  let disposed = false;
+  function track(cleanup) {
+    if (typeof cleanup !== "function")
+      throw new TypeError("runtime scope cleanup must be a function");
+    if (disposed) {
+      cleanup();
+      return () => false;
+    }
+    const entry = { cleanup };
+    cleanups.add(entry);
+    let tracked = true;
+    return () => {
+      if (!tracked)
+        return false;
+      tracked = false;
+      return cleanups.delete(entry);
+    };
+  }
+  function guard(callback) {
+    if (typeof callback !== "function")
+      throw new TypeError("runtime scope guard requires a function");
+    return function(...args) {
+      if (disposed)
+        return;
+      return callback.apply(this, args);
+    };
+  }
+  function dispose(reason) {
+    if (disposed)
+      return false;
+    disposed = true;
+    controller.abort(reason);
+    const errors = [];
+    for (const entry of [...cleanups].reverse()) {
+      cleanups.delete(entry);
+      try {
+        entry.cleanup();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length)
+      throw new AggregateError(errors, "runtime scope cleanup failed");
+    return true;
+  }
+  return Object.freeze({
+    signal: controller.signal,
+    isActive: () => !disposed,
+    track,
+    guard,
+    dispose
+  });
+}
+
+// src/source/runtime/timers.js
+function createOwnedTimer(scope, callback, delay, repeat, api, ref) {
+  if (!scope?.isActive?.())
+    return;
+  let active = true;
+  let release;
+  let handle;
+  const invoke = scope.guard((...args) => {
+    if (!active)
+      return;
+    if (!repeat) {
+      active = false;
+      release?.();
+    }
+    callback(...args);
+  });
+  handle = repeat ? api.setInterval(invoke, delay) : api.setTimeout(invoke, delay);
+  release = scope.track(() => {
+    if (repeat)
+      api.clearInterval(handle);
+    else
+      api.clearTimeout(handle);
+  });
+  if (!ref)
+    handle?.unref?.();
+  return Object.freeze({
+    handle,
+    cancel() {
+      if (!active)
+        return false;
+      active = false;
+      if (repeat)
+        api.clearInterval(handle);
+      else
+        api.clearTimeout(handle);
+      release();
+      return true;
+    }
+  });
+}
+function createRuntimeTimers(scope, api = globalThis) {
+  return Object.freeze({
+    timeout(callback, delay, options = {}) {
+      return createOwnedTimer(scope, callback, delay, false, api, options.ref !== false);
+    },
+    interval(callback, delay, options = {}) {
+      return createOwnedTimer(scope, callback, delay, true, api, options.ref !== false);
+    }
+  });
+}
+
+// src/source/runtime/session-manager.js
+function defaultRuntimeFactory({ sessionID, timerAPI }) {
+  const scope = createRuntimeScope();
+  return Object.freeze({
+    sessionID,
+    scope,
+    timers: createRuntimeTimers(scope, timerAPI),
+    dispose: (reason) => scope.dispose(reason)
+  });
+}
+function validateRuntime(runtime, sessionID) {
+  if (!runtime || runtime.sessionID !== sessionID)
+    throw new TypeError("session runtime factory must preserve the session ID");
+  if (typeof runtime?.scope?.isActive !== "function")
+    throw new TypeError("session runtime factory must provide an active scope");
+  if (typeof runtime.dispose !== "function")
+    throw new TypeError("session runtime factory must provide dispose()");
+  return runtime;
+}
+function createSessionRuntimeManager({
+  now = Date.now,
+  staleAfterMs = DEFAULT_SESSION_STALE_MS,
+  timerAPI = globalThis,
+  runtimeFactory = defaultRuntimeFactory
+} = {}) {
+  if (typeof runtimeFactory !== "function")
+    throw new TypeError("session runtime manager requires a runtime factory");
+  const registry = createSessionRegistry({ now, staleAfterMs });
+  let disposed = false;
+  function observeExternal(sessionID) {
+    if (disposed)
+      throw new Error("session runtime manager is disposed");
+    const key = String(sessionID || "").trim();
+    if (!key)
+      throw new TypeError("session runtime manager requires a session ID");
+    const current = registry.peek(key);
+    const runtime = current?.runtime?.scope?.isActive?.() ? current.runtime : validateRuntime(runtimeFactory({ sessionID: key, timerAPI }), key);
+    registry.observeExternal(key, runtime);
+    return runtime;
+  }
+  function peek(sessionID) {
+    return registry.peek(sessionID)?.runtime;
+  }
+  function entries() {
+    return registry.entries();
+  }
+  function remove(sessionID, { expectedRuntime, reason } = {}) {
+    const current = registry.peek(sessionID);
+    if (!current)
+      return false;
+    if (expectedRuntime !== undefined && current.runtime !== expectedRuntime)
+      return false;
+    if (!registry.remove(sessionID, current.runtime))
+      return false;
+    current.runtime.dispose(reason);
+    return true;
+  }
+  function pruneStale(at = now()) {
+    const before = new Map(registry.entries().map((entry) => [entry.sessionID, entry.runtime]));
+    const removed = registry.pruneStale(at);
+    const errors = [];
+    for (const sessionID of removed) {
+      try {
+        before.get(sessionID)?.dispose("stale-session");
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length)
+      throw new AggregateError(errors, "stale session cleanup failed");
+    return removed;
+  }
+  function dispose(reason) {
+    if (disposed)
+      return false;
+    disposed = true;
+    const errors = [];
+    for (const entry of registry.entries()) {
+      registry.remove(entry.sessionID, entry.runtime);
+      try {
+        entry.runtime.dispose(reason);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length)
+      throw new AggregateError(errors, "session runtime manager cleanup failed");
+    return true;
+  }
+  return Object.freeze({
+    observeExternal,
+    peek,
+    entries,
+    remove,
+    pruneStale,
+    dispose
+  });
+}
+
 // src/source/opencode2/commands.js
 var OPENCODE_LOOP_V2_COMMANDS = Object.freeze({
   loop: Object.freeze({
@@ -6565,7 +2775,7 @@ var OpenCodeLoopNativePlugin = Object.freeze({
       if (closed)
         throw new Error("Native Loop is disposed");
       if (["loop-help", "loop-doctor", "loop-logs"].includes(name)) {
-        const text = name === "loop-logs" ? (await readSmallTextFile(path12.join(stateDir(directory), "loop.log"), 2000000)).split(`
+        const text = name === "loop-logs" ? (await readSmallTextFile(path7.join(stateDir(directory), "loop.log"), 2000000)).split(`
 `).slice(-60).join(`
 `) || "No Loop log entries." : name === "loop-doctor" ? `Native OpenCode Loop
 Host: ${ctx.app?.version || "unknown"}
@@ -6648,8 +2858,8 @@ function inspectOpenCode2Context(ctx) {
 
 // src/source/opencode2/diagnostics.js
 init_state();
-import { promises as fs8 } from "fs";
-import path13 from "path";
+import { promises as fs4 } from "fs";
+import path8 from "path";
 var OPENCODE_LOOP_V2_HELP_TEXT = [
   "OpenCode Loop V2 experimental help:",
   "/loop 0s --max-runs 2 <prompt>                  autonomous prompt loop",
@@ -6678,7 +2888,7 @@ function createOpenCode2DiagnosticsRuntime(options = {}) {
   if (typeof options.prompt !== "function")
     throw new TypeError("V2 diagnostics runtime requires prompt()");
   const readState2 = typeof options.readState === "function" ? options.readState : readState;
-  const readFile = typeof options.readFile === "function" ? options.readFile : (...args) => fs8.readFile(...args);
+  const readFile = typeof options.readFile === "function" ? options.readFile : (...args) => fs4.readFile(...args);
   const runtimeVersion = options.runtimeVersion || process.version;
   const runtimePlatform = options.runtimePlatform || process.platform;
   async function exportState(event) {
@@ -6729,7 +2939,7 @@ ${JSON.stringify(state, null, 2)}
       return { handled: false, reason: "missing-scope" };
     let text = "No OpenCode 2 Loop log found.";
     try {
-      const raw = await readFile(path13.join(stateDir(scope.directory), "loop.log"), "utf8");
+      const raw = await readFile(path8.join(stateDir(scope.directory), "loop.log"), "utf8");
       const lines = String(raw || "").trim().split(/\r?\n/).filter((line) => line.includes('"v2":true')).slice(-80);
       if (lines.length)
         text = lines.join(`
@@ -7519,16 +3729,20 @@ var OpenCodeLoopV2ExperimentalPlugin = {
 var experimental_default = OpenCodeLoopV2ExperimentalPlugin;
 
 // src/source/server.js
+async function OpenCodeLoopPlugin(...args) {
+  const { default: legacy } = await import(new URL("./v1.js", import.meta.url).href);
+  return legacy(...args);
+}
 var OPENCODE_LOOP_PLUGIN_ID = "@bybrawe/opencode-loop";
 var OpenCodeLoopPluginModule = Object.freeze({
   id: OPENCODE_LOOP_PLUGIN_ID,
-  server: v1_default,
+  server: OpenCodeLoopPlugin,
   setup: (context) => experimental_default.setup(context)
 });
 var server_default = OpenCodeLoopPluginModule;
 export {
   OPENCODE_LOOP_PLUGIN_ID,
-  v1_default as OpenCodeLoopPlugin,
+  OpenCodeLoopPlugin,
   OpenCodeLoopPluginModule,
   experimental_default as OpenCodeLoopV2ExperimentalPlugin,
   server_default as default
