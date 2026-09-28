@@ -2,7 +2,7 @@ name: Verify and apply native entry isolation
 on:
   push:
     branches: [main]
-    paths: [.github/workflows/v2-native-entry-migration.yml]
+    paths: [.github/workflows/v2-native-entry-migration.yml, .github/scripts/migrate-native-entry.mjs]
   workflow_dispatch:
 permissions:
   contents: read
