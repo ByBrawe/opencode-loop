@@ -17,9 +17,9 @@ This is a source/main plan, not an npm publication announcement or a claim of co
 
 | Phase | Work in both repositories | Acceptance | Status |
 | --- | --- | --- | --- |
-| 1. Native package boundary | Remove eager V1 runtime imports from V2 server entries; provide explicit /v2 and /v1 exports; retain lazy legacy delegation | Import real source/bundled/installed V2 entries with V1 resolution deliberately rejected; input/options/errors remain intact for explicit V1 calls | Implemented in this batch; validated before commit |
-| 2. Installation and CLI | Audit plugins object options, JSONC/multiple configs, combined Goal+Loop install, native local files, daemon/CLI executable detection and help text | Clean install/update/uninstall on Windows/Linux; preserve custom files and options; exercise actual V2 CLI | Pending full audit |
-| 3. Runtime boundaries | Audit foreground admission, event generations, compaction ordering, retry/timeout, subscription teardown and disposal failures | Both terminal event orders; duplicate/replayed events; no abort of native compaction; no overlapping continuation or leaked registration | Pending additional audit |
+| 1. Native package boundary | Remove eager V1 runtime imports from V2 server entries; provide explicit /v2 and /v1 exports; retain lazy legacy delegation | Import real source/bundled/installed V2 entries with V1 resolution deliberately rejected; input/options/errors remain intact for explicit V1 calls | Implemented; keep regression coverage |
+| 2. Installation and CLI | Audit plugins object options, JSONC/multiple configs, combined Goal+Loop install, native local files, daemon/CLI executable detection and help text | Clean install/update/uninstall on Windows/Linux; preserve custom files and options; exercise actual V2 CLI | Native-default installation and CLI selection present; full audit remains |
+| 3. Runtime boundaries | Audit foreground admission, event generations, compaction ordering, retry/timeout, subscription teardown and disposal failures | Both terminal event orders; duplicate/replayed events; no abort of native compaction; no overlapping continuation or leaked registration | Process-tree cleanup regressions fixed; remaining lifecycle audit pending |
 | 4. Goal parity and handoff | Recheck completion evidence, waiting-user/Plan/delegated-task gates, telemetry/budget accounting, unit rotation and crash phases | Same Goal identity/evidence/usage across handoff; one owner after restart; final unit does not rotate; stale proofs cannot complete | Existing implementation; re-audit planned |
 | 5. Loop command/policy parity | Compare every documented command and option against the native path, including shell/command aliases, watches, stop conditions, preflight/verify/postrun and checkpoints | Feature matrix with real tests; unsupported combinations rejected before durable job creation | Pending full audit |
 | 6. Joint validation and release | Test current main+main and pinned supported hosts; production tarballs; update docs/version/release notes once scope is complete | Batch CI + independent package loading + joint real-host canaries; distinguish deterministic local-provider evidence from live-model field testing | Pending final sign-off |
@@ -52,11 +52,37 @@ compatibility/release review. No Goal or Loop persistence schema is changed.
 - scripts/native-entry-test.mjs: native import isolation plus per-host lazy legacy delegation and error propagation.
 - Goal: test/native-entry.test.mjs and the production-only scripts/package-smoke.mjs consumer.
 - Loop: scripts/package-native-smoke.mjs and native-v2-ci on Windows and Linux.
-- Validation runs must also pass the existing regression suites and an exact OpenCode 2.0.18 real-host canary before committing.
+- Validation runs must also pass the existing regression suites and an exact OpenCode 2.0.18 real-host canary before committing generated bundles.
+
+## Runtime audit batch: process-tree cleanup
+
+Audit inputs: Goal 612612d01e1dd71c19994fe27ef03be58a38f7bf and Loop ac1b0633f3dda19b5a6aef3ebf0516cef2d12753.
+Both native command runners cancelled SIGKILL escalation when their shell closed.
+A descendant in the same process group could ignore SIGTERM and redirect all
+stdio, making shell close arrive while it continued mutating workspace files.
+
+- Goal unit timeout and stdout overflow now await process-group termination before rejecting. Unit failure remains non-evidence and cannot manufacture a new unit identity.
+- Loop timeout and disposal retain escalation until it runs; shell terminal delivery waits for cleanup. Concurrent dispose callers await the same cleanup promise.
+- The change only targets plugin-spawned host commands. It never aborts an OpenCode model, tool, or compaction operation, and does not change Goal/Loop storage schemas.
+- Windows awaits taskkill completion and falls back to direct-child termination if taskkill fails. This is not a sandbox or a guarantee for descendants which deliberately escape process supervision.
+
+Local Linux / Node 22.16.0 evidence before remote CI: exact original source blobs
+5fe72b11fd8c516eb8df5da5e73889d7bdc66bd1 (Loop) and
+a75635cdb4e90c038dd2305b4441982826e9f3e0 (Goal) reproduced the live-descendant failure.
+After the fix, seven existing Loop shell cases, three new Loop cleanup cases,
+and two new Goal timeout/overflow cases passed. The isolated Goal module also
+passed strict TypeScript compilation. These local results do not replace the
+full repository, Windows, package, or real-host CI gates.
+
+Coverage: Loop scripts/native-process-tree-test.mjs is included by the existing
+native-shell-test.mjs runner; Goal test/native-process-tree.test.mjs is discovered
+by the existing test runner. Fixtures assert that descendant heartbeats stop,
+not merely that the parent exits, and clean up their own processes on failure.
 
 ## Known follow-up checks (not claimed resolved)
 
 - Loop README still contains historical experimental-V2 wording; reconcile it against a complete native feature matrix, not a blanket parity assertion.
-- Audit default CLI/daemon host selection separately from plugin entry loading.
+- Finish installation/daemon review, including Windows argument handling and project-scoped session selection.
+- Audit retryable prompt admission, event provenance/generations and registration disposal independently from process cleanup.
 - Recheck V2 handoff and dedicated-Goal reservation together against both final main heads.
 - Retain historical closed-issue evidence; do not equate a closed issue with completion of this entire migration plan.

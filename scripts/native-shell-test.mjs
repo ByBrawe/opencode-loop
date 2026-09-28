@@ -35,3 +35,4 @@ await scenario('process.stdout.write("A".repeat(100000))', (event) => { assert.e
 await scenario('process.exitCode=0', async (_, host) => { await host.dispose(); await assert.rejects(host.dispatch({ sessionID: "s", command: "echo nope" }), /disposed/) })
 assert.throws(() => createNativeShellHost({}), /requires directory/)
 console.log(`Native local shell lifecycle: ${cases + 1} scenarios passed`)
+await import("./native-process-tree-test.mjs")
