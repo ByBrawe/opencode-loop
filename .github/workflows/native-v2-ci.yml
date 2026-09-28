@@ -46,7 +46,17 @@ jobs:
       - run: npm test
       - run: npm pack --dry-run
       - name: Verify standalone native bundle has no V1 SDK import
-        run: node -e "const fs=require('node:fs'); const s=fs.readFileSync('src/native.js','utf8'); if (/from\s+[\"']@opencode-ai\/plugin/.test(s)) throw Error('native bundle imports V1 SDK')"
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs'
+          import assert from 'node:assert/strict'
+          const source = readFileSync('src/native.js', 'utf8')
+          assert.doesNotMatch(source, /from\s+["']@opencode-ai\/plugin/, 'native bundle imports V1 SDK')
+          const { default: plugin } = await import('./src/native.js')
+          assert.equal(typeof plugin.setup, 'function')
+          console.log('Native bundle is independently loadable without V1 SDK imports')
+          JS
 
   real-native-pair:
     name: OpenCode 2.0.18 with Loop and Goal
@@ -63,7 +73,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: ByBrawe/opencode-goal
-          ref: 1875cb1be9fe481f46b93100860d653abb09d68b
+          ref: 794ff2b953032d17a373072356129aa686eb9d0c
           path: companion-goal
           persist-credentials: false
       - name: Build exact Goal companion
