@@ -45,3 +45,15 @@ jobs:
             git commit -m 'fix: never abort core compaction from persisted user events (#164)'
             git push origin HEAD:refs/heads/fix/opencode2-native-compaction-164
           fi
+      - name: Install exact native host
+        run: npm install --prefix /tmp/native-host --package-lock=false @opencode/cli@2.0.18 @opencode/plugin@2.0.18
+      - name: Inspect public admission interfaces
+        run: |
+          ls -l /tmp/native-host/node_modules/.bin
+          find /tmp/native-host/node_modules -path '*/generated/types.d.ts' -exec grep -A 22 -E '^export (type|interface) Session(Inbox(Cancel|List|Get)|Prompt|Shell)(Input|Output)' {} \;
+      - name: Run real OpenCode 2 native Loop canary
+        run: |
+          BINARY=/tmp/native-host/node_modules/.bin/opencode2
+          if [ ! -x "$BINARY" ]; then BINARY=/tmp/native-host/node_modules/.bin/opencode; fi
+          "$BINARY" --version
+          OPENCODE2_BINARY="$BINARY" OPENCODE2_CURRENT_COMMAND_FIELDS=1 node scripts/opencode2-loop-canary.mjs
