@@ -373,9 +373,12 @@ async function testActionRoutingAndSafety() {
     await fs.writeFile(path.join(h.directory, "empty.md"), "fallback context", "utf8")
     await h.command("loop-command", "0s --prompt-file empty.md")
     await h.command("loop-now", "command")
-    const state = await h.readState()
-    assert.equal(state.jobs[0].paused, true)
-    assert.equal(state.jobs[0].lastFailureReason, "empty_command")
+    const state = await waitForValue(async () => {
+      const candidate = await h.readState()
+      return candidate.jobs[0]?.paused === true && candidate.jobs[0]?.lastFailureReason === "empty_command" ? candidate : undefined
+    }, 2_000)
+    assert.equal(state?.jobs[0]?.paused, true)
+    assert.equal(state?.jobs[0]?.lastFailureReason, "empty_command")
   } finally {
     await h.cleanup()
   }
@@ -384,9 +387,12 @@ async function testActionRoutingAndSafety() {
   try {
     await h.command("loop-compact", "0s")
     await h.command("loop-now", "compact")
-    const state = await h.readState()
-    assert.equal(state.jobs[0].paused, true)
-    assert.equal(state.jobs[0].lastFailureReason, "compact_failed")
+    const state = await waitForValue(async () => {
+      const candidate = await h.readState()
+      return candidate.jobs[0]?.paused === true && candidate.jobs[0]?.lastFailureReason === "compact_failed" ? candidate : undefined
+    }, 2_000)
+    assert.equal(state?.jobs[0]?.paused, true)
+    assert.equal(state?.jobs[0]?.lastFailureReason, "compact_failed")
   } finally {
     await h.cleanup()
   }
