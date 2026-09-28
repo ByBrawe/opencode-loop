@@ -1,25 +1,47 @@
-name: V2 migration workspace
+name: Verify native migration repair
 on:
   push:
     branches: [fix/opencode2-native-compaction-164]
-    paths: [.github/workflows/v2-migration-workspace.yml]
+    paths:
+      - .github/workflows/v2-migration-workspace.yml
+      - .github/scripts/repair-*.mjs
 permissions:
-  contents: read
+  contents: write
+concurrency:
+  group: isolated-native-repair
+  cancel-in-progress: false
 jobs:
-  workspace:
+  repair:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/opencode2-native-compaction-164
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
-      - name: Install pinned official native host
-        run: npm install --prefix host --package-lock=false @opencode/cli@2.0.18 @opencode/plugin@2.0.18
-      - name: Archive public host packages only
-        run: tar -czf v2-native-host.tar.gz host
-      - uses: actions/upload-artifact@v4
-        with:
-          name: v2-native-host
-          path: v2-native-host.tar.gz
-          retention-days: 1
-          if-no-files-found: error
+      - uses: oven-sh/setup-bun@v2
+      - run: npm ci
+      - name: Apply provenance repair once
+        run: |
+          if ! grep -q 'compactingSessions' src/source/runtime/goal-steering.js; then
+            node .github/scripts/repair-164.mjs
+          fi
+      - name: Build and verify exact repaired bundles
+        run: |
+          npm run build:plugin
+          npm run check
+          node scripts/goal-compaction-safety-test.mjs
+          node scripts/goal-steering-test.mjs
+          node scripts/compaction-runtime-test.mjs
+          node scripts/server-entry-test.mjs
+      - name: Commit verified source and generated bundles to repair branch only
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/source/runtime/goal-steering.js src/source/legacy-v1.js src/index.js src/server.js package.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'fix: never abort core compaction from persisted user events (#164)'
+            git push origin HEAD:refs/heads/fix/opencode2-native-compaction-164
+          fi
