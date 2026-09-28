@@ -24,6 +24,8 @@ jobs:
         with:
           node-version: '22'
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
       - run: npm ci
       - name: Apply native source and installer migrations
         run: |
@@ -35,6 +37,25 @@ jobs:
           if ! grep -q 'nativeGoalReservesSession' src/source/opencode2/native-runtime.js; then
             node .github/scripts/finalize-native.mjs
           fi
+      - name: Bind compatibility steering to the trusted resolved message ID
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync, writeFileSync } from 'node:fs'
+          import assert from 'node:assert/strict'
+          const file = 'src/source/legacy-v1.js'
+          let source = readFileSync(file, 'utf8')
+          for (const [before, after] of [
+            ['"chat.message": async (input) => {', '"chat.message": async (input, output) => {'],
+            ['messageID: input?.messageID,', 'messageID: input?.messageID || output?.message?.id,'],
+          ]) {
+            if (source.includes(after)) continue
+            assert.equal(source.split(before).length, 2, `Expected exact admission anchor: ${before}`)
+            source = source.replace(before, after)
+          }
+          writeFileSync(file, source)
+          const messages = 'src/source/opencode/messages.js'
+          writeFileSync(messages, readFileSync(messages, 'utf8').replace('pending guard; message.updated will later bind and retain the real ID.', 'pending guard. Prefer the resolved ID from the trusted hook output.'))
+          JS
       - name: Build actual shipping bundles
         run: npm run build:plugin
       - name: Syntax and complete regression suite
@@ -43,6 +64,10 @@ jobs:
           npm test > /tmp/loop-test.log 2>&1 || { tail -120 /tmp/loop-test.log; exit 1; }
           tail -35 /tmp/loop-test.log
           npm pack --dry-run
+      - name: Verify the compatibility path without restoring unsafe message-event aborts
+        run: |
+          npm install --no-save --package-lock=false opencode-ai@1.18.33
+          npm run canary:host
       - name: Install exact native host
         run: npm install --prefix /tmp/native-host --package-lock=false @opencode/cli@2.0.18
       - name: Real native Loop bundled host lifecycle
@@ -54,7 +79,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: ByBrawe/opencode-goal
-          ref: ce151534b2f2df3e5074b192bf82430cfb008f8e
+          ref: 794ff2b953032d17a373072356129aa686eb9d0c
           path: companion-goal
           persist-credentials: false
       - name: Build pinned native Goal companion
@@ -77,7 +102,7 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src scripts package.json package-lock.json README.md CHANGELOG.md
           if ! git diff --cached --quiet; then
-            git commit -m 'feat: activate verified native V2 Loop and protect compaction ownership'
+            git commit -m 'fix: preserve queued legacy steering with trusted resolved admission IDs'
             git push origin HEAD:refs/heads/main
           fi
           echo "Verified native Loop head: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
