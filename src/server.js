@@ -1094,6 +1094,7 @@ function createNativeShellHost({ directory, onTerminal, onError = () => {} } = {
     throw new TypeError("Native shell requires directory and onTerminal");
   const tasks = new Set;
   let disposed = false;
+  let disposal;
   const report = (error) => {
     try {
       onError(error);
@@ -1101,35 +1102,52 @@ function createNativeShellHost({ directory, onTerminal, onError = () => {} } = {
   };
   const tail = (text, data) => (text + String(data)).slice(-64000);
   function terminate(task) {
+    if (task.termination)
+      return task.termination;
     if (task.settled || !task.child.pid)
-      return;
-    if (process.platform === "win32") {
-      const killer = spawn("taskkill", ["/pid", String(task.child.pid), "/t", "/f"], { windowsHide: true, stdio: "ignore" });
-      killer.once("error", (error) => {
-        report(error);
-        try {
-          task.child.kill();
-        } catch {}
-      });
-    } else {
-      try {
-        process.kill(-task.child.pid, "SIGTERM");
-      } catch {
-        try {
-          task.child.kill("SIGTERM");
-        } catch {}
-      }
-      if (!task.escalation)
-        task.escalation = setTimeout(() => {
+      return Promise.resolve();
+    const pid = task.child.pid;
+    task.termination = new Promise((resolve) => {
+      if (process.platform === "win32") {
+        const fallback = () => {
           try {
-            process.kill(-task.child.pid, "SIGKILL");
-          } catch {
-            try {
-              task.child.kill("SIGKILL");
-            } catch {}
-          }
+            task.child.kill();
+          } catch {}
+        };
+        try {
+          const killer = spawn("taskkill", ["/pid", String(pid), "/t", "/f"], { windowsHide: true, stdio: "ignore" });
+          killer.once("error", (error) => {
+            report(error);
+            fallback();
+            resolve();
+          });
+          killer.once("close", (code) => {
+            if (code !== 0)
+              fallback();
+            resolve();
+          });
+        } catch (error) {
+          report(error);
+          fallback();
+          resolve();
+        }
+      } else {
+        try {
+          process.kill(-pid, "SIGTERM");
+        } catch {
+          try {
+            task.child.kill("SIGTERM");
+          } catch {}
+        }
+        setTimeout(() => {
+          try {
+            process.kill(-pid, "SIGKILL");
+          } catch {}
+          resolve();
         }, 1000);
-    }
+      }
+    });
+    return task.termination;
   }
   async function dispatch(request) {
     if (disposed)
@@ -1155,10 +1173,10 @@ function createNativeShellHost({ directory, onTerminal, onError = () => {} } = {
       terminate(task);
     }, Number.isFinite(delay) && delay > 0 ? Math.min(delay, 2147483647) : 120000);
     task.timer.unref?.();
-    child.once("close", (code, signal) => {
+    child.once("close", async (code, signal) => {
       task.settled = true;
       clearTimeout(task.timer);
-      clearTimeout(task.escalation);
+      await task.termination;
       tasks.delete(task);
       const event = {
         kind: "shell",
@@ -1183,16 +1201,19 @@ function createNativeShellHost({ directory, onTerminal, onError = () => {} } = {
       });
     });
   }
-  async function dispose() {
-    if (disposed)
-      return;
+  function dispose() {
+    if (disposal)
+      return disposal;
     disposed = true;
     const active = [...tasks];
     for (const task of active) {
       task.cancelled = true;
       terminate(task);
     }
-    await Promise.allSettled(active.map((task) => task.closed));
+    disposal = Promise.allSettled(active.map((task) => task.closed)).then(() => {
+      return;
+    });
+    return disposal;
   }
   return Object.freeze({ dispatch, dispose, activeCount: () => tasks.size });
 }
@@ -2678,10 +2699,13 @@ function createOpenCode2EventBridge({
     });
     const cleanup = cleanupRegistration(registration);
     registration = undefined;
-    if (cleanup)
-      await cleanup();
-    sessionDirectories.clear();
-    disposeManager(reason);
+    try {
+      if (cleanup)
+        await cleanup();
+    } finally {
+      sessionDirectories.clear();
+      disposeManager(reason);
+    }
     return true;
   }
   return Object.freeze({
@@ -2734,6 +2758,7 @@ var OpenCodeLoopNativePlugin = Object.freeze({
     if (!directory)
       throw new Error("Native OpenCode Loop requires a project directory");
     const registrations = [];
+    const lifecycleAbort = new AbortController;
     const prompt = (request) => ctx.session.prompt({ ...request, delivery: request.delivery || "queue", metadata: { ...request.metadata, opencode_loop_v2: true } });
     const shellHost = createNativeShellHost({
       directory,
@@ -2761,15 +2786,36 @@ var OpenCodeLoopNativePlugin = Object.freeze({
       appendLoopLog(directory, "v2-native-event-error", { message: String(error?.message || error) });
     } });
     let closed = false;
-    async function dispose() {
-      if (closed)
-        return;
+    let disposeTask;
+    function dispose() {
+      if (disposeTask)
+        return disposeTask;
       closed = true;
-      await runtime.dispose();
-      await shellHost.dispose();
-      await bridge.dispose("native-plugin-disposed");
-      for (const registration of registrations.reverse())
-        await cleanup(registration);
+      disposeTask = Promise.resolve().then(async () => {
+        const errors = [];
+        const stopped = bridge.dispose("native-plugin-disposed").catch((error) => {
+          errors.push(error);
+        });
+        lifecycleAbort.abort();
+        for (const action of [() => runtime.dispose(), () => shellHost.dispose()]) {
+          try {
+            await action();
+          } catch (error) {
+            errors.push(error);
+          }
+        }
+        await stopped;
+        for (const registration of [...registrations].reverse()) {
+          try {
+            await cleanup(registration);
+          } catch (error) {
+            errors.push(error);
+          }
+        }
+        if (errors.length)
+          throw new AggregateError(errors, "Native Loop cleanup failed");
+      });
+      return disposeTask;
     }
     async function execute({ name, sessionID, arguments: argumentsText }) {
       if (closed)
@@ -2814,7 +2860,7 @@ Use /loop-status for paused/admitted job state.` : HELP;
           } });
         }
       }));
-      await bridge.attach(() => ctx.event.subscribe());
+      await bridge.attach(() => ctx.event.subscribe({ signal: lifecycleAbort.signal }));
       await appendLoopLog(directory, "v2-native-ready", { host: ctx.app?.version || "unknown" });
       return dispose;
     } catch (error) {

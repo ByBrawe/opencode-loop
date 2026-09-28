@@ -98,3 +98,16 @@ The official guide says V1 and V2 now share the `opencode` command. Do not infer
 an API generation from a filename; the daemon probes the selected executable.
 Documentation/search caches can show earlier beta examples. Validate API fields
 against the exact host tag and a real-host canary before adopting them.
+
+## Native CLI input and location boundaries
+
+OpenCode 2.0.18 `packages/cli/src/run/run.ts` resolves PWD before cwd and reads
+non-TTY stdin even when a message is supplied in argv. Native daemon lookup and
+run children therefore receive PWD set to the explicit project; native run
+stdin is closed, with stdout/stderr still inherited. An open parent input pipe
+cannot stall the daemon or silently append unrelated text to its prompt.
+Explicit V1 mode retains its inherited stdin behavior. Credentials still travel
+only through the environment. The uncertain-failure no-replay rule is unchanged.
+
+`native-cli-io-test.mjs` covers wrong caller PWD, an open parent pipe, and explicit
+V1 input compatibility; `native-cli-host-canary.mjs` covers the real 2.0.18 CLI.

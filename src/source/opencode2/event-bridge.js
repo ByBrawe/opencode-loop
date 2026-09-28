@@ -165,9 +165,13 @@ export function createOpenCode2EventBridge({
 
     const cleanup = cleanupRegistration(registration)
     registration = undefined
-    if (cleanup) await cleanup()
-    sessionDirectories.clear()
-    disposeManager(reason)
+    try {
+      if (cleanup) await cleanup()
+    } finally {
+      // A host unsubscription failure must not keep our per-session scopes alive.
+      sessionDirectories.clear()
+      disposeManager(reason)
+    }
     return true
   }
 

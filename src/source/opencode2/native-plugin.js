@@ -41,6 +41,7 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
     const directory = String(ctx.location?.directory || ctx.options?.directory || "").trim()
     if (!directory) throw new Error("Native OpenCode Loop requires a project directory")
     const registrations = []
+    const lifecycleAbort = new AbortController()
     const prompt = (request) => ctx.session.prompt({ ...request, delivery: request.delivery || "queue", metadata: { ...request.metadata, opencode_loop_v2: true } })
     const shellHost = createNativeShellHost({
       directory,
@@ -61,13 +62,26 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
     })
     const bridge = createOpenCode2EventBridge({ directory, allowInboxCommands: false, onEvent: (event) => runtime.onEvent(event), onError: (error) => { void appendLoopLog(directory, "v2-native-event-error", { message: String(error?.message || error) }) } })
     let closed = false
-    async function dispose() {
-      if (closed) return
+    let disposeTask
+    function dispose() {
+      if (disposeTask) return disposeTask
       closed = true
-      await runtime.dispose()
-      await shellHost.dispose()
-      await bridge.dispose("native-plugin-disposed")
-      for (const registration of registrations.reverse()) await cleanup(registration)
+      disposeTask = Promise.resolve().then(async () => {
+        const errors = []
+        // Stop accepting events before aborting next(); iterator.return() alone
+        // cannot wake an async generator blocked on a public server stream.
+        const stopped = bridge.dispose("native-plugin-disposed").catch((error) => { errors.push(error) })
+        lifecycleAbort.abort()
+        for (const action of [() => runtime.dispose(), () => shellHost.dispose()]) {
+          try { await action() } catch (error) { errors.push(error) }
+        }
+        await stopped
+        for (const registration of [...registrations].reverse()) {
+          try { await cleanup(registration) } catch (error) { errors.push(error) }
+        }
+        if (errors.length) throw new AggregateError(errors, "Native Loop cleanup failed")
+      })
+      return disposeTask
     }
     async function execute({ name, sessionID, arguments: argumentsText }) {
       if (closed) throw new Error("Native Loop is disposed")
@@ -102,7 +116,7 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
           } })
         }
       }))
-      await bridge.attach(() => ctx.event.subscribe())
+      await bridge.attach(() => ctx.event.subscribe({ signal: lifecycleAbort.signal }))
       await appendLoopLog(directory, "v2-native-ready", { host: ctx.app?.version || "unknown" })
       return dispose
     } catch (error) {

@@ -86,3 +86,19 @@ not merely that the parent exits, and clean up their own processes on failure.
 - Audit retryable prompt admission, event provenance/generations and registration disposal independently from process cleanup.
 - Recheck V2 handoff and dedicated-Goal reservation together against both final main heads.
 - Retain historical closed-issue evidence; do not equate a closed issue with completion of this entire migration plan.
+
+## Native lifecycle audit: stream cancellation and teardown
+
+Official reference: https://opencode.ai/v2/docs/build/plugins/migrate-v1.
+The native event subscription now receives an AbortSignal. Unload stops event
+admission before aborting a pending next(), drains owned runtime work, cleans
+local shell processes, and attempts every registration disposer even when one
+fails. Concurrent/repeated unload shares the same promise and reports collected
+cleanup errors. Setup rollback preserves the original initialization error.
+The event bridge always disposes its session scopes even if unsubscribe rejects.
+No native model, tool, or compaction execution is aborted by this cleanup.
+
+`native-lifecycle-test.mjs` exercises pending streams, repeated disposal, cleanup
+failure, setup failure and session-scope teardown. This is a runtime audit batch,
+not complete feature parity or a package publication. Remaining plan phases stay
+open until their independent acceptance evidence is complete.
