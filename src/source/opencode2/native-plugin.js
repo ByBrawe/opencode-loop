@@ -33,7 +33,7 @@ async function cleanup(value) {
 }
 
 export const OpenCodeLoopNativePlugin = Object.freeze({
-  id: "bybrawe.opencode-loop.native",
+  id: "@bybrawe/opencode-loop",
   async setup(ctx) {
     for (const [label, fn] of [["session.prompt", ctx?.session?.prompt], ["session.hook", ctx?.session?.hook], ["event.subscribe", ctx?.event?.subscribe], ["command.transform", ctx?.command?.transform]]) {
       if (typeof fn !== "function") throw new Error(`Native OpenCode Loop requires ${label}; use OpenCode 2.0.18 or newer.`)
@@ -58,9 +58,9 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
       // cancel() returns void. The durable inbox.cancelled event, not this
       // response alone, proves that an undelivered input can be refunded.
       cancel: typeof ctx.session.inbox?.cancel === "function" ? async (request) => { await ctx.session.inbox.cancel(request); return false } : undefined,
-      onError: (error) => { void appendLoopLog(directory, "v2-native-error", { message: String(error?.message || error) }) },
+      onError: (error) => { void appendLoopLog(directory, "v2-native-error", { message: String(error?.message || error) }).catch(() => {}) },
     })
-    const bridge = createOpenCode2EventBridge({ directory, allowInboxCommands: false, onEvent: (event) => runtime.onEvent(event), onError: (error) => { void appendLoopLog(directory, "v2-native-event-error", { message: String(error?.message || error) }) } })
+    const bridge = createOpenCode2EventBridge({ directory, allowInboxCommands: false, onEvent: (event) => runtime.onEvent(event), onError: (error) => { void appendLoopLog(directory, "v2-native-event-error", { message: String(error?.message || error) }).catch(() => {}) } })
     let closed = false
     let disposeTask
     function dispose() {

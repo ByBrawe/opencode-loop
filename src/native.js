@@ -2748,7 +2748,7 @@ async function cleanup(value) {
     await value.unsubscribe();
 }
 var OpenCodeLoopNativePlugin = Object.freeze({
-  id: "bybrawe.opencode-loop.native",
+  id: "@bybrawe/opencode-loop",
   async setup(ctx) {
     for (const [label, fn] of [["session.prompt", ctx?.session?.prompt], ["session.hook", ctx?.session?.hook], ["event.subscribe", ctx?.event?.subscribe], ["command.transform", ctx?.command?.transform]]) {
       if (typeof fn !== "function")
@@ -2779,11 +2779,11 @@ var OpenCodeLoopNativePlugin = Object.freeze({
         return false;
       } : undefined,
       onError: (error) => {
-        appendLoopLog(directory, "v2-native-error", { message: String(error?.message || error) });
+        appendLoopLog(directory, "v2-native-error", { message: String(error?.message || error) }).catch(() => {});
       }
     });
     const bridge = createOpenCode2EventBridge({ directory, allowInboxCommands: false, onEvent: (event) => runtime.onEvent(event), onError: (error) => {
-      appendLoopLog(directory, "v2-native-event-error", { message: String(error?.message || error) });
+      appendLoopLog(directory, "v2-native-event-error", { message: String(error?.message || error) }).catch(() => {});
     } });
     let closed = false;
     let disposeTask;
