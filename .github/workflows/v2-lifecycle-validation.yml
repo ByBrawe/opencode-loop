@@ -2,6 +2,7 @@ name: V2 lifecycle candidate
 
 on:
   push:
+    branches: [main]
     paths: ['.github/workflows/v2-lifecycle-validation.yml']
   workflow_dispatch:
 
@@ -10,6 +11,7 @@ permissions:
 
 jobs:
   validate:
+    if: github.repository == 'ByBrawe/opencode-loop' && github.ref == 'refs/heads/main'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 18
     permissions:
@@ -19,13 +21,13 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: '22'
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: '1.4.2'
       - run: npm ci
@@ -52,24 +54,25 @@ jobs:
             echo 'Regression unexpectedly passed on the original source'
             exit 1
           fi
-          cat "$RUNNER_TEMP/baseline.log"
+          tail -90 "$RUNNER_TEMP/baseline.log"
           grep -q 'native CLI binds PWD' "$RUNNER_TEMP/baseline.log"
-          grep -q 'native CLI receives EOF' "$RUNNER_TEMP/baseline.log"
-          grep -q 'native unload aborts a pending' "$RUNNER_TEMP/baseline.log"
+          grep -q 'not ok.*native CLI receives EOF' "$RUNNER_TEMP/baseline.log"
+          grep -q 'not ok.*native unload aborts a pending' "$RUNNER_TEMP/baseline.log"
           python "$RUNNER_TEMP/v2-candidate.py" fix
-      - name: Build and validate corrected source
+      - name: Build and validate combined corrected source
         shell: bash
         run: |
           npm run build:plugin
-          npm run check
-          npm test
+          npm run check > "$RUNNER_TEMP/check.log" 2>&1 || { tail -80 "$RUNNER_TEMP/check.log"; exit 1; }
+          npm test > "$RUNNER_TEMP/tests.log" 2>&1 || { tail -150 "$RUNNER_TEMP/tests.log"; exit 1; }
+          tail -80 "$RUNNER_TEMP/tests.log"
           npm run package:smoke
           git diff --check
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         if: matrix.os == 'ubuntu-latest'
         with:
           repository: ByBrawe/opencode-goal
-          ref: 612612d01e1dd71c19994fe27ef03be58a38f7bf
+          ref: da4b1c1745e4fa76cf38f982c9582adf880fc7eb
           path: companion-goal
           persist-credentials: false
       - name: Exact real-host and joint-installer validation
@@ -86,7 +89,7 @@ jobs:
           export OPENCODE_GOAL_V2_PLUGIN_URL="file://$GITHUB_WORKSPACE/companion-goal/dist/server.js"
           node scripts/opencode2-loop-canary.mjs
           node scripts/native-cli-host-canary.mjs
-      - name: Store verified source blobs without updating any branch
+      - name: Store verified combined source blobs without updating any branch
         if: matrix.os == 'ubuntu-latest'
         shell: bash
         env:
@@ -105,5 +108,6 @@ jobs:
             if (blob.sha !== expected) throw new Error('verified source digest mismatch')
             console.log(`VERIFIED_FILE ${path} ${blob.sha}`)
           }
+          console.log(`CHECKOUT ${process.env.GITHUB_SHA}; GOAL da4b1c1745e4fa76cf38f982c9582adf880fc7eb`)
           console.log('No branch or commit was modified by this job.')
           JS
