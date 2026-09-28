@@ -73,7 +73,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: ByBrawe/opencode-goal
-          ref: 794ff2b953032d17a373072356129aa686eb9d0c
+          ref: 2c21251d65e0f2c2df291f76bd4e92e325934b46
           path: companion-goal
           persist-credentials: false
       - name: Build exact Goal companion
