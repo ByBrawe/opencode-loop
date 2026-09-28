@@ -31,22 +31,25 @@ jobs:
         with:
           bun-version: '1.4.2'
       - run: npm ci
-      - name: Load immutable command parity candidate
+      - name: Load immutable command and schedule candidates
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           node --input-type=module <<'JS'
           import { writeFileSync } from 'node:fs'
-          const response = await fetch('https://api.github.com/repos/ByBrawe/opencode-loop/git/blobs/1b1f37eb874e93fda38b018b340303dde236da51', { headers: { Authorization: `Bearer ${process.env.GH_TOKEN}` } })
-          if (!response.ok) throw new Error(`recipe HTTP ${response.status}`)
-          const blob = await response.json()
-          writeFileSync(`${process.env.RUNNER_TEMP}/command-parity.py`, Buffer.from(blob.content, 'base64'))
+          for (const [name, sha] of [['command-parity', '1b1f37eb874e93fda38b018b340303dde236da51'], ['schedule-parity', '689da5c464c7467518e6c0cb3c0178654eb14faf']]) {
+            const response = await fetch(`https://api.github.com/repos/ByBrawe/opencode-loop/git/blobs/${sha}`, { headers: { Authorization: `Bearer ${process.env.GH_TOKEN}` } })
+            if (!response.ok) throw new Error(`recipe HTTP ${response.status}`)
+            const blob = await response.json()
+            writeFileSync(`${process.env.RUNNER_TEMP}/${name}.py`, Buffer.from(blob.content, 'base64'))
+          }
           JS
-      - name: Reproduce missing commands and mismatched preset defaults
+      - name: Reproduce missing commands and schedule parser gaps
         shell: bash
         run: |
           python "$RUNNER_TEMP/command-parity.py" tests
+          python "$RUNNER_TEMP/schedule-parity.py" tests
           node --check scripts/native-presets-test.mjs
           if node --test scripts/native-presets-test.mjs > "$RUNNER_TEMP/baseline.log" 2>&1; then
             cat "$RUNNER_TEMP/baseline.log"
@@ -56,12 +59,15 @@ jobs:
           tail -90 "$RUNNER_TEMP/baseline.log"
           grep -q 'not ok.*native loop-dev preserves' "$RUNNER_TEMP/baseline.log"
           grep -q 'not ok.*native loop-init creates' "$RUNNER_TEMP/baseline.log"
+          grep -q 'not ok.*native schedule grammar: every 1h' "$RUNNER_TEMP/baseline.log"
           python "$RUNNER_TEMP/command-parity.py" fix
+          python "$RUNNER_TEMP/schedule-parity.py" fix
       - name: Build and verify full corrected suites
         shell: bash
         run: |
           npm run build:plugin
           npm run check > "$RUNNER_TEMP/check.log" 2>&1 || { tail -90 "$RUNNER_TEMP/check.log"; exit 1; }
+          node --test scripts/native-presets-test.mjs
           npm test > "$RUNNER_TEMP/tests.log" 2>&1 || { tail -200 "$RUNNER_TEMP/tests.log"; exit 1; }
           tail -100 "$RUNNER_TEMP/tests.log"
           npm run package:smoke
@@ -73,7 +79,7 @@ jobs:
           ref: da4b1c1745e4fa76cf38f982c9582adf880fc7eb
           path: companion-goal
           persist-credentials: false
-      - name: Real 2.0.18 command registry, presets, progress initialization and daemon
+      - name: Real 2.0.18 command registry, schedules, progress initialization and daemon
         if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
@@ -96,7 +102,7 @@ jobs:
           node --input-type=module <<'JS'
           import { readFileSync } from 'node:fs'
           import { createHash } from 'node:crypto'
-          const paths = ['src/source/core/progress.js', 'src/source/opencode/loop-commands.js', 'src/source/opencode2/commands.js', 'src/source/opencode2/native-runtime.js', 'src/source/opencode2/native-plugin.js', 'scripts/native-presets-test.mjs', 'scripts/opencode2-loop-canary.mjs', 'package.json', 'docs/OPENCODE2-COMMAND-PARITY.md', 'src/index.js', 'src/server.js', 'src/native.js']
+          const paths = ['src/source/core/progress.js', 'src/source/core/jobs.js', 'src/source/opencode/loop-registration.js', 'src/source/opencode/loop-commands.js', 'src/source/opencode2/commands.js', 'src/source/opencode2/native-runtime.js', 'src/source/opencode2/native-plugin.js', 'scripts/native-presets-test.mjs', 'scripts/opencode2-loop-canary.mjs', 'package.json', 'docs/OPENCODE2-COMMAND-PARITY.md', 'src/index.js', 'src/server.js', 'src/native.js']
           for (const path of paths) {
             const data = readFileSync(path)
             const expected = createHash('sha1').update(`blob ${data.length}\0`).update(data).digest('hex')
