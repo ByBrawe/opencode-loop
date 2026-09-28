@@ -23,37 +23,34 @@ jobs:
           node-version: '22'
       - uses: oven-sh/setup-bun@v2
       - run: npm ci
-      - name: Apply provenance repair once
+      - name: Apply source migrations
         run: |
-          if ! grep -q 'compactingSessions' src/source/runtime/goal-steering.js; then
-            node .github/scripts/repair-164.mjs
-          fi
-      - name: Build and verify exact repaired bundles
-        run: |
-          npm run build:plugin
-          npm run check
-          node scripts/goal-compaction-safety-test.mjs
-          node scripts/goal-steering-test.mjs
-          node scripts/compaction-runtime-test.mjs
-          node scripts/server-entry-test.mjs
-      - name: Commit verified source and generated bundles to repair branch only
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/source/runtime/goal-steering.js src/source/legacy-v1.js src/index.js src/server.js package.json
-          if ! git diff --cached --quiet; then
-            git commit -m 'fix: never abort core compaction from persisted user events (#164)'
-            git push origin HEAD:refs/heads/fix/opencode2-native-compaction-164
-          fi
+          if ! grep -q 'compactingSessions' src/source/runtime/goal-steering.js; then node .github/scripts/repair-164.mjs; fi
+          node .github/scripts/native-migration.mjs
+          if [ -f .github/scripts/install-native.mjs ]; then node .github/scripts/install-native.mjs; fi
+      - name: Build exact native and compatibility bundles
+        run: npm run build:plugin && npm run check
+      - name: Native execution safety regressions
+        run: node scripts/native-v2-test.mjs
+      - name: Complete regression suite
+        run: npm test
       - name: Install exact native host
         run: npm install --prefix /tmp/native-host --package-lock=false @opencode/cli@2.0.18 @opencode/plugin@2.0.18
-      - name: Inspect public admission interfaces
+      - name: Inspect public lifecycle types
         run: |
-          ls -l /tmp/native-host/node_modules/.bin
-          find /tmp/native-host/node_modules -path '*/generated/types.d.ts' -exec grep -A 22 -E '^export (type|interface) Session(Inbox(Cancel|List|Get)|Prompt|Shell)(Input|Output)' {} \;
-      - name: Run real OpenCode 2 native Loop canary
+          find /tmp/native-host/node_modules -path '*/generated/types.d.ts' -exec node -e 'const s=require("fs").readFileSync(process.argv[1],"utf8");for(const n of ["SessionInboxUser","SessionInboxInfo","ShellInfo"]){let a=s.indexOf("export type "+n+" =");let b=s.indexOf("\nexport ",a+1);if(a>=0)console.log(s.slice(a,b<0?undefined:b));}' {} \;
+      - name: Real OpenCode 2.0.18 native canary
         run: |
           BINARY=/tmp/native-host/node_modules/.bin/opencode2
           if [ ! -x "$BINARY" ]; then BINARY=/tmp/native-host/node_modules/.bin/opencode; fi
           "$BINARY" --version
           OPENCODE2_BINARY="$BINARY" OPENCODE2_CURRENT_COMMAND_FIELDS=1 node scripts/opencode2-loop-canary.mjs
+      - name: Commit verified source and bundles to repair branch only
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src scripts package.json package-lock.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'feat: native V2 execution, compaction-safe ownership and migration'
+            git push origin HEAD:refs/heads/fix/opencode2-native-compaction-164
+          fi
