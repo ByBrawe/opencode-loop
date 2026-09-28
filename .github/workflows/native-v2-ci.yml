@@ -1,0 +1,82 @@
+name: Native V2 CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'scripts/**'
+      - 'package*.json'
+      - '.github/workflows/native-v2-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-v2-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-regressions:
+    name: native bundles and regressions (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+      - run: npm ci
+      - run: npm run build:plugin
+      - name: Verify all committed bundles match source
+        run: git diff --exit-code -- src/index.js src/server.js src/native.js
+      - run: npm run check
+      - run: npm test
+      - run: npm pack --dry-run
+      - name: Verify standalone native bundle has no V1 SDK import
+        run: node -e "const fs=require('node:fs'); const s=fs.readFileSync('src/native.js','utf8'); if (/from\s+[\"']@opencode-ai\/plugin/.test(s)) throw Error('native bundle imports V1 SDK')"
+
+  real-native-pair:
+    name: OpenCode 2.0.18 with Loop and Goal
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - run: npm ci
+      - uses: actions/checkout@v6
+        with:
+          repository: ByBrawe/opencode-goal
+          ref: 1875cb1be9fe481f46b93100860d653abb09d68b
+          path: companion-goal
+          persist-credentials: false
+      - name: Build exact Goal companion
+        working-directory: companion-goal
+        run: npm install && npm run build
+      - name: Install exact OpenCode host
+        run: npm install --prefix /tmp/native-host --package-lock=false @opencode/cli@2.0.18
+      - name: Real host with both shipped plugin entries
+        env:
+          OPENCODE2_BINARY: /tmp/native-host/node_modules/.bin/opencode2
+          OPENCODE2_CURRENT_COMMAND_FIELDS: '1'
+          OPENCODE2_NATIVE_REQUIRED: '1'
+        run: |
+          test "$("$OPENCODE2_BINARY" --version)" = 'opencode v2.0.18'
+          export OPENCODE_GOAL_V2_PLUGIN_URL="file://$GITHUB_WORKSPACE/companion-goal/dist/server.js"
+          node scripts/opencode2-loop-canary.mjs
