@@ -1,0 +1,48 @@
+name: V2 migration workspace
+on:
+  push:
+    branches: [fix/opencode2-native-compaction-164]
+    paths: [.github/workflows/v2-migration-workspace.yml]
+permissions:
+  contents: read
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: loop
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: ByBrawe/opencode-goal
+          path: goal
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - uses: oven-sh/setup-bun@v2
+      - name: Install locked development dependencies
+        run: |
+          (cd loop && npm ci)
+          (cd goal && npm ci)
+      - name: Archive public source and development dependencies only
+        run: |
+          mkdir workspace
+          (cd loop && git archive HEAD) | tar -x -C workspace
+          mv workspace opencode-loop
+          mv loop/node_modules opencode-loop/node_modules
+          mkdir opencode-goal
+          (cd goal && git archive HEAD) | tar -x -C opencode-goal
+          mv goal/node_modules opencode-goal/node_modules
+          mkdir tools
+          cp "$(command -v bun)" tools/bun
+          printf '%s\n' "loop=$(git -C loop rev-parse HEAD)" "goal=$(git -C goal rev-parse HEAD)" > source-refs.txt
+          tar -czf migration-workspace.tar.gz opencode-loop opencode-goal tools source-refs.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v2-migration-workspace
+          path: migration-workspace.tar.gz
+          retention-days: 1
+          if-no-files-found: error
