@@ -252,8 +252,14 @@ export const OpenCodeLoopPlugin = async ({ client, directory }) => {
     },
     "tool.execute.before": async (input) => { markToolCallActive(input) },
     "tool.execute.after": async (input) => { markToolCallFinished(input) },
-    "experimental.session.compacting": async (input) => { await noteLoopCompactionStarted(directory, input?.sessionID) },
+    "experimental.session.compacting": async (input) => {
+      goalSteeringRuntime.setCompacting(input?.sessionID)
+      await noteLoopCompactionStarted(directory, input?.sessionID)
+    },
     event: async ({ event }) => {
+      if (["session.compacted", "session.error", "session.deleted"].includes(event?.type)) {
+        goalSteeringRuntime.setCompacting(event?.properties?.sessionID || event?.properties?.info?.id, false)
+      }
       if (event.type === "session.compacted") await noteLoopCompactionCompleted(directory, client, event?.properties?.sessionID)
       updateSessionRelationshipFromEvent(event)
       if (event.type === "message.updated") updateSessionExecutionContext(event?.properties?.info)

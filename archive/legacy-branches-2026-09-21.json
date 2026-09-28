@@ -1,0 +1,492 @@
+{
+  "generatedAt": "2026-09-21",
+  "repository": "ByBrawe/opencode-loop",
+  "sourceMain": {
+    "sha": "37261a928440297da6d1168f58d9f8bb16655e46",
+    "tree": "db77619daaf1a8e8cb42c203edd107ef16a2ea38"
+  },
+  "archiveBranch": "archive/legacy-branches-2026-09-21",
+  "excludedOpenPrBranches": [],
+  "archivedBranches": [
+    {
+      "name": "adapter-contract-20260814",
+      "sha": "d8678874856768057f3624069ae6d56fbef0ab97"
+    },
+    {
+      "name": "adapter-current",
+      "sha": "896edcbc6b6e3533a0331c602c1f062c679eafa3"
+    },
+    {
+      "name": "adapter-ready",
+      "sha": "0c85d6e2cdc35eb64c1c8806ec502bb64ce7f345"
+    },
+    {
+      "name": "adapter-test",
+      "sha": "2841f2b1896952ae8cb36e0a2023a91da79a1ab6"
+    },
+    {
+      "name": "ci-opencode2-activation",
+      "sha": "48660543536a7ae884b6ffc5bc7eefa812727649"
+    },
+    {
+      "name": "ci-v2-probe-diagnostic",
+      "sha": "63c9a4550add55de2c89ae31051ab50e239458dc"
+    },
+    {
+      "name": "ci/canary-stability",
+      "sha": "072e7daf867126fd78f843e4ea6917537655cb4e"
+    },
+    {
+      "name": "compat-probe-20260814",
+      "sha": "d48e88565a8e1d46dabdb47732c86b2cba418c54"
+    },
+    {
+      "name": "diag-v2-host-api",
+      "sha": "b9677da38e50391b81f3065bd54b18ad8b7695af"
+    },
+    {
+      "name": "diagnose-test-hang",
+      "sha": "8291215465a0114934fa44d2b4261b5dc03cbfba"
+    },
+    {
+      "name": "docs/goal-mode-readme-final",
+      "sha": "917dcd58f36389678c6e9e7a588e1fe578689d6a"
+    },
+    {
+      "name": "experimental-opencode-v2-runtime",
+      "sha": "7ca1ee4111e2acba3735884be4a622564215a331"
+    },
+    {
+      "name": "experimental-opencode2",
+      "sha": "c02f3e0b7919ea859dfdb6672222553d118ffc4a"
+    },
+    {
+      "name": "experimental-opencode2-native",
+      "sha": "bee27192353fb35915517dfd61ef23b2b21a988c"
+    },
+    {
+      "name": "experimental-v2-adapter",
+      "sha": "8e3a2d0fc95f761c78df7eb7af079b4a18f01e19"
+    },
+    {
+      "name": "experimental-v2-probe",
+      "sha": "5368070573acb641a0e73398dbe8b36e16c531e2"
+    },
+    {
+      "name": "feat-v2-compact-runtime-20260814",
+      "sha": "19249fe3a91e775016b00ef1f0b0f7a9f4e30081"
+    },
+    {
+      "name": "feat/v2-shell-capability-boundary",
+      "sha": "518d58e9207a4ab8a59751e067830ce1c0b53296"
+    },
+    {
+      "name": "fix-compaction-event-finalize",
+      "sha": "7d214d29aabbef8e91185816681ca38d5a0db92d"
+    },
+    {
+      "name": "fix-v2-activation-import",
+      "sha": "9b1fef3d93bcb39ac6f2ea02ad5f5152ae36bd9c"
+    },
+    {
+      "name": "fix-v2-command-capability",
+      "sha": "719eeccd1c081e685e9aed5c0e2940d13a970142"
+    },
+    {
+      "name": "fix-v2-host-loader-wait",
+      "sha": "af164672e4be526c2f25d9a6d88dab91e9ad66fb"
+    },
+    {
+      "name": "fix-v2-next-import",
+      "sha": "2056ad5e20606f27b3499ee7d6edbdaaf2cbbc20"
+    },
+    {
+      "name": "fix/stable-status-no-now-due-clean",
+      "sha": "114a7a377e4c773bde79acce059bc7d4698a2cd9"
+    },
+    {
+      "name": "merge47",
+      "sha": "36be36ca9a03f45c95b75eda0f20a146f639cb87"
+    },
+    {
+      "name": "opencode2-experimental-contract",
+      "sha": "25a19dbbad1904859c15bfd003eb6230719e3877"
+    },
+    {
+      "name": "opencode2-v1-compat-canary",
+      "sha": "531da64e500edeac9fb37bbbb153bb8f9f1c943c"
+    },
+    {
+      "name": "probe-opencode-v2-agent-activation",
+      "sha": "dbda0885a1da4e9f8d02cdd527708077e4258cd3"
+    },
+    {
+      "name": "probe-opencode-v2-command-activation",
+      "sha": "b014c2fbe9471d8fa7d8ddd8e6f9a3b5fbe609f7"
+    },
+    {
+      "name": "probe-opencode-v2-contract",
+      "sha": "5119b01a2a3ceb128ac28b78e382428209cd438b"
+    },
+    {
+      "name": "probe-opencode-v2-discovery",
+      "sha": "ca1d26056f63bb5bf49955cb23024e9ec36604ca"
+    },
+    {
+      "name": "probe-opencode-v2-js-discovery",
+      "sha": "2637292d8a55c85565d5930f7fbcaa4545a3b1a8"
+    },
+    {
+      "name": "probe-opencode-v2-published-contract",
+      "sha": "b731ba396cde1a4c5611d9ea82c69b3d038108f0"
+    },
+    {
+      "name": "probe-opencode-v2-reference-activation",
+      "sha": "a50ca9af778f146c00b8c737aef95c2fee8b526c"
+    },
+    {
+      "name": "probe-opencode-v2-root-command",
+      "sha": "a4b6651a9f82ba16c5d41b7fa4b5e804d7a83d3d"
+    },
+    {
+      "name": "refactor-loop-args",
+      "sha": "a1573586c271a3a57af9e0459fa2cdbdee7823f0"
+    },
+    {
+      "name": "refactor-loop-host-bridge",
+      "sha": "6f5e671230b91d92e02c40484031b7651c73821e"
+    },
+    {
+      "name": "refactor-loop-host-bridge-v1",
+      "sha": "3d9d4e16e0f402d25c5df8a6f519bf0b52123333"
+    },
+    {
+      "name": "refactor-loop-host-bridge-v1-final",
+      "sha": "3d9d4e16e0f402d25c5df8a6f519bf0b52123333"
+    },
+    {
+      "name": "refactor-loop-host-final",
+      "sha": "3d9d4e16e0f402d25c5df8a6f519bf0b52123333"
+    },
+    {
+      "name": "refactor-loop-host-final2",
+      "sha": "3d9d4e16e0f402d25c5df8a6f519bf0b52123333"
+    },
+    {
+      "name": "refactor-loop-host-writer",
+      "sha": "3d9d4e16e0f402d25c5df8a6f519bf0b52123333"
+    },
+    {
+      "name": "refactor-loop-jobs",
+      "sha": "d30d383a78270fa1206e3a9b79a6a14b6c8046d0"
+    },
+    {
+      "name": "refactor-loop-jobs-retry",
+      "sha": "7b9303d2848ffd1f6908a49a05094234f8acc31e"
+    },
+    {
+      "name": "refactor-loop-sdk",
+      "sha": "3a0e85222a22b4e7f758993ae975b698276c0cad"
+    },
+    {
+      "name": "refactor-loop-session",
+      "sha": "86eb693a04dcd0b88354c8fb56e31793716e1d03"
+    },
+    {
+      "name": "refactor-loop-state",
+      "sha": "eeca1518c7fc0897739e3bcf8849fce5e5e9352d"
+    },
+    {
+      "name": "refactor/add-v1-entrypoint",
+      "sha": "64b8d77a9cff1bf7a377e8b51a851f4aa6c7cd40"
+    },
+    {
+      "name": "refactor/extract-parser-source",
+      "sha": "9eb2ef5e77fd4b7d21f1d4182862c312ae1db82a"
+    },
+    {
+      "name": "refactor/isolate-v1-adapter",
+      "sha": "3c4d82f883fd1deb4cd8ab77c2dedd4b916518ba"
+    },
+    {
+      "name": "refactor/single-file-bundle-gate",
+      "sha": "072e7daf867126fd78f843e4ea6917537655cb4e"
+    },
+    {
+      "name": "refactor/source-import-graph",
+      "sha": "732ad8bf74df492bd49d7384ffd7159a4bf9d7fd"
+    },
+    {
+      "name": "refactor/standardize-plugin-build",
+      "sha": "70792d7ab54cd074ee66b4648e3dcec63e0c61bc"
+    },
+    {
+      "name": "release-prep-0.5.28",
+      "sha": "a2c06171bfe3eddb9a33604bec355849a572f9b8"
+    },
+    {
+      "name": "release-prep-0.5.28-final",
+      "sha": "daa63c6b5604f6645c5465e139eceb51c2645852"
+    },
+    {
+      "name": "release/0.5.29-metadata",
+      "sha": "c0902b8406368b8316a85c91a60ddfc2a854f8ab"
+    },
+    {
+      "name": "release/0.5.35-prep",
+      "sha": "41c2fb998e5c49360129325e1862d51fef5a2cd9"
+    },
+    {
+      "name": "release/npm-v0.5.28",
+      "sha": "3d406a29adaa88c924d3a4fababd909af9e46333"
+    },
+    {
+      "name": "release/npm-v0.5.34",
+      "sha": "75ff5030ede4731b9975e41fa840b197f6b2bb04"
+    },
+    {
+      "name": "runtime-contract-scope",
+      "sha": "8bc83c2f681e84307474d921d79253fa5106afde"
+    },
+    {
+      "name": "runtime-event-routing",
+      "sha": "6ee80715872976dc07dfc9473e30059e810035d9"
+    },
+    {
+      "name": "runtime-observer-stage",
+      "sha": "0c4c783799b1ccfef274c30ad0e7c543f9c96593"
+    },
+    {
+      "name": "server-loader-contract",
+      "sha": "45ce335a3149987a4ceee31c819faa70e78b21bc"
+    },
+    {
+      "name": "session-host-runtime",
+      "sha": "6ee80715872976dc07dfc9473e30059e810035d9"
+    },
+    {
+      "name": "stage-v2a",
+      "sha": "5ab9c76f7fb63f68c8e03cf33251223732b4804a"
+    },
+    {
+      "name": "stage-v2b",
+      "sha": "fff341d67e90eb484f15042bcf936ab50900497d"
+    },
+    {
+      "name": "stage-v2c",
+      "sha": "385235afd899b3ccfda779a6693ce59d735a05f8"
+    },
+    {
+      "name": "test-suite-watchdog",
+      "sha": "8e4afabe883832913e7931c86b23bdbc544ff029"
+    },
+    {
+      "name": "test/goal-coexistence-host",
+      "sha": "51cfd08a231f1ce6f76df5abf989429106104c7f"
+    },
+    {
+      "name": "test/loop-goal-queued-steering-host",
+      "sha": "d29721f2a2fc645330fbf17d4db2e4ac461051fc"
+    },
+    {
+      "name": "test/npm-0.5.32-public-canary",
+      "sha": "98b20b1c236731655bf99dadab118e9855f2d877"
+    },
+    {
+      "name": "v2-activation-contract",
+      "sha": "beb1e890b1432ffe3807dbbc5838719d2c085f8f"
+    },
+    {
+      "name": "v2-activation-diagnostics",
+      "sha": "17f76e4c7d3f9b5afa14fc18bc9c416a9eb8f873"
+    },
+    {
+      "name": "v2-adapter-capability-gate",
+      "sha": "36413f36f4ffe6cce85cdf6ca074c174542288c7"
+    },
+    {
+      "name": "v2-adapter-current",
+      "sha": "0d0ae6045d680856bf0542702adccb9cb5f47708"
+    },
+    {
+      "name": "v2-adapter-prototype",
+      "sha": "b7444dca18f2303e21d1daefba10fec7849f9733"
+    },
+    {
+      "name": "v2-adapter-stage",
+      "sha": "7f4363d11c8ff5c1e1bba1d5b11666bf096ae54f"
+    },
+    {
+      "name": "v2-adapter-step1",
+      "sha": "f50d33c16248b361aade06212550be054870d0fb"
+    },
+    {
+      "name": "v2-capability-gate",
+      "sha": "4daf4df2d9e9aa78027f92b72d3d3409c31db679"
+    },
+    {
+      "name": "v2-compat-current",
+      "sha": "36af96679ace1fcca55def5a6a6c4d6e5ee08c92"
+    },
+    {
+      "name": "v2-context-integration-20260814",
+      "sha": "10670e728b785c7f46127f89b08c7b007bd600be"
+    },
+    {
+      "name": "v2-current-activation",
+      "sha": "69c885a0e19339e1e80cbe00024e1da7a22498c3"
+    },
+    {
+      "name": "v2-event-bridge",
+      "sha": "b109b16c934aeebc9c77fb9b216b4a85636e2913"
+    },
+    {
+      "name": "v2-event-cleanup",
+      "sha": "8945e8487eace90ead07920149da33345653baca"
+    },
+    {
+      "name": "v2-event-runtime-20260814",
+      "sha": "c22facf894a5f063d13612add06aa02b0a66dc58"
+    },
+    {
+      "name": "v2-host-adapter-factory",
+      "sha": "dc6a91a4a9718def1873bfcac9c20d84fa90394d"
+    },
+    {
+      "name": "v2-host-compat-20260814",
+      "sha": "a629fed439a70764e6f3ea8ffdb006c1d2df4c1b"
+    },
+    {
+      "name": "v2-host-contract",
+      "sha": "5204ce964727a08b909f74cc120a607c9b384712"
+    },
+    {
+      "name": "v2-host-contract-current",
+      "sha": "72df5ccb6ed6f563e03aacea5229cbb0106cfcf8"
+    },
+    {
+      "name": "v2-host-wire-current",
+      "sha": "36af96679ace1fcca55def5a6a6c4d6e5ee08c92"
+    },
+    {
+      "name": "v2-lifecycle-bridge",
+      "sha": "4daf4df2d9e9aa78027f92b72d3d3409c31db679"
+    },
+    {
+      "name": "v2-loader-via-ci",
+      "sha": "1f2275ab56c77ee8c97d47179c18f7860c06674e"
+    },
+    {
+      "name": "v2-loop-status",
+      "sha": "4199d7c2f9f8d06fb3a5c83a4b88f3082b7cc13d"
+    },
+    {
+      "name": "v2-loop-status-main",
+      "sha": "514d97ed7bdc616d1f270d13ca43d96c8d972b48"
+    },
+    {
+      "name": "v2-plain-plugin",
+      "sha": "cc1c40d1af828c8057cd47a8f24e33cadb11e196"
+    },
+    {
+      "name": "v2-prompt-contract-probe",
+      "sha": "6d6ddc2fdfd8ce09ec51507288c5ddae19527049"
+    },
+    {
+      "name": "v2-prompt-slice-20260814",
+      "sha": "79c43e39e1ffed55faf0dfd0505da61737cd90df"
+    },
+    {
+      "name": "v2-prompt-slice-clean",
+      "sha": "de1d3938a6ae9cb74a0b695fc71504487409573b"
+    },
+    {
+      "name": "v2-real-host-activation",
+      "sha": "9b1fef3d93bcb39ac6f2ea02ad5f5152ae36bd9c"
+    },
+    {
+      "name": "v2-real-host-canary",
+      "sha": "531da64e500edeac9fb37bbbb153bb8f9f1c943c"
+    },
+    {
+      "name": "v2-real-host-plugin-list",
+      "sha": "c62117a575850201ad0d4096dbc3035f534779b2"
+    },
+    {
+      "name": "v2-real-host-plugin-list-2",
+      "sha": "3da4e15bf72ddb6af61c192bb1bb02a7a909142b"
+    },
+    {
+      "name": "v2-real-host-sentinel",
+      "sha": "54a1c63db8cc48b29cd5890fb3004a45d0100ee5"
+    },
+    {
+      "name": "v2-real-loader-canary",
+      "sha": "6ee80715872976dc07dfc9473e30059e810035d9"
+    },
+    {
+      "name": "v2-real-loop-canary",
+      "sha": "8036a2dc5345839e0fb908adb810da5313e5e5fd"
+    },
+    {
+      "name": "v2-real-sentinel-activation",
+      "sha": "8d41b2b707a3a6bbef5242a78f11452c9e237161"
+    },
+    {
+      "name": "v2-runtime-adapter-contract",
+      "sha": "5204ce964727a08b909f74cc120a607c9b384712"
+    },
+    {
+      "name": "v2-runtime-canary",
+      "sha": "afc61e80c9373184042cb61f3e7e4e43bb6d337e"
+    },
+    {
+      "name": "v2-runtime-cycle",
+      "sha": "4cc47ce8329701aa01e86e128ef38a8d5e33ebbb"
+    },
+    {
+      "name": "v2-runtime-host-bridge",
+      "sha": "68dd0617fafd96c9f23ea8ea9459a9ada5edcab2"
+    },
+    {
+      "name": "v2-runtime-supervisor",
+      "sha": "aa6fdd6ff6d9556854ae6061c64816619619143d"
+    },
+    {
+      "name": "v2-self-contained-sentinel",
+      "sha": "e4a0223ada46e9473268db377dca8593704fb946"
+    },
+    {
+      "name": "v2-setup-check",
+      "sha": "85442d6b79d2300a10f2d3b217f5edfe4f0c8ef4"
+    },
+    {
+      "name": "v2-stable-compat-probe",
+      "sha": "9ee702362cb6da5bd883ca7789f93cfe56d3e267"
+    },
+    {
+      "name": "v2-status-tool",
+      "sha": "1ef6f181c5ebee421f87cef0beea13d8f1eced1b"
+    },
+    {
+      "name": "v2-stream-current",
+      "sha": "e2d62585ff9d2f57b110153673e6eeb3caaa0ebd"
+    },
+    {
+      "name": "v2-stream-fix",
+      "sha": "d27a9d67c6fe9c84cc65e75e94539cf20327a62c"
+    },
+    {
+      "name": "v2-stream-ready",
+      "sha": "c2a1175bc9c5320759cb6ca0f1d23294bcf29e81"
+    },
+    {
+      "name": "v2-wire-prompt-runtime",
+      "sha": "ae42abce1b1a65ecc4138d4f67542c3080988640"
+    },
+    {
+      "name": "verify/npm-0.5.31-registry",
+      "sha": "1f9b215d2d1fab8ac597a062e5bec41206f64cbd"
+    }
+  ]
+}

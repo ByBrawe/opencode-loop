@@ -62,6 +62,7 @@ export function createGoalSteeringRuntime(options = {}) {
     ? Number(options.seenUserMessageMs)
     : DEFAULT_SEEN_USER_MESSAGE_MS
 
+  const compactingSessions = new Set()
   const pendingSteering = new Map()
   const seenUserMessages = new Map()
 
@@ -134,7 +135,7 @@ export function createGoalSteeringRuntime(options = {}) {
 
     const active = getActiveRun(sessionID)
     const activeGoalIDs = new Set(goals.map((goal) => goal.id))
-    const canPreempt = active && activeGoalIDs.has(active.jobId) && isGoalJob(active.job) && typeof client?.session?.abort === "function"
+    const canPreempt = !compactingSessions.has(sessionID) && active && activeGoalIDs.has(active.jobId) && isGoalJob(active.job) && typeof client?.session?.abort === "function"
     let preempted = false
     let abortError = ""
 
@@ -154,7 +155,8 @@ export function createGoalSteeringRuntime(options = {}) {
           { path: { sessionID }, body: {} },
           { sessionID },
         )
-        clearActiveRun(sessionID)
+        // A foreground turn can replace the active run while abort settles.
+        if (getActiveRun(sessionID) === active) clearActiveRun(sessionID)
         preempted = true
       } catch (error) {
         pendingSteering.delete(sessionID)
@@ -177,10 +179,21 @@ export function createGoalSteeringRuntime(options = {}) {
     observeAssistantMessage(event)
     const user = userMessageFromEvent(event)
     if (!user) return undefined
-    return await handleUserMessage(directory, client, user)
+    // Persisted user-role events include core compaction markers, synthetic
+    // continuations and replayed history. Parts may not even be persisted yet.
+    // Only the pre-dispatch chat.message admission hook is steering authority.
+    if (alreadyHandled(user.sessionID, user.messageID)) return { handled: false, duplicate: true, ...user }
+    return { handled: false, reason: "untrusted-message-event", ...user }
+  }
+
+  function setCompacting(sessionID, value = true) {
+    if (typeof sessionID !== "string" || !sessionID) return
+    if (value) compactingSessions.add(sessionID)
+    else compactingSessions.delete(sessionID)
   }
 
   function clearSession(sessionID) {
+    compactingSessions.delete(sessionID)
     pendingSteering.delete(sessionID)
     const prefix = `${sessionID}\u0000`
     for (const key of seenUserMessages.keys()) if (key.startsWith(prefix)) seenUserMessages.delete(key)
@@ -193,6 +206,7 @@ export function createGoalSteeringRuntime(options = {}) {
     shouldSuppressIdle,
     hasPendingSteering: shouldSuppressIdle,
     pendingForSession,
+    setCompacting,
     clearSession,
   }
 }

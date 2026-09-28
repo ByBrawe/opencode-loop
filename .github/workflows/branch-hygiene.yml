@@ -35,12 +35,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           BRANCH_HYGIENE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          BRANCH_HYGIENE_ARCHIVE_REF: archive/legacy-branches-2026-09-21
           BRANCH_HYGIENE_DRY_RUN: "1"
         run: node scripts/branch-hygiene.mjs
 
   cleanup:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -49,7 +48,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
@@ -57,5 +56,40 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           BRANCH_HYGIENE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          BRANCH_HYGIENE_ARCHIVE_REF: archive/legacy-branches-2026-09-21
         run: node scripts/branch-hygiene.mjs
+      - name: Remove the two explicitly consolidated branches without losing history
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          main_sha="$(git rev-parse refs/remotes/origin/main)"
+          leases=()
+          deletions=()
+          while read -r branch expected; do
+            actual="$(git ls-remote --heads origin "refs/heads/$branch" | cut -f1)"
+            if [ -z "$actual" ]; then
+              echo "Already removed: $branch"
+              continue
+            fi
+            if [ "$actual" != "$expected" ]; then
+              echo "Refusing to delete changed branch: $branch" >&2
+              exit 1
+            fi
+            git merge-base --is-ancestor "$actual" "$main_sha"
+            leases+=("--force-with-lease=refs/heads/$branch:$expected")
+            deletions+=(":refs/heads/$branch")
+          done <<'BRANCHES'
+          fix/opencode2-native-compaction-164 e5e140f5fcfd42c79b02169bc748ef72b7b2610d
+          archive/legacy-branches-2026-09-21 3648323ec20527d4dbfbe4cc4c0a1d0cbb2a19f2
+          BRANCHES
+          if [ "${#deletions[@]}" -gt 0 ]; then
+            git push --atomic "${leases[@]}" origin "${deletions[@]}"
+          fi
+          {
+            echo '## Consolidated branch history'
+            echo 'Both recorded branch tips are retained as ancestors of main.'
+            echo 'Deletion uses exact SHA leases; concurrent changes are never discarded.'
+            echo '```'
+            git ls-remote --heads origin
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
