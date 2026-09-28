@@ -1,0 +1,91 @@
+name: Verify and apply native entry isolation
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/v2-native-entry-migration.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: v2-native-entry-migration
+  cancel-in-progress: false
+jobs:
+  validate:
+    if: github.repository == 'ByBrawe/opencode-loop' && github.ref == 'refs/heads/main'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: '1.4.2'
+      - run: npm ci
+      - name: Reproduce eager V1 loading and apply isolated native entries
+        run: node .github/scripts/migrate-native-entry.mjs
+      - run: npm run build:plugin
+      - run: npm run check
+      - run: npm test
+      - run: npm run package:smoke
+      - name: Existing legacy real-host contract
+        if: runner.os == 'Linux'
+        run: |
+          npm install --no-save --package-lock=false opencode-ai@1.18.33
+          npm run canary:host
+      - name: Exact native OpenCode host and bundled plugin
+        if: runner.os == 'Linux'
+        run: |
+          npm install -g @opencode/cli@2.0.18
+          test "$(opencode2 --version)" = 'opencode v2.0.18'
+          export OPENCODE2_BINARY="$(command -v opencode2)"
+          export OPENCODE2_CURRENT_COMMAND_FIELDS=1 OPENCODE2_NATIVE_REQUIRED=1
+          node scripts/opencode2-loop-canary.mjs
+      - name: Export only verified source and bundle changes
+        if: runner.os == 'Linux'
+        run: |
+          git add -N src scripts docs package.json .github/workflows/native-v2-ci.yml
+          git diff --check
+          git diff --binary > "$RUNNER_TEMP/native-entry.patch"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: runner.os == 'Linux'
+        with:
+          name: native-entry-verified-patch
+          path: ${{ runner.temp }}/native-entry.patch
+          if-no-files-found: error
+          retention-days: 1
+  promote:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: native-entry-verified-patch
+          path: ${{ runner.temp }}/native-entry-patch
+      - name: Commit the tested patch only if main has not advanced
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$GITHUB_SHA"
+          git apply --index --whitespace=error "$RUNNER_TEMP/native-entry-patch/native-entry.patch"
+          git rm .github/workflows/v2-native-entry-migration.yml .github/scripts/migrate-native-entry.mjs
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: isolate native V2 package entries from legacy runtime initialization'
+          git push origin HEAD:refs/heads/main
+          echo "Verified Windows/Linux native entry commit: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
