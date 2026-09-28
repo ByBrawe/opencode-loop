@@ -14,7 +14,7 @@ const packagedCommandCount = (await fs.readdir(path.join(root, "commands"))).fil
 
 async function runInstaller(config, cliArgs = []) {
   return await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [installer, ...cliArgs], {
+    const child = spawn(process.execPath, [installer, "--legacy-v1", ...cliArgs], {
       cwd: root,
       env: { ...process.env, OPENCODE_CONFIG_DIR: config },
       windowsHide: true,

@@ -61,6 +61,26 @@ export function normalizeOpenCode2NativeEvent(raw) {
     return Object.freeze({ kind: "session", action: "idle", sessionID, directory })
   }
 
+  if (type === "session.inbox.delivered" || type === "session.inbox.cancelled") {
+    if (!sessionID || !text(data.inboxID)) return undefined
+    return Object.freeze({ kind: "inbox", action: type.endsWith("delivered") ? "delivered" : "cancelled", sessionID, directory, inboxID: data.inboxID })
+  }
+  if (["session.compaction.started", "session.compaction.ended", "session.compaction.failed"].includes(type)) {
+    if (!sessionID) return undefined
+    return Object.freeze({ kind: "compaction", action: type.split(".").at(-1), sessionID, directory })
+  }
+  if (["session.execution.failed", "session.execution.interrupted"].includes(type)) {
+    if (!sessionID) return undefined
+    return Object.freeze({ kind: "session", action: "error", sessionID, directory, reason: type })
+  }
+  if (["session.shell.started", "session.shell.ended"].includes(type)) {
+    if (!sessionID) return undefined
+    const shell = record(data.shell) || {}
+    return Object.freeze({ kind: "shell", action: type.endsWith("started") ? "started" : "ended", sessionID, directory, shellID: shell.id, command: shell.command, code: typeof shell.exit === "number" ? shell.exit : -1, status: shell.status, metadata: shell.metadata })
+  }
+
+  if (type === "location.shutdown") return Object.freeze({ kind: "server", action: "disposed", directory })
+
   if (type === "session.created") {
     if (!sessionID) return undefined
     return Object.freeze({ kind: "session", action: "created", sessionID, directory: directory || text(record(data.location)?.directory) })

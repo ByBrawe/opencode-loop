@@ -1,9 +1,17 @@
 // @bun
-// src/source/legacy-v1.js
-import { tool } from "@opencode-ai/plugin/tool";
+var __esm = (fn, res, err) => () => {
+  if (fn)
+    try {
+      res = fn(fn = 0);
+    } catch (e) {
+      err = [e];
+    }
+  if (err)
+    throw err[0];
+  return res;
+};
 
 // src/source/core/args.js
-var DEFAULT_GOAL_MAX_NO_PROGRESS = 3;
 function now() {
   return Date.now();
 }
@@ -373,19 +381,12 @@ function parseLoopArgs(raw, defaults = {}) {
     return { ok: false, error: "Missing action. Example: /loop 0s continue from progress.md, /loop-goal ship the feature, or /loop 0s --prompt-file loop-prompt.md" };
   return { ok: true, job };
 }
-
-// src/source/core/process.js
-import { promises as fs2 } from "fs";
-import path2 from "path";
-import { spawn } from "child_process";
+var DEFAULT_GOAL_MAX_NO_PROGRESS = 3;
 
 // src/source/core/state.js
 import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
-var STATE_DIR = ".opencode/opencode-loop";
-var STATE_BASELINE = Symbol("opencode-loop-state-baseline");
-var stateWriteLocks = new Map;
 function stateDir(directory) {
   return path.join(directory, STATE_DIR);
 }
@@ -595,8 +596,16 @@ async function removeState(directory, sessionID) {
     } catch {}
   });
 }
+var STATE_DIR = ".opencode/opencode-loop", STATE_BASELINE, stateWriteLocks;
+var init_state = __esm(() => {
+  STATE_BASELINE = Symbol("opencode-loop-state-baseline");
+  stateWriteLocks = new Map;
+});
 
 // src/source/core/process.js
+import { promises as fs2 } from "fs";
+import path2 from "path";
+import { spawn } from "child_process";
 async function appendLoopLog(directory, line, extra = {}) {
   try {
     await ensureDir(stateDir(directory));
@@ -619,7 +628,9 @@ async function runProcess(command, args, cwd, timeoutMs = 60000) {
     const child = spawn(command, args, { cwd, shell: false, windowsHide: true });
     const stdout = [];
     const stderr = [];
+    let timedOut = false;
     const timer = setTimeout(() => {
+      timedOut = true;
       try {
         child.kill("SIGTERM");
       } catch {}
@@ -632,7 +643,7 @@ async function runProcess(command, args, cwd, timeoutMs = 60000) {
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      resolve({ code: code ?? 0, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") });
+      resolve({ code: timedOut ? 124 : code ?? -1, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") });
     });
   });
 }
@@ -641,7 +652,9 @@ async function runShellCommand(command, cwd, timeoutMs = 120000) {
     const child = spawn(command, [], { cwd, shell: true, windowsHide: true });
     const stdout = [];
     const stderr = [];
+    let timedOut = false;
     const timer = setTimeout(() => {
+      timedOut = true;
       try {
         child.kill("SIGTERM");
       } catch {}
@@ -654,7 +667,7 @@ async function runShellCommand(command, cwd, timeoutMs = 120000) {
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      resolve({ code: code ?? 0, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") });
+      resolve({ code: timedOut ? 124 : code ?? -1, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") });
     });
   });
 }
@@ -664,6 +677,699 @@ async function notifyJob(directory, job, reason) {
   const command = String(job.notifyCommand).replace(/\{reason\}/g, String(reason || "")).replace(/\{job\}/g, String(job.name || job.id || ""));
   await runShellCommand(command, directory, 60000);
 }
+var init_process = __esm(() => {
+  init_state();
+});
+
+// src/source/core/continuation.js
+function isContinuationShorthand(value) {
+  return CONTINUATION_SHORTHANDS.has(String(value || "").trim().toLowerCase().replace(/\s+/g, " "));
+}
+function isCompletionBoundedContinuation(value) {
+  const text = String(value || "").trim();
+  return COMPLETION_BOUNDED_PATTERNS.some((pattern) => pattern.test(text));
+}
+function isWaitingUserReply(value) {
+  const text = String(value || "").trim();
+  if (!text)
+    return false;
+  if (WAITING_USER_NEGATIONS.some((pattern) => pattern.test(text)))
+    return false;
+  if (NEXT_WORK_PATTERNS.some((pattern) => pattern.test(text)))
+    return false;
+  return WAITING_USER_PATTERNS.some((pattern) => pattern.test(text));
+}
+function isTerminalNoWorkReply(value) {
+  const text = String(value || "").trim();
+  if (!text || NEXT_WORK_PATTERNS.some((pattern) => pattern.test(text)))
+    return false;
+  const completed = TERMINAL_COMPLETION_PATTERNS.some((pattern) => pattern.test(text));
+  const noWork = TERMINAL_NO_WORK_PATTERNS.some((pattern) => pattern.test(text));
+  return completed && noWork;
+}
+function continuationProjectInstruction(value) {
+  if (!isContinuationShorthand(value) && !isCompletionBoundedContinuation(value))
+    return "";
+  const finish = isCompletionBoundedContinuation(value) ? " If you believe the project is finished, perform a fresh verification pass before declaring completion; report both that the project is complete and that no work remains only when you have concrete current evidence." : "";
+  return `Treat this as continuation of the current project and conversation, not a fresh task. Inspect the repository state, relevant files, TODO/progress notes, recent changes, and git status as needed to identify the next unfinished step. Continue from existing work, do not redo completed work, and verify meaningful changes when practical.${finish}`;
+}
+var CONTINUATION_SHORTHANDS, COMPLETION_BOUNDED_PATTERNS, TERMINAL_COMPLETION_PATTERNS, TERMINAL_NO_WORK_PATTERNS, NEXT_WORK_PATTERNS, WAITING_USER_PATTERNS, WAITING_USER_NEGATIONS;
+var init_continuation = __esm(() => {
+  CONTINUATION_SHORTHANDS = new Set([
+    "continue",
+    "continue.",
+    "continue working",
+    "keep going",
+    "go on",
+    "devam",
+    "devam et",
+    "devam et.",
+    "devam et bakal\u0131m"
+  ]);
+  COMPLETION_BOUNDED_PATTERNS = [
+    /\bbitene kadar\b/i,
+    /\b(?:tamamen|komple) projeyi bitir\b/i,
+    /\bi\u015Fi bitir\b/i,
+    /\buntil (?:it(?:'s| is) )?(?:done|complete|completed|finished)\b/i,
+    /\bfinish (?:the )?(?:project|task|work)\b/i,
+    /\bkeep going until\b/i
+  ];
+  TERMINAL_COMPLETION_PATTERNS = [
+    /proje tamamland[\u0131i](?=\s|[.,;:!\u2014-]|$)/i,
+    /\bproject (?:is )?(?:complete|completed|finished|done)\b/i,
+    /\b(?:task|work) (?:is )?(?:complete|completed|finished|done)\b/i
+  ];
+  TERMINAL_NO_WORK_PATTERNS = [
+    /yap[\u0131i]lacak (?:ba\u015Fka )?i\u015F yok(?=\s|[.,;:!\u2014-]|$)/i,
+    /ba\u015Fka (?:bir )?i\u015F (?:kalmad[\u0131i]|yok)(?=\s|[.,;:!\u2014-]|$)/i,
+    /\bnothing (?:else )?left to do\b/i,
+    /\bno (?:more|remaining) work\b/i,
+    /\bno known (?:bugs|issues)\b/i,
+    /\bzero known (?:bugs|issues)\b/i
+  ];
+  NEXT_WORK_PATTERNS = [
+    /\bnext(?: step| task)?\b/i,
+    /s[\u0131i]radaki(?=\s|[.,;:!\u2014-]|$)/i,
+    /sonraki(?=\s|[.,;:!\u2014-]|$)/i,
+    /kalan (?:i\u015F|i\u015Fler|todo|ad\u0131m)(?=\s|[.,;:!\u2014-]|$)/i,
+    /\bremaining (?:work|task|todo|step)/i,
+    /devam (?:edece\u011Fim|ediyorum|etmek gerek)(?=\s|[.,;:!\u2014-]|$)/i
+  ];
+  WAITING_USER_PATTERNS = [
+    /(?:^|\n)\s*onay bekleyenler\s*:/i,
+    /(?:^|\n)\s*(?:kullan\u0131c\u0131|user) (?:onay\u0131|onayi|aksiyonu|i\u015Flemi|islemi|eri\u015Fimi|erisimi) (?:bekleniyor|gerekiyor|gerekli)\b/i,
+    /\b(?:senin|sizin) (?:onay\u0131n|onay\u0131n\u0131z|onayiniz|aksiyonun|aksiyonunuz|eri\u015Fimin|erisimin) (?:bekleniyor|gerekiyor|gerekli)\b/i,
+    /\b(?:onay|eri\u015Fim|erisim|yetki) olmadan (?:devam edemem|ilerleyemem|i\u015Flem yapamam|islem yapamam)\b/i,
+    /(?:^|\n)\s*(?:waiting (?:for|on) (?:your|user) (?:approval|input|action|access|credentials?)|(?:approval|user action|access) (?:required|pending))\s*:?/i,
+    /\b(?:requires?|needs?) (?:your|user) (?:approval|input|action|access|credentials?)\b/i,
+    /\bblocked (?:pending|until|on) (?:your|user|approval|access|credentials?)\b/i
+  ];
+  WAITING_USER_NEGATIONS = [
+    /\b(?:onay|eri\u015Fim|erisim|yetki) (?:gerekmiyor|gerekli de\u011Fil|gerekli degil|beklenmiyor)\b/i,
+    /\bno (?:user )?(?:approval|input|action|access|credentials?) (?:is )?(?:needed|required|pending)\b/i
+  ];
+});
+
+// src/source/core/jobs.js
+function presetDefaults(name) {
+  if (name === "loop-compact")
+    return { intervalMs: parseDuration("200m"), action: "/compact", kind: "compact", name: "compact", immediate: false };
+  if (name === "loop-command" || name === "loop-cmd")
+    return { intervalMs: 0, kind: "command", name: "command", immediate: false };
+  if (name === "loop-prompt")
+    return { intervalMs: 0, kind: "prompt", name: "prompt", immediate: true };
+  if (name === "loop-ask")
+    return { intervalMs: 0, kind: "prompt", name: "ask", immediate: false };
+  if (name === "loop-shell")
+    return { intervalMs: 0, kind: "shell", name: "shell", immediate: false };
+  if (name === "loop-testfix")
+    return { intervalMs: 0, name: "testfix", safe: true, askNever: true, verifyCommand: "npm test", testfixPreset: true, action: "Run the project tests. Fix failures. Re-run the tests. Test command hint: npm test" };
+  if (name === "loop-progress")
+    return { intervalMs: 0, name: "progress", safe: true, askNever: true, progressFile: "progress.md", action: "Read progress.md and continue the next unfinished TODO. Mark completed TODOs with [x]. Add useful TODOs when you discover them." };
+  if (name === "loop-safe-dev")
+    return { intervalMs: 0, name: "safe-dev", safe: true, askNever: true, noOverlap: true, checkpointOnly: true, batch: 5, progressFile: "progress.md", action: "Develop the project from progress.md. Work in small safe batches. Mark completed TODOs with [x]. Add new ideas to progress.md. Run tests/lint/build if available." };
+  return { intervalMs: 0, name: "dev", askNever: true, progressFile: "progress.md", action: "Continue developing the project from progress.md. Mark completed TODOs with [x]. Add new ideas to progress.md. Run tests/lint/build if available." };
+}
+function jobLabel(job) {
+  const title = job.name ? `${job.name}: ` : "";
+  const kind = job.kind ? ` [${job.kind}]` : "";
+  const limit = job.maxRuns > 0 ? `, max ${job.maxRuns}` : "";
+  const runtime = job.maxRuntimeMs > 0 ? `, runtime ${durationToText(job.maxRuntimeMs)}` : "";
+  const timeout = job.timeoutMs > 0 ? `, timeout ${durationToText(job.timeoutMs)}` : "";
+  const compact = job.compactEveryRuns > 0 ? `, compact every ${job.compactEveryRuns} runs` : job.compactEveryMs > 0 ? `, compact every ${durationToText(job.compactEveryMs)}` : "";
+  const verify = job.verifyCommand ? ", verify" : "";
+  const preflight = job.preflightCommand ? ", preflight" : "";
+  const failures = job.maxFailures > 0 ? `, max failures ${job.maxFailures}` : "";
+  const noProgress = isGoalJob(job) && (job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0 ? `, max no-progress ${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS}` : "";
+  const stopFile = job.stopFile ? ", stop-file" : "";
+  const watch = job.watchPaths?.length ? `, watch ${job.watchPaths.join(",")}` : "";
+  const paused = job.paused ? ", paused" : "";
+  return `${title}${durationToText(job.intervalMs)}${kind} -> ${job.action || `[prompt-file: ${job.promptFile}]`}${limit}${runtime}${timeout}${compact}${verify}${preflight}${failures}${noProgress}${stopFile}${watch}${paused}`;
+}
+function matchJob(job, target, index) {
+  const text = String(target || "").trim();
+  if (!text || text.toLowerCase() === "all")
+    return true;
+  return job.id === text || job.name === text || String(index + 1) === text;
+}
+function actionKind(action, job = {}) {
+  const text = String(action || "").trim();
+  const forced = String(job.kind || "").trim().toLowerCase();
+  if (forced === "compact")
+    return "compact";
+  if (forced === "goal")
+    return "goal";
+  if (text === "/compact" || text === "/summarize")
+    return "compact";
+  if (forced === "prompt" || forced === "ask")
+    return "prompt";
+  if (forced === "command" || forced === "cmd" || forced === "slash")
+    return "command";
+  if (forced === "shell")
+    return "shell";
+  if (text.startsWith("/"))
+    return "command";
+  if (text.startsWith("!") || text.startsWith("$"))
+    return "shell";
+  return "prompt";
+}
+function decoratePrompt(job) {
+  const additions = [];
+  const continuation = continuationProjectInstruction(job.action);
+  if (continuation)
+    additions.push(continuation);
+  if (job.progressFile)
+    additions.push(`Use ${job.progressFile} as the main progress/TODO state file. Read it before choosing the next task and update it after work.`);
+  if (job.lastVerifyFailure)
+    additions.push("Previous verify command failed. Fix this before moving on. Failure summary: " + String(job.lastVerifyFailure).slice(0, 1200));
+  if (job.askNever)
+    additions.push("Do not ask the user questions. Make reasonable assumptions and continue. Only write a short BLOCKED note if truly blocked.");
+  if (job.safe)
+    additions.push("Safety rules: do not run destructive commands such as git reset, git clean, rm -rf, del /s, rmdir /s, force push, production deploys, production migrations, terraform destroy, or deleting user data. If such an action seems needed, write a BLOCKED note instead.");
+  if (job.batch > 0)
+    additions.push(`Batch rule: in this run, work on at most ${job.batch} unfinished TODO item(s). Mark completed items with [x].`);
+  if (job.quiet)
+    additions.push("Keep replies short. Summarize only what changed, tests run, and next step.");
+  if (job.testCommand)
+    additions.push(`After making changes, run this test/check command if applicable: ${job.testCommand}. If it fails, fix the failure and try again.`);
+  if (job.checkpointOnly || job.gitCheckpoint)
+    additions.push("Keep changes incremental and easy to review because the loop will create a checkpoint after the run.");
+  if (!additions.length)
+    return job.action;
+  return `${job.action}
+
+OpenCode loop instructions:
+- ${additions.join(`
+- `)}`;
+}
+function isGoalJob(job) {
+  return String(job?.kind || "").toLowerCase() === "goal";
+}
+function goalStatusText(job) {
+  const status = job?.goalStatus || (isGoalJob(job) ? "active" : "");
+  if (!status)
+    return "";
+  if (status === "completed")
+    return "completed";
+  if (status === "blocked")
+    return "blocked";
+  if (job?.paused)
+    return "paused";
+  return status;
+}
+var init_jobs = __esm(() => {
+  init_continuation();
+});
+
+// src/source/runtime/goal-report.js
+import { promises as fs3 } from "fs";
+import path3 from "path";
+function goalReportPath(directory, sessionID, job) {
+  return path3.join(stateDir(directory), GOAL_REPORT_DIR, `${safeID(sessionID)}-${safeID(job.name || job.id)}.md`);
+}
+function goalReportText(job) {
+  const lines = [];
+  lines.push(`# OpenCode Loop Goal Report`);
+  lines.push("");
+  lines.push(`Status: ${goalStatusText(job) || "unknown"}`);
+  lines.push(`Goal: ${job.action || job.goalFile || ""}`);
+  lines.push(`Created: ${job.createdAt || ""}`);
+  if (job.goalCompletedAt)
+    lines.push(`Completed: ${new Date(job.goalCompletedAt).toISOString()}`);
+  if (job.goalBlockedAt)
+    lines.push(`Blocked: ${new Date(job.goalBlockedAt).toISOString()}`);
+  if (job.lastUserInterruptAt)
+    lines.push(`Paused by user message: ${new Date(job.lastUserInterruptAt).toISOString()}`);
+  if (job.goalNoProgressPausedAt)
+    lines.push(`Paused by no-progress guard: ${new Date(job.goalNoProgressPausedAt).toISOString()}`);
+  if (job.runCount)
+    lines.push(`Turns: ${job.runCount}`);
+  if ((job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0)
+    lines.push(`No-progress: ${job.noProgressCount || 0}/${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS}`);
+  lines.push("");
+  if (job.goalSummary)
+    lines.push("## Summary", "", String(job.goalSummary), "");
+  if (job.goalEvidence)
+    lines.push("## Evidence", "", String(job.goalEvidence), "");
+  if (job.goalBlockedReason)
+    lines.push("## Blocked reason", "", String(job.goalBlockedReason), "");
+  if (job.goalCompletionRejectedReason)
+    lines.push("## Last completion rejection", "", String(job.goalCompletionRejectedReason), "");
+  if (job.goalInterruptedReason)
+    lines.push("## Interrupt", "", String(job.goalInterruptedReason), "");
+  if (job.goalNoProgressReason)
+    lines.push("## No-progress guard", "", String(job.goalNoProgressReason), "");
+  if (job.goalAcceptance?.length)
+    lines.push("## Acceptance criteria", "", ...job.goalAcceptance.map((item) => `- ${item}`), "");
+  if (job.lastGoalChecks?.length) {
+    lines.push("## Latest checks", "");
+    for (const item of job.lastGoalChecks)
+      lines.push(`- ${item.command}: exit ${item.code}`);
+    lines.push("");
+  }
+  if (job.goalProgress?.length) {
+    lines.push("## Progress", "");
+    for (const item of job.goalProgress)
+      lines.push(`- ${item.time}: ${item.summary}${item.next ? ` Next: ${item.next}` : ""}`);
+    lines.push("");
+  }
+  return lines.join(`
+`);
+}
+async function writeGoalReport(directory, sessionID, job) {
+  if (!isGoalJob(job))
+    return;
+  const target = job.goalEvidenceFile ? path3.resolve(directory, job.goalEvidenceFile) : goalReportPath(directory, sessionID, job);
+  await ensureDir(path3.dirname(target));
+  await fs3.writeFile(target, goalReportText(job), "utf8");
+}
+var GOAL_REPORT_DIR = "goals";
+var init_goal_report = __esm(() => {
+  init_jobs();
+  init_state();
+});
+
+// src/source/runtime/goal-evidence.js
+function hasConcreteGoalEvidence(value) {
+  const text = String(value || "").trim();
+  if (text.length < 24)
+    return false;
+  const normalized = text.toLowerCase().replace(/\s+/g, " ");
+  const weak = new Set(["done", "complete", "completed", "ok", "looks good", "n/a", "none", "no evidence", "no evidence provided", "goal completed", "marked complete"]);
+  if (weak.has(normalized) || normalized.startsWith("marked complete by /loop-goal-done"))
+    return false;
+  return /(\b(npm|pnpm|yarn|bun|node|pytest|cargo|dotnet|go test|tsc|typecheck|test|tests|lint|build|check|checks|exit\s*\d|passed|verified|changed|updated|created|fixed|file|files|diff|commit)\b|[`\\/][\w./:-]+)/i.test(text) || text.length >= 80;
+}
+function goalChecksPassed(job) {
+  return Array.isArray(job?.lastGoalChecks) && job.lastGoalChecks.length > 0 && job.lastGoalChecks.every((item) => Number(item?.code) === 0);
+}
+function goalRequiresPassingChecks(job) {
+  return job?.goalRequireChecksPass !== false && Array.isArray(job?.goalChecks) && job.goalChecks.length > 0;
+}
+function goalProgressSnapshot(job) {
+  return {
+    status: job?.goalStatus || "",
+    progressCount: Array.isArray(job?.goalProgress) ? job.goalProgress.length : 0,
+    evidence: String(job?.goalEvidence || ""),
+    checksPassedAt: Number(job?.goalChecksPassedAt || 0),
+    lastGoalCheckAt: Number(job?.lastGoalCheckAt || 0),
+    lastVerifyAt: Number(job?.lastVerifyAt || 0),
+    lastVerifyCode: Number.isFinite(Number(job?.lastVerifyCode)) ? Number(job.lastVerifyCode) : undefined
+  };
+}
+function goalMadeMeaningfulProgress(beforeJob, afterJob) {
+  const before = goalProgressSnapshot(beforeJob || {});
+  const after = goalProgressSnapshot(afterJob || {});
+  if (["completed", "blocked"].includes(after.status) && after.status !== before.status)
+    return true;
+  if (after.progressCount > before.progressCount)
+    return true;
+  if (after.evidence !== before.evidence && hasConcreteGoalEvidence(after.evidence))
+    return true;
+  if (after.checksPassedAt > before.checksPassedAt || goalChecksPassed(afterJob) && after.lastGoalCheckAt > before.lastGoalCheckAt)
+    return true;
+  if (after.lastVerifyAt > before.lastVerifyAt && after.lastVerifyCode === 0)
+    return true;
+  return false;
+}
+
+// src/source/runtime/goal-prompt.js
+import path4 from "path";
+async function buildGoalPrompt(directory, job) {
+  const sections = [];
+  sections.push(`Working directory:
+${path4.resolve(directory)}
+Keep every file operation inside this directory. Prefer workspace-relative paths such as "src/index.js"; never turn a relative path into a root path such as "/src/index.js".`);
+  const objective = String(job.action || "").trim();
+  if (objective)
+    sections.push(`Goal objective:
+${objective}`);
+  if (job.goalFile) {
+    const text = await readSmallTextFile(path4.resolve(directory, job.goalFile), 120000);
+    if (text.trim())
+      sections.push(`Goal file ${job.goalFile}:
+${text.trim()}`);
+    else
+      sections.push(`Goal file ${job.goalFile} was requested but could not be read. Continue from the inline goal objective.`);
+  }
+  if (job.promptFile) {
+    const text = await readSmallTextFile(path4.resolve(directory, job.promptFile), 120000);
+    if (text.trim())
+      sections.push(`Extra goal instructions from ${job.promptFile}:
+${text.trim()}`);
+  }
+  if (job.goalAcceptance?.length)
+    sections.push(`Acceptance criteria:
+` + job.goalAcceptance.map((item, index) => `${index + 1}. ${item}`).join(`
+`));
+  if (job.goalChecks?.length)
+    sections.push(`Verification commands that define useful evidence:
+` + job.goalChecks.map((item, index) => `${index + 1}. ${item}`).join(`
+`));
+  if (job.verifyCommand)
+    sections.push(`Post-turn verify command configured by the loop: ${job.verifyCommand}`);
+  if (job.lastGoalChecks?.length)
+    sections.push(`Latest goal check results:
+` + job.lastGoalChecks.map((item) => `- ${item.command}: exit ${item.code}`).join(`
+`));
+  if (job.lastVerifyFailure)
+    sections.push(`Previous verify/check failure summary:
+` + String(job.lastVerifyFailure).slice(0, 1600));
+  if (job.goalCompletionRejectedReason)
+    sections.push(`Previous completion attempt was rejected:
+${job.goalCompletionRejectedReason}`);
+  if ((job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0)
+    sections.push(`No-progress guard:
+${job.noProgressCount || 0}/${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS} recent turn(s) without recorded meaningful progress.`);
+  if (job.goalProgress?.length)
+    sections.push(`Recent goal progress:
+` + job.goalProgress.slice(-5).map((item) => `- ${item.time}: ${item.summary}`).join(`
+`));
+  for (const file of job.includeFiles || []) {
+    const text = await readSmallTextFile(path4.resolve(directory, file), 80000);
+    if (text.trim())
+      sections.push(`Context from ${file}:
+${text.trim().slice(0, 20000)}`);
+  }
+  return `${GOAL_PROMPT_PREFIX}.
+
+You are pursuing an experimental persistent goal for this OpenCode session. This is not a timer loop and not a one-shot prompt. Keep working toward the goal until it is completed, blocked, paused, cleared, or stopped by safety limits.
+
+Rules:
+- Work on the next smallest useful step toward the goal.
+- Prefer direct code changes, tests, typechecks, builds, and evidence over discussion.
+- Do not claim the goal is complete unless the acceptance criteria are satisfied and verification evidence supports it.
+- If verification commands are configured, do not call opencode_loop_goal_complete until the latest relevant checks have passed unless the user explicitly overrides the goal.
+- Completion evidence must be concrete: mention commands, files, checks, results, or code inspection details.
+- When the goal is complete, call the tool opencode_loop_goal_complete with a summary and evidence.
+- If you are truly blocked and need user input, call the tool opencode_loop_goal_blocked with the reason and what is needed.
+- If you made meaningful progress but the goal is not complete, call the tool opencode_loop_goal_progress with the summary and next step.
+- If you cannot make meaningful progress for this turn, call opencode_loop_goal_blocked instead of repeating the same attempt.
+- Do not call completion tools just to be polite; only call them when the state is real.
+- Do not ask the user questions unless blocked; make reasonable assumptions and continue.
+- Follow safety rules: no destructive commands, force pushes, production deploys, production database resets, or deleting user data.
+
+${sections.join(`
+
+---
+
+`)}`;
+}
+var GOAL_PROMPT_PREFIX = "EXPERIMENTAL OPENCODE GOAL MODE ITERATION";
+var init_goal_prompt = __esm(() => {
+  init_process();
+});
+
+// src/source/runtime/goal-runtime.js
+function pickGoalJob(state, target = "") {
+  const goals = (state.jobs || []).filter(isGoalJob);
+  if (!goals.length)
+    return;
+  const text = String(target || "").trim();
+  if (!text || ["active", "current", "goal"].includes(text.toLowerCase()))
+    return goals.find((job) => job.goalStatus === "active" && job.enabled !== false) || goals[0];
+  return goals.find((job, index) => matchJob(job, text, index));
+}
+function parseGoalToolText(args, fields) {
+  const result = {};
+  for (const field of fields)
+    result[field] = String(args?.[field] || "").trim();
+  return result;
+}
+async function rejectGoalCompletion(directory, sessionID, state, job, reason) {
+  job.goalCompletionRejectedAt = now();
+  job.goalCompletionRejectedReason = reason;
+  job.goalCompletionRejectedCount = (job.goalCompletionRejectedCount || 0) + 1;
+  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
+  await writeState(directory, sessionID, state);
+  await writeGoalReport(directory, sessionID, job);
+  await appendLoopLog(directory, "goal-complete-rejected", { sessionID, job: job.name || job.id, reason });
+  return { ok: false, job, rejected: true, message: `Goal completion rejected: ${reason}` };
+}
+async function setGoalComplete(directory, sessionID, args = {}) {
+  const state = await readState(directory, sessionID);
+  const job = pickGoalJob(state, args.target);
+  if (!job)
+    return { ok: false, message: "No active experimental goal was found." };
+  const parsed = parseGoalToolText(args, ["summary", "evidence"]);
+  const manualOverride = args.manual === true || args.manualOverride === true;
+  const completionEvidence = parsed.evidence || job.goalEvidence || "";
+  const skipEvidenceGate = manualOverride || args.allowWeakEvidence === true || job.goalRequireEvidence === false;
+  const skipCheckGate = manualOverride || args.allowFailingChecks === true || job.goalRequireChecksPass === false;
+  if (!skipEvidenceGate && !hasConcreteGoalEvidence(completionEvidence)) {
+    return await rejectGoalCompletion(directory, sessionID, state, job, "concrete evidence is required before the goal tool can complete the goal");
+  }
+  if (!skipCheckGate && goalRequiresPassingChecks(job) && !goalChecksPassed(job)) {
+    return await rejectGoalCompletion(directory, sessionID, state, job, "configured goal checks have not passed yet");
+  }
+  job.goalStatus = "completed";
+  job.enabled = false;
+  job.paused = true;
+  job.goalCompletedAt = now();
+  job.goalSummary = parsed.summary || job.goalSummary || "Goal completed.";
+  job.goalEvidence = completionEvidence || "No evidence provided.";
+  job.noProgressCount = 0;
+  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
+  await writeState(directory, sessionID, state);
+  await writeGoalReport(directory, sessionID, job);
+  await appendLoopLog(directory, "goal-complete", { sessionID, job: job.name || job.id, summary: job.goalSummary });
+  return { ok: true, job, message: `Goal completed: ${job.goalSummary}` };
+}
+async function setGoalBlocked(directory, sessionID, args = {}) {
+  const state = await readState(directory, sessionID);
+  const job = pickGoalJob(state, args.target);
+  if (!job)
+    return { ok: false, message: "No active experimental goal was found." };
+  const parsed = parseGoalToolText(args, ["reason", "needed", "evidence"]);
+  job.goalStatus = "blocked";
+  job.enabled = false;
+  job.paused = true;
+  job.goalBlockedAt = now();
+  job.goalBlockedReason = [parsed.reason, parsed.needed ? `Needed: ${parsed.needed}` : ""].filter(Boolean).join(`
+`) || "Goal blocked.";
+  if (parsed.evidence)
+    job.goalEvidence = parsed.evidence;
+  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
+  await writeState(directory, sessionID, state);
+  await writeGoalReport(directory, sessionID, job);
+  await appendLoopLog(directory, "goal-blocked", { sessionID, job: job.name || job.id, reason: job.goalBlockedReason });
+  return { ok: true, job, message: `Goal blocked: ${job.goalBlockedReason}` };
+}
+async function setGoalProgress(directory, sessionID, args = {}) {
+  const state = await readState(directory, sessionID);
+  const job = pickGoalJob(state, args.target);
+  if (!job)
+    return { ok: false, message: "No active experimental goal was found." };
+  const parsed = parseGoalToolText(args, ["summary", "next", "evidence"]);
+  const item = { time: new Date().toISOString(), summary: parsed.summary || "Progress recorded.", next: parsed.next || "", evidence: parsed.evidence || "" };
+  job.goalProgress = [...job.goalProgress || [], item].slice(-30);
+  if (parsed.evidence)
+    job.goalEvidence = parsed.evidence;
+  job.noProgressCount = 0;
+  job.lastProgressAt = now();
+  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
+  await writeState(directory, sessionID, state);
+  await writeGoalReport(directory, sessionID, job);
+  await appendLoopLog(directory, "goal-progress", { sessionID, job: job.name || job.id, summary: item.summary });
+  return { ok: true, job, message: `Goal progress recorded: ${item.summary}` };
+}
+var init_goal_runtime = __esm(() => {
+  init_jobs();
+  init_state();
+  init_process();
+  init_goal_report();
+  init_goal_prompt();
+  init_goal_report();
+});
+
+// src/source/runtime/job-workspace.js
+import { promises as fs7 } from "fs";
+import path8 from "path";
+function requireFunction6(value, name) {
+  if (typeof value !== "function")
+    throw new TypeError(`createJobWorkspaceRuntime requires ${name}`);
+  return value;
+}
+function dangerousShell(command) {
+  const text = String(command || "").toLowerCase();
+  return [
+    /\brm\b(?=[^\r\n]*\s-{1,2}(?:[a-z]*r[a-z]*|recursive)\b)(?=[^\r\n]*\s-{1,2}(?:[a-z]*f[a-z]*|force)\b)/,
+    /\bremove-item\b[^\r\n]*(?:-recurse|-force)/,
+    /\bgit\s+reset\b/,
+    /\bgit\s+clean\b/,
+    /\bgit\s+push\b/,
+    /\bdel\b[^\r\n]*\s\/s\b/,
+    /\b(?:rmdir|rd)\b[^\r\n]*\s\/s\b/,
+    /(?:^|[;&|]\s*)format(?:\.com)?\s+(?:[a-z]:|\/(?:fs|q)\b)/,
+    /\bterraform\s+destroy\b/,
+    /\bkubectl\s+delete\b/,
+    /\bdeploy\b.*\bproduction\b/
+  ].some((pattern) => pattern.test(text));
+}
+function createJobWorkspaceRuntime(options = {}) {
+  const toast = requireFunction6(options.toast, "toast");
+  const runProcess2 = typeof options.runProcess === "function" ? options.runProcess : runProcess;
+  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
+  const readSmallTextFile2 = typeof options.readSmallTextFile === "function" ? options.readSmallTextFile : readSmallTextFile;
+  const buildGoalPrompt2 = typeof options.buildGoalPrompt === "function" ? options.buildGoalPrompt : buildGoalPrompt;
+  async function buildPrompt(directory, job) {
+    if (isGoalJob(job))
+      return await buildGoalPrompt2(directory, job);
+    const sections = [];
+    if (job.promptFile) {
+      const text = await readSmallTextFile2(path8.resolve(directory, job.promptFile));
+      if (text.trim())
+        sections.push(`Instructions from ${job.promptFile}:
+${text.trim()}`);
+      else
+        sections.push(`Prompt file ${job.promptFile} was requested but could not be read. Continue from the regular action instead.`);
+    }
+    if (job.action)
+      sections.push(decoratePrompt(job));
+    for (const file of job.includeFiles || []) {
+      const text = await readSmallTextFile2(path8.resolve(directory, file), 80000);
+      if (text.trim())
+        sections.push(`Context from ${file}:
+${text.trim().slice(0, 20000)}`);
+    }
+    return sections.join(`
+
+---
+
+`) || decoratePrompt(job);
+  }
+  async function ensureBranch(directory, job, client, sessionID) {
+    if (!job.branch || job.branchDone)
+      return job;
+    const branch = safeID(job.branch);
+    const inRepo = await runProcess2("git", ["rev-parse", "--is-inside-work-tree"], directory, 1e4);
+    if (inRepo.code !== 0) {
+      job.branchDone = false;
+      job.branchUnavailable = true;
+      return job;
+    }
+    let result = await runProcess2("git", ["switch", branch], directory, 30000);
+    if (result.code !== 0)
+      result = await runProcess2("git", ["switch", "-c", branch], directory, 30000);
+    job.branchDone = result.code === 0;
+    await toast(client, result.code === 0 ? `Loop branch active: ${branch}` : `Could not switch/create branch: ${branch}`, result.code === 0 ? "success" : "warning");
+    await appendLoopLog2(directory, "branch", { sessionID, branch, code: result.code });
+    return job;
+  }
+  async function snapshotPaths(directory, files) {
+    const snapshot = {};
+    for (const file of files || []) {
+      try {
+        const stat = await fs7.stat(path8.resolve(directory, file));
+        snapshot[file] = `${stat.mtimeMs}:${stat.size}`;
+      } catch {
+        snapshot[file] = "missing";
+      }
+    }
+    return snapshot;
+  }
+  async function watchChanged(directory, job) {
+    if (!job.watchPaths?.length)
+      return false;
+    const next = await snapshotPaths(directory, job.watchPaths);
+    const previous = job.watchSnapshot || {};
+    const changed = job.watchPaths.some((file) => previous[file] !== next[file]);
+    if (changed)
+      job.watchSnapshot = next;
+    return changed;
+  }
+  async function fileContains(filePath, needle) {
+    try {
+      const stat = await fs7.stat(filePath);
+      if (!stat.isFile() || stat.size > MAX_SCAN_BYTES)
+        return false;
+      return (await fs7.readFile(filePath, "utf8")).includes(needle);
+    } catch {
+      return false;
+    }
+  }
+  async function untilReached(directory, job) {
+    if (!job.until)
+      return false;
+    const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path8.join(".opencode", "opencode-loop", "until.txt")];
+    for (const file of files)
+      if (await fileContains(path8.resolve(directory, file), job.until))
+        return true;
+    let scanned = 0;
+    async function walk(current) {
+      if (scanned >= MAX_SCAN_FILES)
+        return false;
+      let entries;
+      try {
+        entries = await fs7.readdir(current, { withFileTypes: true });
+      } catch {
+        return false;
+      }
+      for (const entry of entries) {
+        if (scanned >= MAX_SCAN_FILES)
+          return false;
+        if ([".git", "node_modules", "dist", "build", ".next", "coverage"].includes(entry.name))
+          continue;
+        const full = path8.join(current, entry.name);
+        if (path8.resolve(full) === path8.resolve(stateDir(directory)))
+          continue;
+        if (entry.isDirectory()) {
+          if (await walk(full))
+            return true;
+        } else if (entry.isFile() && /\.(md|txt|json|yaml|yml)$/i.test(entry.name)) {
+          scanned++;
+          if (await fileContains(full, job.until))
+            return true;
+        }
+      }
+      return false;
+    }
+    return await walk(directory);
+  }
+  async function createCheckpoint(directory, sessionID, job, client) {
+    if (!job.checkpointOnly && !job.gitCheckpoint)
+      return;
+    const inRepo = await runProcess2("git", ["rev-parse", "--is-inside-work-tree"], directory, 1e4);
+    if (inRepo.code !== 0)
+      return;
+    const status = await runProcess2("git", ["status", "--short"], directory, 30000);
+    if (!status.stdout.trim())
+      return;
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const checkpointDir = path8.join(stateDir(directory), "checkpoints", safeID(sessionID));
+    await ensureDir(checkpointDir);
+    const diff = await runProcess2("git", ["diff", "--binary"], directory, 120000);
+    const staged = await runProcess2("git", ["diff", "--cached", "--binary"], directory, 120000);
+    const prefix = `${timestamp}-${safeID(job.name || job.id)}`;
+    await fs7.writeFile(path8.join(checkpointDir, `${prefix}.status.txt`), status.stdout + status.stderr);
+    await fs7.writeFile(path8.join(checkpointDir, `${prefix}.patch`), `${diff.stdout}
+${staged.stdout}`);
+    if (job.gitCheckpoint) {
+      await runProcess2("git", ["add", "-A"], directory, 120000);
+      await runProcess2("git", ["commit", "-m", `chore: opencode loop checkpoint ${timestamp}`], directory, 120000);
+    }
+    await toast(client, `Loop checkpoint saved: ${prefix}`, "success");
+  }
+  return {
+    buildPrompt,
+    ensureBranch,
+    snapshotPaths,
+    watchChanged,
+    untilReached,
+    createCheckpoint
+  };
+}
+var MAX_SCAN_FILES = 200, MAX_SCAN_BYTES = 2000000;
+var init_job_workspace = __esm(() => {
+  init_jobs();
+  init_state();
+  init_process();
+  init_goal_runtime();
+});
+
+// src/source/legacy-v1.js
+init_process();
+import { tool } from "@opencode-ai/plugin/tool";
 
 // src/source/opencode/sdk.js
 function sdkError(result) {
@@ -901,7 +1607,6 @@ async function toast(client, message, variant = "info") {
     await sdkCall(client.tui.showToast.bind(client.tui), { body: { message, variant } }, { message, variant });
   } catch {}
 }
-
 // src/source/opencode/messages.js
 var LOOP_OWNED_USER_MESSAGE_GUARD_MS = 1e4;
 var LOOP_OWNED_USER_MESSAGE_RETENTION_MS = 10 * 60000;
@@ -1047,201 +1752,8 @@ function commandArgsText(args) {
   return String(args);
 }
 
-// src/source/core/continuation.js
-var CONTINUATION_SHORTHANDS = new Set([
-  "continue",
-  "continue.",
-  "continue working",
-  "keep going",
-  "go on",
-  "devam",
-  "devam et",
-  "devam et.",
-  "devam et bakal\u0131m"
-]);
-var COMPLETION_BOUNDED_PATTERNS = [
-  /\bbitene kadar\b/i,
-  /\b(?:tamamen|komple) projeyi bitir\b/i,
-  /\bi\u015Fi bitir\b/i,
-  /\buntil (?:it(?:'s| is) )?(?:done|complete|completed|finished)\b/i,
-  /\bfinish (?:the )?(?:project|task|work)\b/i,
-  /\bkeep going until\b/i
-];
-var TERMINAL_COMPLETION_PATTERNS = [
-  /proje tamamland[\u0131i](?=\s|[.,;:!\u2014-]|$)/i,
-  /\bproject (?:is )?(?:complete|completed|finished|done)\b/i,
-  /\b(?:task|work) (?:is )?(?:complete|completed|finished|done)\b/i
-];
-var TERMINAL_NO_WORK_PATTERNS = [
-  /yap[\u0131i]lacak (?:ba\u015Fka )?i\u015F yok(?=\s|[.,;:!\u2014-]|$)/i,
-  /ba\u015Fka (?:bir )?i\u015F (?:kalmad[\u0131i]|yok)(?=\s|[.,;:!\u2014-]|$)/i,
-  /\bnothing (?:else )?left to do\b/i,
-  /\bno (?:more|remaining) work\b/i,
-  /\bno known (?:bugs|issues)\b/i,
-  /\bzero known (?:bugs|issues)\b/i
-];
-var NEXT_WORK_PATTERNS = [
-  /\bnext(?: step| task)?\b/i,
-  /s[\u0131i]radaki(?=\s|[.,;:!\u2014-]|$)/i,
-  /sonraki(?=\s|[.,;:!\u2014-]|$)/i,
-  /kalan (?:i\u015F|i\u015Fler|todo|ad\u0131m)(?=\s|[.,;:!\u2014-]|$)/i,
-  /\bremaining (?:work|task|todo|step)/i,
-  /devam (?:edece\u011Fim|ediyorum|etmek gerek)(?=\s|[.,;:!\u2014-]|$)/i
-];
-var WAITING_USER_PATTERNS = [
-  /(?:^|\n)\s*onay bekleyenler\s*:/i,
-  /(?:^|\n)\s*(?:kullan\u0131c\u0131|user) (?:onay\u0131|onayi|aksiyonu|i\u015Flemi|islemi|eri\u015Fimi|erisimi) (?:bekleniyor|gerekiyor|gerekli)\b/i,
-  /\b(?:senin|sizin) (?:onay\u0131n|onay\u0131n\u0131z|onayiniz|aksiyonun|aksiyonunuz|eri\u015Fimin|erisimin) (?:bekleniyor|gerekiyor|gerekli)\b/i,
-  /\b(?:onay|eri\u015Fim|erisim|yetki) olmadan (?:devam edemem|ilerleyemem|i\u015Flem yapamam|islem yapamam)\b/i,
-  /(?:^|\n)\s*(?:waiting (?:for|on) (?:your|user) (?:approval|input|action|access|credentials?)|(?:approval|user action|access) (?:required|pending))\s*:?/i,
-  /\b(?:requires?|needs?) (?:your|user) (?:approval|input|action|access|credentials?)\b/i,
-  /\bblocked (?:pending|until|on) (?:your|user|approval|access|credentials?)\b/i
-];
-var WAITING_USER_NEGATIONS = [
-  /\b(?:onay|eri\u015Fim|erisim|yetki) (?:gerekmiyor|gerekli de\u011Fil|gerekli degil|beklenmiyor)\b/i,
-  /\bno (?:user )?(?:approval|input|action|access|credentials?) (?:is )?(?:needed|required|pending)\b/i
-];
-function isContinuationShorthand(value) {
-  return CONTINUATION_SHORTHANDS.has(String(value || "").trim().toLowerCase().replace(/\s+/g, " "));
-}
-function isCompletionBoundedContinuation(value) {
-  const text = String(value || "").trim();
-  return COMPLETION_BOUNDED_PATTERNS.some((pattern) => pattern.test(text));
-}
-function isWaitingUserReply(value) {
-  const text = String(value || "").trim();
-  if (!text)
-    return false;
-  if (WAITING_USER_NEGATIONS.some((pattern) => pattern.test(text)))
-    return false;
-  if (NEXT_WORK_PATTERNS.some((pattern) => pattern.test(text)))
-    return false;
-  return WAITING_USER_PATTERNS.some((pattern) => pattern.test(text));
-}
-function isTerminalNoWorkReply(value) {
-  const text = String(value || "").trim();
-  if (!text || NEXT_WORK_PATTERNS.some((pattern) => pattern.test(text)))
-    return false;
-  const completed = TERMINAL_COMPLETION_PATTERNS.some((pattern) => pattern.test(text));
-  const noWork = TERMINAL_NO_WORK_PATTERNS.some((pattern) => pattern.test(text));
-  return completed && noWork;
-}
-function continuationProjectInstruction(value) {
-  if (!isContinuationShorthand(value) && !isCompletionBoundedContinuation(value))
-    return "";
-  const finish = isCompletionBoundedContinuation(value) ? " If you believe the project is finished, perform a fresh verification pass before declaring completion; report both that the project is complete and that no work remains only when you have concrete current evidence." : "";
-  return `Treat this as continuation of the current project and conversation, not a fresh task. Inspect the repository state, relevant files, TODO/progress notes, recent changes, and git status as needed to identify the next unfinished step. Continue from existing work, do not redo completed work, and verify meaningful changes when practical.${finish}`;
-}
-
-// src/source/core/jobs.js
-function presetDefaults(name) {
-  if (name === "loop-compact")
-    return { intervalMs: parseDuration("200m"), action: "/compact", kind: "compact", name: "compact", immediate: false };
-  if (name === "loop-command" || name === "loop-cmd")
-    return { intervalMs: 0, kind: "command", name: "command", immediate: false };
-  if (name === "loop-prompt")
-    return { intervalMs: 0, kind: "prompt", name: "prompt", immediate: true };
-  if (name === "loop-ask")
-    return { intervalMs: 0, kind: "prompt", name: "ask", immediate: false };
-  if (name === "loop-shell")
-    return { intervalMs: 0, kind: "shell", name: "shell", immediate: false };
-  if (name === "loop-testfix")
-    return { intervalMs: 0, name: "testfix", safe: true, askNever: true, verifyCommand: "npm test", testfixPreset: true, action: "Run the project tests. Fix failures. Re-run the tests. Test command hint: npm test" };
-  if (name === "loop-progress")
-    return { intervalMs: 0, name: "progress", safe: true, askNever: true, progressFile: "progress.md", action: "Read progress.md and continue the next unfinished TODO. Mark completed TODOs with [x]. Add useful TODOs when you discover them." };
-  if (name === "loop-safe-dev")
-    return { intervalMs: 0, name: "safe-dev", safe: true, askNever: true, noOverlap: true, checkpointOnly: true, batch: 5, progressFile: "progress.md", action: "Develop the project from progress.md. Work in small safe batches. Mark completed TODOs with [x]. Add new ideas to progress.md. Run tests/lint/build if available." };
-  return { intervalMs: 0, name: "dev", askNever: true, progressFile: "progress.md", action: "Continue developing the project from progress.md. Mark completed TODOs with [x]. Add new ideas to progress.md. Run tests/lint/build if available." };
-}
-function jobLabel(job) {
-  const title = job.name ? `${job.name}: ` : "";
-  const kind = job.kind ? ` [${job.kind}]` : "";
-  const limit = job.maxRuns > 0 ? `, max ${job.maxRuns}` : "";
-  const runtime = job.maxRuntimeMs > 0 ? `, runtime ${durationToText(job.maxRuntimeMs)}` : "";
-  const timeout = job.timeoutMs > 0 ? `, timeout ${durationToText(job.timeoutMs)}` : "";
-  const compact = job.compactEveryRuns > 0 ? `, compact every ${job.compactEveryRuns} runs` : job.compactEveryMs > 0 ? `, compact every ${durationToText(job.compactEveryMs)}` : "";
-  const verify = job.verifyCommand ? ", verify" : "";
-  const preflight = job.preflightCommand ? ", preflight" : "";
-  const failures = job.maxFailures > 0 ? `, max failures ${job.maxFailures}` : "";
-  const noProgress = isGoalJob(job) && (job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0 ? `, max no-progress ${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS}` : "";
-  const stopFile = job.stopFile ? ", stop-file" : "";
-  const watch = job.watchPaths?.length ? `, watch ${job.watchPaths.join(",")}` : "";
-  const paused = job.paused ? ", paused" : "";
-  return `${title}${durationToText(job.intervalMs)}${kind} -> ${job.action || `[prompt-file: ${job.promptFile}]`}${limit}${runtime}${timeout}${compact}${verify}${preflight}${failures}${noProgress}${stopFile}${watch}${paused}`;
-}
-function matchJob(job, target, index) {
-  const text = String(target || "").trim();
-  if (!text || text.toLowerCase() === "all")
-    return true;
-  return job.id === text || job.name === text || String(index + 1) === text;
-}
-function actionKind(action, job = {}) {
-  const text = String(action || "").trim();
-  const forced = String(job.kind || "").trim().toLowerCase();
-  if (forced === "compact")
-    return "compact";
-  if (forced === "goal")
-    return "goal";
-  if (text === "/compact" || text === "/summarize")
-    return "compact";
-  if (forced === "prompt" || forced === "ask")
-    return "prompt";
-  if (forced === "command" || forced === "cmd" || forced === "slash")
-    return "command";
-  if (forced === "shell")
-    return "shell";
-  if (text.startsWith("/"))
-    return "command";
-  if (text.startsWith("!") || text.startsWith("$"))
-    return "shell";
-  return "prompt";
-}
-function decoratePrompt(job) {
-  const additions = [];
-  const continuation = continuationProjectInstruction(job.action);
-  if (continuation)
-    additions.push(continuation);
-  if (job.progressFile)
-    additions.push(`Use ${job.progressFile} as the main progress/TODO state file. Read it before choosing the next task and update it after work.`);
-  if (job.lastVerifyFailure)
-    additions.push("Previous verify command failed. Fix this before moving on. Failure summary: " + String(job.lastVerifyFailure).slice(0, 1200));
-  if (job.askNever)
-    additions.push("Do not ask the user questions. Make reasonable assumptions and continue. Only write a short BLOCKED note if truly blocked.");
-  if (job.safe)
-    additions.push("Safety rules: do not run destructive commands such as git reset, git clean, rm -rf, del /s, rmdir /s, force push, production deploys, production migrations, terraform destroy, or deleting user data. If such an action seems needed, write a BLOCKED note instead.");
-  if (job.batch > 0)
-    additions.push(`Batch rule: in this run, work on at most ${job.batch} unfinished TODO item(s). Mark completed items with [x].`);
-  if (job.quiet)
-    additions.push("Keep replies short. Summarize only what changed, tests run, and next step.");
-  if (job.testCommand)
-    additions.push(`After making changes, run this test/check command if applicable: ${job.testCommand}. If it fails, fix the failure and try again.`);
-  if (job.checkpointOnly || job.gitCheckpoint)
-    additions.push("Keep changes incremental and easy to review because the loop will create a checkpoint after the run.");
-  if (!additions.length)
-    return job.action;
-  return `${job.action}
-
-OpenCode loop instructions:
-- ${additions.join(`
-- `)}`;
-}
-function isGoalJob(job) {
-  return String(job?.kind || "").toLowerCase() === "goal";
-}
-function goalStatusText(job) {
-  const status = job?.goalStatus || (isGoalJob(job) ? "active" : "");
-  if (!status)
-    return "";
-  if (status === "completed")
-    return "completed";
-  if (status === "blocked")
-    return "blocked";
-  if (job?.paused)
-    return "paused";
-  return status;
-}
-
 // src/source/opencode/command-router.js
+init_jobs();
 var HANDLER_NAMES = [
   "addGoal",
   "statusGoal",
@@ -1346,293 +1858,10 @@ function createCommandRouter(options = {}) {
   };
 }
 
-// src/source/runtime/goal-report.js
-import { promises as fs3 } from "fs";
-import path3 from "path";
-var GOAL_REPORT_DIR = "goals";
-function goalReportPath(directory, sessionID, job) {
-  return path3.join(stateDir(directory), GOAL_REPORT_DIR, `${safeID(sessionID)}-${safeID(job.name || job.id)}.md`);
-}
-function goalReportText(job) {
-  const lines = [];
-  lines.push(`# OpenCode Loop Goal Report`);
-  lines.push("");
-  lines.push(`Status: ${goalStatusText(job) || "unknown"}`);
-  lines.push(`Goal: ${job.action || job.goalFile || ""}`);
-  lines.push(`Created: ${job.createdAt || ""}`);
-  if (job.goalCompletedAt)
-    lines.push(`Completed: ${new Date(job.goalCompletedAt).toISOString()}`);
-  if (job.goalBlockedAt)
-    lines.push(`Blocked: ${new Date(job.goalBlockedAt).toISOString()}`);
-  if (job.lastUserInterruptAt)
-    lines.push(`Paused by user message: ${new Date(job.lastUserInterruptAt).toISOString()}`);
-  if (job.goalNoProgressPausedAt)
-    lines.push(`Paused by no-progress guard: ${new Date(job.goalNoProgressPausedAt).toISOString()}`);
-  if (job.runCount)
-    lines.push(`Turns: ${job.runCount}`);
-  if ((job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0)
-    lines.push(`No-progress: ${job.noProgressCount || 0}/${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS}`);
-  lines.push("");
-  if (job.goalSummary)
-    lines.push("## Summary", "", String(job.goalSummary), "");
-  if (job.goalEvidence)
-    lines.push("## Evidence", "", String(job.goalEvidence), "");
-  if (job.goalBlockedReason)
-    lines.push("## Blocked reason", "", String(job.goalBlockedReason), "");
-  if (job.goalCompletionRejectedReason)
-    lines.push("## Last completion rejection", "", String(job.goalCompletionRejectedReason), "");
-  if (job.goalInterruptedReason)
-    lines.push("## Interrupt", "", String(job.goalInterruptedReason), "");
-  if (job.goalNoProgressReason)
-    lines.push("## No-progress guard", "", String(job.goalNoProgressReason), "");
-  if (job.goalAcceptance?.length)
-    lines.push("## Acceptance criteria", "", ...job.goalAcceptance.map((item) => `- ${item}`), "");
-  if (job.lastGoalChecks?.length) {
-    lines.push("## Latest checks", "");
-    for (const item of job.lastGoalChecks)
-      lines.push(`- ${item.command}: exit ${item.code}`);
-    lines.push("");
-  }
-  if (job.goalProgress?.length) {
-    lines.push("## Progress", "");
-    for (const item of job.goalProgress)
-      lines.push(`- ${item.time}: ${item.summary}${item.next ? ` Next: ${item.next}` : ""}`);
-    lines.push("");
-  }
-  return lines.join(`
-`);
-}
-async function writeGoalReport(directory, sessionID, job) {
-  if (!isGoalJob(job))
-    return;
-  const target = job.goalEvidenceFile ? path3.resolve(directory, job.goalEvidenceFile) : goalReportPath(directory, sessionID, job);
-  await ensureDir(path3.dirname(target));
-  await fs3.writeFile(target, goalReportText(job), "utf8");
-}
-
-// src/source/runtime/goal-evidence.js
-function hasConcreteGoalEvidence(value) {
-  const text = String(value || "").trim();
-  if (text.length < 24)
-    return false;
-  const normalized = text.toLowerCase().replace(/\s+/g, " ");
-  const weak = new Set(["done", "complete", "completed", "ok", "looks good", "n/a", "none", "no evidence", "no evidence provided", "goal completed", "marked complete"]);
-  if (weak.has(normalized) || normalized.startsWith("marked complete by /loop-goal-done"))
-    return false;
-  return /(\b(npm|pnpm|yarn|bun|node|pytest|cargo|dotnet|go test|tsc|typecheck|test|tests|lint|build|check|checks|exit\s*\d|passed|verified|changed|updated|created|fixed|file|files|diff|commit)\b|[`\\/][\w./:-]+)/i.test(text) || text.length >= 80;
-}
-function goalChecksPassed(job) {
-  return Array.isArray(job?.lastGoalChecks) && job.lastGoalChecks.length > 0 && job.lastGoalChecks.every((item) => Number(item?.code) === 0);
-}
-function goalRequiresPassingChecks(job) {
-  return job?.goalRequireChecksPass !== false && Array.isArray(job?.goalChecks) && job.goalChecks.length > 0;
-}
-function goalProgressSnapshot(job) {
-  return {
-    status: job?.goalStatus || "",
-    progressCount: Array.isArray(job?.goalProgress) ? job.goalProgress.length : 0,
-    evidence: String(job?.goalEvidence || ""),
-    checksPassedAt: Number(job?.goalChecksPassedAt || 0),
-    lastGoalCheckAt: Number(job?.lastGoalCheckAt || 0),
-    lastVerifyAt: Number(job?.lastVerifyAt || 0),
-    lastVerifyCode: Number.isFinite(Number(job?.lastVerifyCode)) ? Number(job.lastVerifyCode) : undefined
-  };
-}
-function goalMadeMeaningfulProgress(beforeJob, afterJob) {
-  const before = goalProgressSnapshot(beforeJob || {});
-  const after = goalProgressSnapshot(afterJob || {});
-  if (["completed", "blocked"].includes(after.status) && after.status !== before.status)
-    return true;
-  if (after.progressCount > before.progressCount)
-    return true;
-  if (after.evidence !== before.evidence && hasConcreteGoalEvidence(after.evidence))
-    return true;
-  if (after.checksPassedAt > before.checksPassedAt || goalChecksPassed(afterJob) && after.lastGoalCheckAt > before.lastGoalCheckAt)
-    return true;
-  if (after.lastVerifyAt > before.lastVerifyAt && after.lastVerifyCode === 0)
-    return true;
-  return false;
-}
-
-// src/source/runtime/goal-prompt.js
-import path4 from "path";
-var GOAL_PROMPT_PREFIX = "EXPERIMENTAL OPENCODE GOAL MODE ITERATION";
-async function buildGoalPrompt(directory, job) {
-  const sections = [];
-  sections.push(`Working directory:
-${path4.resolve(directory)}
-Keep every file operation inside this directory. Prefer workspace-relative paths such as "src/index.js"; never turn a relative path into a root path such as "/src/index.js".`);
-  const objective = String(job.action || "").trim();
-  if (objective)
-    sections.push(`Goal objective:
-${objective}`);
-  if (job.goalFile) {
-    const text = await readSmallTextFile(path4.resolve(directory, job.goalFile), 120000);
-    if (text.trim())
-      sections.push(`Goal file ${job.goalFile}:
-${text.trim()}`);
-    else
-      sections.push(`Goal file ${job.goalFile} was requested but could not be read. Continue from the inline goal objective.`);
-  }
-  if (job.promptFile) {
-    const text = await readSmallTextFile(path4.resolve(directory, job.promptFile), 120000);
-    if (text.trim())
-      sections.push(`Extra goal instructions from ${job.promptFile}:
-${text.trim()}`);
-  }
-  if (job.goalAcceptance?.length)
-    sections.push(`Acceptance criteria:
-` + job.goalAcceptance.map((item, index) => `${index + 1}. ${item}`).join(`
-`));
-  if (job.goalChecks?.length)
-    sections.push(`Verification commands that define useful evidence:
-` + job.goalChecks.map((item, index) => `${index + 1}. ${item}`).join(`
-`));
-  if (job.verifyCommand)
-    sections.push(`Post-turn verify command configured by the loop: ${job.verifyCommand}`);
-  if (job.lastGoalChecks?.length)
-    sections.push(`Latest goal check results:
-` + job.lastGoalChecks.map((item) => `- ${item.command}: exit ${item.code}`).join(`
-`));
-  if (job.lastVerifyFailure)
-    sections.push(`Previous verify/check failure summary:
-` + String(job.lastVerifyFailure).slice(0, 1600));
-  if (job.goalCompletionRejectedReason)
-    sections.push(`Previous completion attempt was rejected:
-${job.goalCompletionRejectedReason}`);
-  if ((job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS) > 0)
-    sections.push(`No-progress guard:
-${job.noProgressCount || 0}/${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS} recent turn(s) without recorded meaningful progress.`);
-  if (job.goalProgress?.length)
-    sections.push(`Recent goal progress:
-` + job.goalProgress.slice(-5).map((item) => `- ${item.time}: ${item.summary}`).join(`
-`));
-  for (const file of job.includeFiles || []) {
-    const text = await readSmallTextFile(path4.resolve(directory, file), 80000);
-    if (text.trim())
-      sections.push(`Context from ${file}:
-${text.trim().slice(0, 20000)}`);
-  }
-  return `${GOAL_PROMPT_PREFIX}.
-
-You are pursuing an experimental persistent goal for this OpenCode session. This is not a timer loop and not a one-shot prompt. Keep working toward the goal until it is completed, blocked, paused, cleared, or stopped by safety limits.
-
-Rules:
-- Work on the next smallest useful step toward the goal.
-- Prefer direct code changes, tests, typechecks, builds, and evidence over discussion.
-- Do not claim the goal is complete unless the acceptance criteria are satisfied and verification evidence supports it.
-- If verification commands are configured, do not call opencode_loop_goal_complete until the latest relevant checks have passed unless the user explicitly overrides the goal.
-- Completion evidence must be concrete: mention commands, files, checks, results, or code inspection details.
-- When the goal is complete, call the tool opencode_loop_goal_complete with a summary and evidence.
-- If you are truly blocked and need user input, call the tool opencode_loop_goal_blocked with the reason and what is needed.
-- If you made meaningful progress but the goal is not complete, call the tool opencode_loop_goal_progress with the summary and next step.
-- If you cannot make meaningful progress for this turn, call opencode_loop_goal_blocked instead of repeating the same attempt.
-- Do not call completion tools just to be polite; only call them when the state is real.
-- Do not ask the user questions unless blocked; make reasonable assumptions and continue.
-- Follow safety rules: no destructive commands, force pushes, production deploys, production database resets, or deleting user data.
-
-${sections.join(`
-
----
-
-`)}`;
-}
-
-// src/source/runtime/goal-runtime.js
-function pickGoalJob(state, target = "") {
-  const goals = (state.jobs || []).filter(isGoalJob);
-  if (!goals.length)
-    return;
-  const text = String(target || "").trim();
-  if (!text || ["active", "current", "goal"].includes(text.toLowerCase()))
-    return goals.find((job) => job.goalStatus === "active" && job.enabled !== false) || goals[0];
-  return goals.find((job, index) => matchJob(job, text, index));
-}
-function parseGoalToolText(args, fields) {
-  const result = {};
-  for (const field of fields)
-    result[field] = String(args?.[field] || "").trim();
-  return result;
-}
-async function rejectGoalCompletion(directory, sessionID, state, job, reason) {
-  job.goalCompletionRejectedAt = now();
-  job.goalCompletionRejectedReason = reason;
-  job.goalCompletionRejectedCount = (job.goalCompletionRejectedCount || 0) + 1;
-  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-  await writeState(directory, sessionID, state);
-  await writeGoalReport(directory, sessionID, job);
-  await appendLoopLog(directory, "goal-complete-rejected", { sessionID, job: job.name || job.id, reason });
-  return { ok: false, job, rejected: true, message: `Goal completion rejected: ${reason}` };
-}
-async function setGoalComplete(directory, sessionID, args = {}) {
-  const state = await readState(directory, sessionID);
-  const job = pickGoalJob(state, args.target);
-  if (!job)
-    return { ok: false, message: "No active experimental goal was found." };
-  const parsed = parseGoalToolText(args, ["summary", "evidence"]);
-  const manualOverride = args.manual === true || args.manualOverride === true;
-  const completionEvidence = parsed.evidence || job.goalEvidence || "";
-  const skipEvidenceGate = manualOverride || args.allowWeakEvidence === true || job.goalRequireEvidence === false;
-  const skipCheckGate = manualOverride || args.allowFailingChecks === true || job.goalRequireChecksPass === false;
-  if (!skipEvidenceGate && !hasConcreteGoalEvidence(completionEvidence)) {
-    return await rejectGoalCompletion(directory, sessionID, state, job, "concrete evidence is required before the goal tool can complete the goal");
-  }
-  if (!skipCheckGate && goalRequiresPassingChecks(job) && !goalChecksPassed(job)) {
-    return await rejectGoalCompletion(directory, sessionID, state, job, "configured goal checks have not passed yet");
-  }
-  job.goalStatus = "completed";
-  job.enabled = false;
-  job.paused = true;
-  job.goalCompletedAt = now();
-  job.goalSummary = parsed.summary || job.goalSummary || "Goal completed.";
-  job.goalEvidence = completionEvidence || "No evidence provided.";
-  job.noProgressCount = 0;
-  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-  await writeState(directory, sessionID, state);
-  await writeGoalReport(directory, sessionID, job);
-  await appendLoopLog(directory, "goal-complete", { sessionID, job: job.name || job.id, summary: job.goalSummary });
-  return { ok: true, job, message: `Goal completed: ${job.goalSummary}` };
-}
-async function setGoalBlocked(directory, sessionID, args = {}) {
-  const state = await readState(directory, sessionID);
-  const job = pickGoalJob(state, args.target);
-  if (!job)
-    return { ok: false, message: "No active experimental goal was found." };
-  const parsed = parseGoalToolText(args, ["reason", "needed", "evidence"]);
-  job.goalStatus = "blocked";
-  job.enabled = false;
-  job.paused = true;
-  job.goalBlockedAt = now();
-  job.goalBlockedReason = [parsed.reason, parsed.needed ? `Needed: ${parsed.needed}` : ""].filter(Boolean).join(`
-`) || "Goal blocked.";
-  if (parsed.evidence)
-    job.goalEvidence = parsed.evidence;
-  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-  await writeState(directory, sessionID, state);
-  await writeGoalReport(directory, sessionID, job);
-  await appendLoopLog(directory, "goal-blocked", { sessionID, job: job.name || job.id, reason: job.goalBlockedReason });
-  return { ok: true, job, message: `Goal blocked: ${job.goalBlockedReason}` };
-}
-async function setGoalProgress(directory, sessionID, args = {}) {
-  const state = await readState(directory, sessionID);
-  const job = pickGoalJob(state, args.target);
-  if (!job)
-    return { ok: false, message: "No active experimental goal was found." };
-  const parsed = parseGoalToolText(args, ["summary", "next", "evidence"]);
-  const item = { time: new Date().toISOString(), summary: parsed.summary || "Progress recorded.", next: parsed.next || "", evidence: parsed.evidence || "" };
-  job.goalProgress = [...job.goalProgress || [], item].slice(-30);
-  if (parsed.evidence)
-    job.goalEvidence = parsed.evidence;
-  job.noProgressCount = 0;
-  job.lastProgressAt = now();
-  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate);
-  await writeState(directory, sessionID, state);
-  await writeGoalReport(directory, sessionID, job);
-  await appendLoopLog(directory, "goal-progress", { sessionID, job: job.name || job.id, summary: item.summary });
-  return { ok: true, job, message: `Goal progress recorded: ${item.summary}` };
-}
-
 // src/source/opencode/goal-commands.js
+init_jobs();
+init_state();
+init_goal_runtime();
 function requireFunction2(value, name) {
   if (typeof value !== "function")
     throw new TypeError(`createGoalCommandHandlers requires ${name}`);
@@ -1738,6 +1967,9 @@ function createGoalCommandHandlers(options = {}) {
 }
 
 // src/source/opencode/loop-commands.js
+init_jobs();
+init_state();
+init_process();
 import { promises as fs6 } from "fs";
 import path7 from "path";
 
@@ -1781,10 +2013,12 @@ function dedicatedGoalSummary(goal) {
 }
 
 // src/source/runtime/loop-diagnostics.js
+init_state();
 import { promises as fs5 } from "fs";
 import path6 from "path";
 
 // src/source/runtime/schedule-policy.js
+init_jobs();
 var TERMINAL_GOAL_STATUSES = new Set(["completed", "blocked", "cleared"]);
 function inferredScheduleMode(job) {
   const explicit = String(job?.scheduleMode || "").toLowerCase();
@@ -2114,6 +2348,9 @@ function createLoopCommandHandlers(options = {}) {
   };
 }
 
+// src/source/opencode/loop-registration.js
+init_jobs();
+
 // src/source/core/schedule-syntax.js
 function removeBooleanFlag(input, flag) {
   const pattern = new RegExp(`(^|\\s)${flag.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}(?=\\s|$)`, "i");
@@ -2190,6 +2427,8 @@ function normalizeLoopScheduleArgs(raw, defaults = {}) {
 }
 
 // src/source/opencode/loop-registration.js
+init_state();
+init_process();
 var DEFAULT_GOAL_ACTIVE_RECOVERY_MS = 180000;
 var FALLBACK_ACTIVE_GUARD_MS = 45000;
 function requireFunction4(value, name) {
@@ -2309,7 +2548,6 @@ function createLoopRegistration(options = {}) {
   }
   return { addLoop };
 }
-
 // src/source/runtime/session-activity.js
 var activeToolCalls = new Map;
 var sessionParents = new Map;
@@ -2421,6 +2659,10 @@ function clearSessionActivity(sessionID) {
   sessionStatusSeenAt.delete(sessionID);
   deleteSessionExecutionContext(sessionID);
 }
+
+// src/source/runtime/scheduler.js
+init_jobs();
+init_state();
 
 // src/source/runtime/scheduler-diagnostics.js
 var DEFAULT_DEFERRAL_LOG_THROTTLE_MS = 30000;
@@ -2634,7 +2876,12 @@ function createSchedulerRuntime(options = {}) {
   };
 }
 
+// src/source/legacy-v1.js
+init_goal_runtime();
+
 // src/source/runtime/goal-policy.js
+init_jobs();
+init_process();
 function requireFunction5(value, name) {
   if (typeof value !== "function")
     throw new TypeError(`createGoalExecutionPolicy requires ${name}`);
@@ -2714,184 +2961,17 @@ ${item.output}`).join(`
   return { runGoalChecks, applyGoalNoProgressGuard };
 }
 
-// src/source/runtime/job-workspace.js
-import { promises as fs7 } from "fs";
-import path8 from "path";
-var MAX_SCAN_FILES = 200;
-var MAX_SCAN_BYTES = 2000000;
-function requireFunction6(value, name) {
-  if (typeof value !== "function")
-    throw new TypeError(`createJobWorkspaceRuntime requires ${name}`);
-  return value;
-}
-function dangerousShell(command) {
-  const text = String(command || "").toLowerCase();
-  return [
-    /\brm\b(?=[^\r\n]*\s-{1,2}(?:[a-z]*r[a-z]*|recursive)\b)(?=[^\r\n]*\s-{1,2}(?:[a-z]*f[a-z]*|force)\b)/,
-    /\bremove-item\b[^\r\n]*(?:-recurse|-force)/,
-    /\bgit\s+reset\b/,
-    /\bgit\s+clean\b/,
-    /\bgit\s+push\b/,
-    /\bdel\b[^\r\n]*\s\/s\b/,
-    /\b(?:rmdir|rd)\b[^\r\n]*\s\/s\b/,
-    /(?:^|[;&|]\s*)format(?:\.com)?\s+(?:[a-z]:|\/(?:fs|q)\b)/,
-    /\bterraform\s+destroy\b/,
-    /\bkubectl\s+delete\b/,
-    /\bdeploy\b.*\bproduction\b/
-  ].some((pattern) => pattern.test(text));
-}
-function createJobWorkspaceRuntime(options = {}) {
-  const toast = requireFunction6(options.toast, "toast");
-  const runProcess2 = typeof options.runProcess === "function" ? options.runProcess : runProcess;
-  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
-  const readSmallTextFile2 = typeof options.readSmallTextFile === "function" ? options.readSmallTextFile : readSmallTextFile;
-  const buildGoalPrompt2 = typeof options.buildGoalPrompt === "function" ? options.buildGoalPrompt : buildGoalPrompt;
-  async function buildPrompt(directory, job) {
-    if (isGoalJob(job))
-      return await buildGoalPrompt2(directory, job);
-    const sections = [];
-    if (job.promptFile) {
-      const text = await readSmallTextFile2(path8.resolve(directory, job.promptFile));
-      if (text.trim())
-        sections.push(`Instructions from ${job.promptFile}:
-${text.trim()}`);
-      else
-        sections.push(`Prompt file ${job.promptFile} was requested but could not be read. Continue from the regular action instead.`);
-    }
-    if (job.action)
-      sections.push(decoratePrompt(job));
-    for (const file of job.includeFiles || []) {
-      const text = await readSmallTextFile2(path8.resolve(directory, file), 80000);
-      if (text.trim())
-        sections.push(`Context from ${file}:
-${text.trim().slice(0, 20000)}`);
-    }
-    return sections.join(`
+// src/source/legacy-v1.js
+init_job_workspace();
 
----
-
-`) || decoratePrompt(job);
-  }
-  async function ensureBranch(directory, job, client, sessionID) {
-    if (!job.branch || job.branchDone)
-      return job;
-    const branch = safeID(job.branch);
-    const inRepo = await runProcess2("git", ["rev-parse", "--is-inside-work-tree"], directory, 1e4);
-    if (inRepo.code !== 0) {
-      job.branchDone = true;
-      return job;
-    }
-    let result = await runProcess2("git", ["switch", branch], directory, 30000);
-    if (result.code !== 0)
-      result = await runProcess2("git", ["switch", "-c", branch], directory, 30000);
-    job.branchDone = true;
-    await toast(client, result.code === 0 ? `Loop branch active: ${branch}` : `Could not switch/create branch: ${branch}`, result.code === 0 ? "success" : "warning");
-    await appendLoopLog2(directory, "branch", { sessionID, branch, code: result.code });
-    return job;
-  }
-  async function snapshotPaths(directory, files) {
-    const snapshot = {};
-    for (const file of files || []) {
-      try {
-        const stat = await fs7.stat(path8.resolve(directory, file));
-        snapshot[file] = `${stat.mtimeMs}:${stat.size}`;
-      } catch {
-        snapshot[file] = "missing";
-      }
-    }
-    return snapshot;
-  }
-  async function watchChanged(directory, job) {
-    if (!job.watchPaths?.length)
-      return false;
-    const next = await snapshotPaths(directory, job.watchPaths);
-    const previous = job.watchSnapshot || {};
-    const changed = job.watchPaths.some((file) => previous[file] !== next[file]);
-    if (changed)
-      job.watchSnapshot = next;
-    return changed;
-  }
-  async function fileContains(filePath, needle) {
-    try {
-      const stat = await fs7.stat(filePath);
-      if (!stat.isFile() || stat.size > MAX_SCAN_BYTES)
-        return false;
-      return (await fs7.readFile(filePath, "utf8")).includes(needle);
-    } catch {
-      return false;
-    }
-  }
-  async function untilReached(directory, job) {
-    if (!job.until)
-      return false;
-    const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path8.join(".opencode", "opencode-loop", "until.txt")];
-    for (const file of files)
-      if (await fileContains(path8.resolve(directory, file), job.until))
-        return true;
-    let scanned = 0;
-    async function walk(current) {
-      if (scanned >= MAX_SCAN_FILES)
-        return false;
-      let entries;
-      try {
-        entries = await fs7.readdir(current, { withFileTypes: true });
-      } catch {
-        return false;
-      }
-      for (const entry of entries) {
-        if (scanned >= MAX_SCAN_FILES)
-          return false;
-        if ([".git", "node_modules", "dist", "build", ".next", "coverage"].includes(entry.name))
-          continue;
-        const full = path8.join(current, entry.name);
-        if (entry.isDirectory()) {
-          if (await walk(full))
-            return true;
-        } else if (entry.isFile() && /\.(md|txt|json|yaml|yml)$/i.test(entry.name)) {
-          scanned++;
-          if (await fileContains(full, job.until))
-            return true;
-        }
-      }
-      return false;
-    }
-    return await walk(directory);
-  }
-  async function createCheckpoint(directory, sessionID, job, client) {
-    if (!job.checkpointOnly && !job.gitCheckpoint)
-      return;
-    const inRepo = await runProcess2("git", ["rev-parse", "--is-inside-work-tree"], directory, 1e4);
-    if (inRepo.code !== 0)
-      return;
-    const status = await runProcess2("git", ["status", "--short"], directory, 30000);
-    if (!status.stdout.trim())
-      return;
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const checkpointDir = path8.join(stateDir(directory), "checkpoints", safeID(sessionID));
-    await ensureDir(checkpointDir);
-    const diff = await runProcess2("git", ["diff", "--binary"], directory, 120000);
-    const staged = await runProcess2("git", ["diff", "--cached", "--binary"], directory, 120000);
-    const prefix = `${timestamp}-${safeID(job.name || job.id)}`;
-    await fs7.writeFile(path8.join(checkpointDir, `${prefix}.status.txt`), status.stdout + status.stderr);
-    await fs7.writeFile(path8.join(checkpointDir, `${prefix}.patch`), `${diff.stdout}
-${staged.stdout}`);
-    if (job.gitCheckpoint) {
-      await runProcess2("git", ["add", "-A"], directory, 120000);
-      await runProcess2("git", ["commit", "-m", `chore: opencode loop checkpoint ${timestamp}`], directory, 120000);
-    }
-    await toast(client, `Loop checkpoint saved: ${prefix}`, "success");
-  }
-  return {
-    buildPrompt,
-    ensureBranch,
-    snapshotPaths,
-    watchChanged,
-    untilReached,
-    createCheckpoint
-  };
-}
+// src/source/runtime/executor.js
+init_jobs();
+init_state();
+init_process();
+init_job_workspace();
 
 // src/source/runtime/session-status.js
+init_process();
 var DEFAULT_STALE_ACTIVE_RECOVERY_MS = 45000;
 var DEFAULT_SESSION_STATUS_CACHE_MS = 1500;
 function positiveNumber(value, fallback) {
@@ -3108,6 +3188,7 @@ function createSessionStatusRuntime(options = {}) {
 }
 
 // src/source/runtime/compaction.js
+init_process();
 function createCompactionRuntime(options = {}) {
   const activeRuns = options.activeRuns;
   if (!(activeRuns instanceof Map))
@@ -3222,6 +3303,9 @@ function createCompactionRuntime(options = {}) {
 }
 
 // src/source/runtime/action-dispatch.js
+init_jobs();
+init_process();
+init_job_workspace();
 function requireFunction7(value, label) {
   if (typeof value !== "function")
     throw new TypeError(`createActionDispatcher requires ${label}`);
@@ -3296,7 +3380,15 @@ ${prompt}`;
   return { fireAction };
 }
 
+// src/source/runtime/run-finalization.js
+init_jobs();
+init_state();
+init_process();
+init_goal_runtime();
+init_job_workspace();
+
 // src/source/runtime/terminal-guard.js
+init_continuation();
 function messageText(message) {
   const parts = Array.isArray(message?.parts) ? message.parts : [];
   const fromParts = parts.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join(`
@@ -3493,7 +3585,10 @@ exit=` + postrun.code + `
 }
 
 // src/source/runtime/run-admission.js
+init_state();
+init_process();
 import path9 from "path";
+init_job_workspace();
 function requireFunction9(value, label) {
   if (typeof value !== "function")
     throw new TypeError(`createRunAdmissionRuntime requires ${label}`);
@@ -3625,6 +3720,7 @@ function refundInfrastructureRun(job, snapshot = {}, input = {}) {
 }
 
 // src/source/runtime/empty-turn.js
+init_jobs();
 var DEFAULT_MAX_EMPTY_TURNS = 2;
 function guardsEmptyAssistantTurn(job) {
   const kind = actionKind(job?.action, job || {});
@@ -4217,6 +4313,9 @@ function createLoopExecutor(options = {}) {
 }
 
 // src/source/runtime/goal-steering.js
+init_jobs();
+init_state();
+init_process();
 var DEFAULT_STEERING_SUPPRESSION_MS = 5 * 60000;
 var DEFAULT_SEEN_USER_MESSAGE_MS = 10 * 60000;
 function requireFunction11(value, label) {
@@ -5153,36 +5252,835 @@ var OpenCodeLoopPlugin2 = async (input = {}) => {
 };
 var v1_default = OpenCodeLoopPlugin2;
 
-// src/source/opencode2/capabilities.js
-function hasFunction(value, key) {
-  return Boolean(value && typeof value[key] === "function");
+// src/source/opencode2/native-plugin.js
+import path12 from "path";
+
+// src/source/opencode2/native-shell.js
+import { spawn as spawn2 } from "child_process";
+import { randomUUID } from "crypto";
+function createNativeShellHost({ directory, onTerminal, onError = () => {} } = {}) {
+  if (!directory || typeof onTerminal !== "function")
+    throw new TypeError("Native shell requires directory and onTerminal");
+  const tasks = new Set;
+  let disposed = false;
+  const report = (error) => {
+    try {
+      onError(error);
+    } catch {}
+  };
+  const tail = (text, data) => (text + String(data)).slice(-64000);
+  function terminate(task) {
+    if (task.settled || !task.child.pid)
+      return;
+    if (process.platform === "win32") {
+      const killer = spawn2("taskkill", ["/pid", String(task.child.pid), "/t", "/f"], { windowsHide: true, stdio: "ignore" });
+      killer.once("error", (error) => {
+        report(error);
+        try {
+          task.child.kill();
+        } catch {}
+      });
+    } else {
+      try {
+        process.kill(-task.child.pid, "SIGTERM");
+      } catch {
+        try {
+          task.child.kill("SIGTERM");
+        } catch {}
+      }
+      if (!task.escalation)
+        task.escalation = setTimeout(() => {
+          try {
+            process.kill(-task.child.pid, "SIGKILL");
+          } catch {
+            try {
+              task.child.kill("SIGKILL");
+            } catch {}
+          }
+        }, 1000);
+    }
+  }
+  async function dispatch(request) {
+    if (disposed)
+      throw new Error("Native shell is disposed");
+    if (!request?.sessionID || typeof request.command !== "string" || !request.command.trim())
+      throw new TypeError("Native shell requires sessionID and command");
+    const shellID = request.id || `shell_loop_${randomUUID().replaceAll("-", "")}`;
+    const child = spawn2(request.command, { cwd: directory, shell: true, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const task = { child, settled: false, timedOut: false, cancelled: false, stdout: "", stderr: "" };
+    task.closed = new Promise((resolve) => {
+      task.resolve = resolve;
+    });
+    tasks.add(task);
+    child.stdout?.on("data", (chunk) => {
+      task.stdout = tail(task.stdout, chunk);
+    });
+    child.stderr?.on("data", (chunk) => {
+      task.stderr = tail(task.stderr, chunk);
+    });
+    const delay = Number(request.timeoutMs);
+    task.timer = setTimeout(() => {
+      task.timedOut = true;
+      terminate(task);
+    }, Number.isFinite(delay) && delay > 0 ? Math.min(delay, 2147483647) : 120000);
+    task.timer.unref?.();
+    child.once("close", (code, signal) => {
+      task.settled = true;
+      clearTimeout(task.timer);
+      clearTimeout(task.escalation);
+      tasks.delete(task);
+      const event = {
+        kind: "shell",
+        action: "ended",
+        directory,
+        sessionID: request.sessionID,
+        shellID,
+        status: task.timedOut ? "timeout" : task.cancelled || signal || code === null ? "killed" : "exited",
+        code: task.timedOut ? 124 : Number.isInteger(code) ? code : -1,
+        stdout: task.stdout,
+        stderr: task.stderr
+      };
+      task.resolve(event);
+      if (!task.spawnError)
+        Promise.resolve().then(() => onTerminal(event)).catch(report);
+    });
+    return new Promise((resolve, reject) => {
+      child.once("spawn", () => resolve({ id: shellID, status: "running" }));
+      child.once("error", (error) => {
+        task.spawnError = true;
+        reject(error);
+      });
+    });
+  }
+  async function dispose() {
+    if (disposed)
+      return;
+    disposed = true;
+    const active = [...tasks];
+    for (const task of active) {
+      task.cancelled = true;
+      terminate(task);
+    }
+    await Promise.allSettled(active.map((task) => task.closed));
+  }
+  return Object.freeze({ dispatch, dispose, activeCount: () => tasks.size });
 }
-function frozenRecord(value) {
-  return Object.freeze(value);
+
+// src/source/opencode2/native-runtime.js
+import { randomUUID as randomUUID2 } from "crypto";
+
+// src/source/opencode2/native-companion.js
+import { createHash } from "crypto";
+import { lstat, readFile } from "fs/promises";
+import path10 from "path";
+async function nativeGoalReservesSession(directory, sessionID) {
+  const shard = createHash("sha256").update(sessionID).digest("hex").slice(0, 32);
+  const root = path10.resolve(directory);
+  const parts = [".opencode", "goals", `${shard}.json`];
+  let file = root;
+  try {
+    for (const part of parts) {
+      file = path10.join(file, part);
+      const info = await lstat(file);
+      if (info.isSymbolicLink())
+        return true;
+    }
+    const goal = JSON.parse(await readFile(file, "utf8"));
+    if (goal?.schemaVersion !== 1 || goal?.sessionID !== sessionID || typeof goal?.id !== "string")
+      return true;
+    return !["completed", "cleared"].includes(goal.status);
+  } catch (error) {
+    return error?.code !== "ENOENT";
+  }
 }
-var OPENCODE_LOOP_V2_HOST_REQUIREMENTS = Object.freeze([
-  "event.subscribe",
-  "session.prompt"
-]);
-var OPENCODE_LOOP_V2_RUNTIME_REQUIREMENTS = Object.freeze([
-  ...OPENCODE_LOOP_V2_HOST_REQUIREMENTS,
-  "runtime.adapter"
-]);
-function inspectOpenCode2Context(ctx) {
-  const command = ctx?.command;
-  const session = ctx?.session;
-  const event = ctx?.event;
-  const tool = ctx?.tool;
-  return frozenRecord({
-    commandTransform: hasFunction(command, "transform"),
-    eventSubscribe: hasFunction(event, "subscribe"),
-    sessionHook: hasFunction(session, "hook"),
-    sessionPrompt: hasFunction(session, "prompt"),
-    sessionCommand: hasFunction(session, "command"),
-    sessionShell: hasFunction(session, "shell"),
-    toolTransform: hasFunction(tool, "transform"),
-    toolHook: hasFunction(tool, "hook")
+
+// src/source/opencode2/native-runtime.js
+init_jobs();
+init_state();
+init_process();
+
+// src/source/opencode2/status.js
+init_jobs();
+function dueAt(job, current) {
+  if (Number(job?.runNowRequestedAt || 0) > 0)
+    return current;
+  const intervalMs = Math.max(0, Number(job?.intervalMs || 0));
+  const lastRunAt = Number(job?.lastRunAt || 0);
+  if (intervalMs === 0)
+    return current;
+  if (lastRunAt > 0)
+    return lastRunAt + intervalMs;
+  if (job?.immediate === false) {
+    const createdAt = Date.parse(job?.createdAt || "");
+    return (Number.isFinite(createdAt) ? createdAt : current) + intervalMs;
+  }
+  return current;
+}
+function formatOpenCode2LoopStatus(state, current = Date.now()) {
+  const jobs = Array.isArray(state?.jobs) ? state.jobs : [];
+  const lines = jobs.length ? jobs.map((job, index) => {
+    const dueIn = Math.max(0, dueAt(job, current) - current);
+    const flags = [
+      isGoalJob(job) ? `goal:${goalStatusText(job)}` : undefined,
+      job.paused ? "paused" : "active",
+      Number(job.runNowRequestedAt || 0) > 0 ? "run-now" : undefined,
+      job.safe ? "safe" : undefined,
+      job.askNever ? "ask-never" : undefined,
+      job.noOverlap ? "no-overlap" : undefined,
+      job.checkpointOnly ? "checkpoint-only" : undefined,
+      job.gitCheckpoint ? "git-checkpoint" : undefined
+    ].filter(Boolean).join(",");
+    return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${jobLabel(job)} | runs=${job.runCount || 0} | failures=${job.failureCount || 0} | due in ${durationToText(dueIn)} | ${flags}`;
+  }) : ["No active loop jobs."];
+  return Object.freeze({
+    jobs,
+    text: `OpenCode loop status:
+${lines.join(`
+`)}`
   });
+}
+
+// src/source/opencode2/native-policy.js
+init_process();
+init_job_workspace();
+import { stat } from "fs/promises";
+import path11 from "path";
+function createNativeJobPolicy(options = {}) {
+  const now = options.now || Date.now;
+  const run = options.runShellCommand || runShellCommand;
+  const workspace = options.workspace || createJobWorkspaceRuntime({ toast: async () => {} });
+  function pause(job, reason, failed = false) {
+    job.paused = true;
+    job.pauseReason = reason;
+    if (failed)
+      job.failureCount = (job.failureCount || 0) + 1;
+    return false;
+  }
+  async function shell(scope, job, command, phase) {
+    if (job.safe && dangerousShell(command)) {
+      return { code: -1, stdout: "", stderr: `Blocked ${phase} by --safe command guard`, blocked: true };
+    }
+    const result = await run(command, scope.directory, Math.max(1, Number(job.timeoutMs) || 120000));
+    await appendLoopLog(scope.directory, `v2-${phase}`, {
+      sessionID: scope.sessionID,
+      job: job.name || job.id,
+      code: result.code,
+      output: String(result.stdout || "").slice(-8000),
+      error: String(result.stderr || "").slice(-8000)
+    });
+    return result;
+  }
+  async function checkStop(scope, job) {
+    const created = Date.parse(job.createdAt);
+    if (job.maxRuntimeMs > 0 && Number.isFinite(created) && now() - created >= job.maxRuntimeMs) {
+      job.enabled = false;
+      return pause(job, "max-runtime");
+    }
+    if (job.stopFile) {
+      try {
+        await stat(path11.resolve(scope.directory, job.stopFile));
+        job.enabled = false;
+        return pause(job, "stop-file");
+      } catch (error) {
+        if (error?.code !== "ENOENT")
+          throw error;
+      }
+    }
+    if (await workspace.untilReached(scope.directory, job)) {
+      job.enabled = false;
+      return pause(job, "until-reached");
+    }
+    return true;
+  }
+  async function prepare(scope, job, isCurrent = () => true) {
+    if (!await checkStop(scope, job) || !isCurrent())
+      return false;
+    if (job.dryRun)
+      return true;
+    if (job.preflightCommand) {
+      const result = await shell(scope, job, job.preflightCommand, "preflight");
+      job.lastPreflightCode = result.code;
+      if (result.code !== 0)
+        return pause(job, "preflight-failed", true);
+    }
+    if (!isCurrent())
+      return false;
+    if (job.branch) {
+      await workspace.ensureBranch(scope.directory, job, undefined, scope.sessionID);
+      if (!job.branchDone)
+        return pause(job, "branch-unavailable", true);
+    }
+    return isCurrent();
+  }
+  async function finish(scope, job, isCurrent = () => true) {
+    if (!isCurrent() || job.dryRun)
+      return;
+    if (job.verifyCommand) {
+      const result = await shell(scope, job, job.verifyCommand, "verify");
+      job.lastVerifyCode = result.code;
+      job.lastVerifyAt = now();
+      job.lastVerifyOutput = `${result.stdout || ""}
+${result.stderr || ""}`.trim().slice(-8000);
+      if (result.code !== 0) {
+        job.failureCount = (job.failureCount || 0) + 1;
+        if (result.blocked || job.pauseOnVerifyFail || job.maxFailures > 0 && job.failureCount >= job.maxFailures)
+          pause(job, "verification-failed");
+        return;
+      }
+      job.failureCount = 0;
+    }
+    if (!isCurrent())
+      return;
+    if (job.postrunCommand) {
+      const result = await shell(scope, job, job.postrunCommand, "postrun");
+      job.lastPostrunCode = result.code;
+      if (result.code !== 0) {
+        pause(job, "postrun-failed", true);
+        return;
+      }
+    }
+    if (isCurrent())
+      await workspace.createCheckpoint(scope.directory, scope.sessionID, job, undefined);
+  }
+  async function notify(scope, job, reason) {
+    if (!job.notifyCommand || job.dryRun)
+      return;
+    const literal = (value) => String(value || "").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 160);
+    const command = String(job.notifyCommand).replace(/\{reason\}/g, literal(reason)).replace(/\{job\}/g, literal(job.name || job.id));
+    await shell(scope, job, command, "notify");
+  }
+  return {
+    pause,
+    checkStop,
+    prepare,
+    finish,
+    notify,
+    shell,
+    buildPrompt: workspace.buildPrompt,
+    snapshotPaths: workspace.snapshotPaths,
+    watchChanged: workspace.watchChanged
+  };
+}
+
+// src/source/opencode2/native-runtime.js
+var PREFIX = "AUTONOMOUS OPENCODE LOOP ITERATION. Continue the configured task now. Do not explain the /loop command. Work directly on the configured task.";
+var result = (detail = {}) => ({ handled: true, dispatched: false, ...detail });
+var id = () => `msg_loop_${randomUUID2().replaceAll("-", "")}`;
+function createNativeLoopRuntime(options = {}) {
+  if (typeof options.prompt !== "function")
+    throw new TypeError("Native Loop requires prompt()");
+  const now = options.now || Date.now;
+  const setTimer = options.setTimer || setTimeout;
+  const clearTimer = options.clearTimer || clearTimeout;
+  const policy = createNativeJobPolicy({ ...options, now });
+  const scopes = new Map;
+  let disposed = false;
+  function scopeFor(event) {
+    const sessionID = String(event?.sessionID || "").trim();
+    const directory = String(event?.directory || options.directory || "").trim();
+    if (!sessionID || !directory)
+      return;
+    const key = `${directory}\x00${sessionID}`;
+    if (!scopes.has(key))
+      scopes.set(key, { key, sessionID, directory, epoch: 0, busy: false, queue: Promise.resolve() });
+    return scopes.get(key);
+  }
+  const current = (scope) => !disposed && !scope.deleted;
+  const read = (scope) => readState(scope.directory, scope.sessionID);
+  const save = (scope, state) => writeState(scope.directory, scope.sessionID, state);
+  const report = (error) => {
+    try {
+      options.onError?.(error);
+    } catch {}
+  };
+  function enqueue(scope, task) {
+    const pending = scope.queue.catch(() => {}).then(() => current(scope) ? task() : result({ reason: "disposed" }));
+    scope.queue = pending.catch(report);
+    return pending;
+  }
+  function clear(scope, field) {
+    if (scope[field] !== undefined)
+      clearTimer(scope[field]);
+    delete scope[field];
+  }
+  function eligible(job) {
+    return job.enabled !== false && !job.paused && !(job.maxRuns > 0 && (job.runCount || 0) >= job.maxRuns);
+  }
+  function dueAt(job) {
+    if (job.runNowRequestedAt > 0)
+      return now();
+    if (job.watchPaths?.length && !job.watchTriggered)
+      return Infinity;
+    if (job.lastRunAt > 0)
+      return job.lastRunAt + Math.max(0, job.intervalMs || 0);
+    return job.immediate === false ? Date.parse(job.createdAt) + Math.max(0, job.intervalMs || 0) : now();
+  }
+  function blocked(job) {
+    const kind = actionKind(job.action, job);
+    if (kind === "goal")
+      return ["Use the native @bybrawe/opencode-goal /goal workflow; legacy Loop Goal state is not silently converted."];
+    if (!["prompt", "command", "compact", "shell"].includes(kind))
+      return ["unsupported action kind"];
+    if (kind === "command" && (typeof options.command !== "function" || typeof options.wait !== "function"))
+      return ["native command and wait capabilities are required"];
+    if ((kind === "compact" || job.compactEveryRuns > 0 || job.compactEveryMs > 0) && typeof options.compact !== "function")
+      return ["native compaction capability is required"];
+    if (kind === "shell" && typeof options.shell !== "function")
+      return ["native shell capability is required"];
+    if (job.noOverlap === false)
+      return ["Native V2 sessions are serialized; remove --allow-overlap."];
+    return [];
+  }
+  async function schedule(scope) {
+    clear(scope, "timer");
+    if (!current(scope) || scope.busy || scope.active || scope.compaction)
+      return;
+    const state = await read(scope);
+    if (!current(scope) || scope.busy || scope.active || scope.compaction)
+      return;
+    let delay = Infinity;
+    for (const job of state.jobs || []) {
+      if (!eligible(job) || job.v2Run || blocked(job).length)
+        continue;
+      if (job.watchPaths?.length || job.stopFile || job.until)
+        delay = Math.min(delay, 1000);
+      const due = dueAt(job);
+      if (due > now())
+        delay = Math.min(delay, due - now());
+      if (job.maxRuntimeMs > 0)
+        delay = Math.min(delay, Math.max(1, Date.parse(job.createdAt) + job.maxRuntimeMs - now()));
+    }
+    if (!Number.isFinite(delay))
+      return;
+    scope.timer = setTimer(() => {
+      delete scope.timer;
+      return enqueue(scope, () => advance(scope)).catch(report);
+    }, Math.max(1, Math.min(delay, 2147483647)));
+    scope.timer?.unref?.();
+  }
+  async function note(scope, name, detail = {}) {
+    await appendLoopLog(scope.directory, `v2-native-${name}`, { sessionID: scope.sessionID, ...detail });
+  }
+  async function pauseActive(scope, reason, failed = true) {
+    clear(scope, "deadline");
+    const state = await read(scope);
+    for (const job of state.jobs || []) {
+      if (scope.active ? job.id !== scope.active.jobID : !eligible(job))
+        continue;
+      policy.pause(job, reason, failed);
+    }
+    await save(scope, state);
+    await cancelPending(scope, state);
+    await note(scope, "paused", { reason });
+    return result({ reason });
+  }
+  async function cancelPending(scope, state) {
+    const run = scope.active;
+    if (!run || run.delivered || !["prompt", "command"].includes(run.kind) || !run.inboxID || typeof options.cancel !== "function")
+      return false;
+    let cancelled = false;
+    try {
+      cancelled = await options.cancel({ sessionID: scope.sessionID, inboxID: run.inboxID }) === true;
+    } catch (error) {
+      report(error);
+    }
+    if (!cancelled)
+      return false;
+    const job = (state.jobs || []).find((entry) => entry.id === run.jobID);
+    if (job?.v2Run?.id === run.id) {
+      Object.assign(job, run.previous);
+      delete job.v2Run;
+      await save(scope, state);
+    }
+    if (scope.active === run)
+      delete scope.active;
+    clear(scope, "deadline");
+    return true;
+  }
+  async function finish(scope) {
+    const run = scope.active;
+    if (!run || scope.compaction || scope.busy)
+      return result({ reason: "no-terminal-boundary" });
+    if (run.kind === "prompt" && !run.delivered || run.kind === "command" && !run.commandFinished || run.kind === "shell" && !run.shellFinished || ["compact", "cadence"].includes(run.kind) && !run.compactFinished) {
+      return result({ reason: "awaiting-owned-completion" });
+    }
+    clear(scope, "deadline");
+    const state = await read(scope);
+    const job = (state.jobs || []).find((entry) => entry.id === run.jobID);
+    if (job?.v2Run?.id === run.id) {
+      if (["compact", "cadence"].includes(run.kind)) {
+        job.lastCompactAt = now();
+        job.lastCompactRunCount = job.runCount || 0;
+      } else if (!job.paused && !run.foreground) {
+        await policy.finish(scope, job, () => current(scope) && scope.active === run && !run.foreground);
+      }
+      delete job.v2Run;
+      job.lastCompletedAt = now();
+      await save(scope, state);
+      if (job.paused || job.enabled === false)
+        await policy.notify(scope, job, job.pauseReason || "completed");
+    }
+    if (scope.active === run)
+      delete scope.active;
+    await note(scope, "completed", { jobID: run.jobID, kind: run.kind, foreground: Boolean(run.foreground) });
+    return advance(scope);
+  }
+  async function dispatch(scope, state, job, kind) {
+    const epoch = scope.epoch;
+    const isCurrent = () => current(scope) && scope.epoch === epoch && !scope.busy && !scope.compaction;
+    let request;
+    if (kind === "prompt")
+      request = { sessionID: scope.sessionID, id: id(), text: `${PREFIX}
+
+${await policy.buildPrompt(scope.directory, job)}`, delivery: "queue", metadata: { opencode_loop_v2: true, opencode_loop_job: job.id } };
+    else if (kind === "compact" || kind === "cadence")
+      request = { sessionID: scope.sessionID, id: id(), delivery: "queue" };
+    else if (kind === "shell")
+      request = { sessionID: scope.sessionID, id: id(), command: String(job.action).replace(/^[!$]\s*/, ""), timeoutMs: job.timeoutMs };
+    else {
+      const [name, text] = splitFirst(String(job.action).replace(/^\/+/, ""));
+      request = { sessionID: scope.sessionID, name, text: text || "", delivery: "queue" };
+    }
+    if (!isCurrent())
+      return result({ reason: "foreground-or-compaction" });
+    if (job.dryRun) {
+      policy.pause(job, "dry-run");
+      await save(scope, state);
+      return result({ dryRun: true, request });
+    }
+    if (kind === "shell" && job.safe) {
+      await Promise.resolve().then(() => init_job_workspace());
+      if (dangerousShell(request.command)) {
+        policy.pause(job, "unsafe-shell", true);
+        await save(scope, state);
+        return result({ reason: "unsafe-shell" });
+      }
+    }
+    const run = {
+      id: request.id || id(),
+      jobID: job.id,
+      kind,
+      createdAt: now(),
+      delivered: false,
+      previous: { runCount: job.runCount || 0, lastRunAt: job.lastRunAt || 0, enabled: job.enabled }
+    };
+    job.v2Run = { id: run.id, kind, status: "admitting", createdAt: run.createdAt };
+    await save(scope, state);
+    job = state.jobs.find((entry) => entry.id === run.jobID);
+    if (!isCurrent() || !job || !eligible(job)) {
+      if (job?.v2Run?.id === run.id) {
+        delete job.v2Run;
+        await save(scope, state);
+      }
+      return result({ reason: "admission-withdrawn" });
+    }
+    scope.active = run;
+    clear(scope, "timer");
+    try {
+      let response;
+      if (kind === "prompt")
+        response = await options.prompt(request);
+      else if (kind === "compact" || kind === "cadence")
+        response = await options.compact(request);
+      else if (kind === "shell")
+        response = await options.shell(request);
+      else
+        response = await options.command(request);
+      if (response?.error || response?.accepted === false)
+        throw new Error(String(response.error?.message || response.error || "Native admission rejected"));
+      run.inboxID = response?.id || response?.data?.id || request.id;
+      run.shellID = kind === "shell" ? response?.id || response?.shell?.id || request.id : undefined;
+      if (kind !== "cadence") {
+        job.runCount = (job.runCount || 0) + 1;
+        job.lastRunAt = now();
+        if (job.maxRuns > 0 && job.runCount >= job.maxRuns)
+          job.enabled = false;
+      }
+      delete job.runNowRequestedAt;
+      job.watchTriggered = false;
+      job.v2Run = { ...job.v2Run, status: "admitted", inboxID: run.inboxID, shellID: run.shellID };
+      await save(scope, state);
+      await note(scope, "admitted", { jobID: job.id, kind, inboxID: run.inboxID, runCount: job.runCount });
+      if (current(scope) && job.timeoutMs > 0) {
+        scope.deadline = setTimer(() => enqueue(scope, () => scope.active === run ? pauseActive(scope, "timeout-waiting-for-host-boundary") : result()).catch(report), Math.min(job.timeoutMs, 2147483647));
+        scope.deadline?.unref?.();
+      }
+      if (kind === "command") {
+        Promise.resolve().then(() => options.wait({ sessionID: scope.sessionID })).then(() => enqueue(scope, async () => {
+          if (scope.active !== run)
+            return result();
+          run.commandFinished = true;
+          return finish(scope);
+        }), () => enqueue(scope, () => pauseActive(scope, "command-failed"))).catch(report);
+      }
+      if (kind === "shell" && response?.status && response.status !== "running") {
+        run.shellFinished = true;
+        if (response.status !== "exited" || Number(response.exit || 0) !== 0)
+          return pauseActive(scope, "shell-failed");
+        return finish(scope);
+      }
+      return result({ dispatched: true, job, kind, request });
+    } catch (error) {
+      policy.pause(job, "admission-uncertain", true);
+      job.lastError = error instanceof Error ? error.message : String(error);
+      await save(scope, state);
+      await note(scope, "admission-failed", { jobID: job.id, message: job.lastError });
+      return result({ reason: "admission-uncertain", error: job.lastError });
+    }
+  }
+  async function advance(scope) {
+    if (!current(scope) || scope.busy || scope.compaction || scope.active)
+      return result({ reason: "host-not-idle" });
+    const epoch = scope.epoch;
+    const state = await read(scope);
+    clear(scope, "companionTimer");
+    if (!(state.jobs || []).some(eligible))
+      return result();
+    if (await nativeGoalReservesSession(scope.directory, scope.sessionID)) {
+      if (current(scope)) {
+        scope.companionTimer = setTimer(() => {
+          delete scope.companionTimer;
+          return enqueue(scope, () => advance(scope)).catch(report);
+        }, 1000);
+        scope.companionTimer?.unref?.();
+      }
+      return result({ reason: "dedicated-goal-owns-session" });
+    }
+    for (const job of state.jobs || []) {
+      if (!eligible(job))
+        continue;
+      if (job.v2Run) {
+        policy.pause(job, "restart-requires-review");
+        await save(scope, state);
+        return result({ reason: "restart-requires-review" });
+      }
+      if (blocked(job).length)
+        continue;
+      if (job.watchPaths?.length && await policy.watchChanged(scope.directory, job))
+        job.watchTriggered = true;
+      const safe = () => current(scope) && !scope.busy && !scope.compaction && !scope.active && scope.epoch === epoch;
+      if (!safe())
+        return result({ reason: "foreground-or-compaction" });
+      if (!await policy.checkStop(scope, job)) {
+        await save(scope, state);
+        await policy.notify(scope, job, job.pauseReason);
+        return advance(scope);
+      }
+      if (dueAt(job) > now())
+        continue;
+      if (!await policy.prepare(scope, job, safe)) {
+        if (job.paused || job.enabled === false) {
+          await save(scope, state);
+          await policy.notify(scope, job, job.pauseReason);
+          return advance(scope);
+        }
+        return result({ reason: job.pauseReason || "foreground-or-compaction" });
+      }
+      const kind = actionKind(job.action, job);
+      const cadence = kind !== "compact" && job.runCount > 0 && (job.compactEveryRuns > 0 && job.runCount - (job.lastCompactRunCount || 0) >= job.compactEveryRuns || job.compactEveryMs > 0 && now() - (job.lastCompactAt || Date.parse(job.createdAt)) >= job.compactEveryMs);
+      return dispatch(scope, state, job, cadence ? "cadence" : kind);
+    }
+    await schedule(scope);
+    return result();
+  }
+  async function command(scope, event) {
+    const state = await read(scope);
+    const target = String(event.arguments || "").trim() || "all";
+    if (event.name === "loop") {
+      const parsed = parseLoopArgs(event.arguments || "");
+      if (!parsed.ok)
+        return result({ accepted: false, error: parsed.error });
+      const blockers = blocked(parsed.job);
+      if (blockers.length)
+        return result({ accepted: false, reason: "unsupported", blockers, error: blockers.join(" ") });
+      const job = parsed.job;
+      job.name = String(job.name || "default");
+      job.createdAt = new Date(now()).toISOString();
+      job.lastRunAt = 0;
+      if (job.watchPaths?.length)
+        job.watchSnapshot = await policy.snapshotPaths(scope.directory, job.watchPaths);
+      const jobs = state.jobs || [];
+      if (!job.multi && jobs.some((other) => (other.name || "default") === job.name && other.v2Run))
+        return result({ accepted: false, error: "Pause/stop the existing in-flight job before replacing it." });
+      state.jobs = job.multi ? jobs : jobs.filter((other) => (other.name || "default") !== job.name);
+      state.jobs.push(job);
+      await save(scope, state);
+      await schedule(scope);
+      return result({ accepted: true, job });
+    }
+    if (event.name === "loop-status" || event.name === "loop-export") {
+      const status = formatOpenCode2LoopStatus(state, now());
+      const text = event.name === "loop-export" ? JSON.stringify(state, null, 2) : status.text;
+      await options.prompt({ sessionID: scope.sessionID, text, resume: false, metadata: { opencode_loop_v2: true } });
+      return result({ accepted: true, status });
+    }
+    if (!["loop-now", "loop-pause", "loop-resume", "loop-stop", "loop-remove", "loop-clear"].includes(event.name))
+      return { handled: false };
+    const matches = (job, index) => event.name === "loop-clear" || matchJob(job, target, index);
+    let count = 0;
+    for (const [index, job] of (state.jobs || []).entries()) {
+      if (!matches(job, index))
+        continue;
+      count++;
+      if (["loop-pause", "loop-stop", "loop-remove", "loop-clear"].includes(event.name)) {
+        policy.pause(job, "user-paused");
+      } else if (!job.v2Run) {
+        job.paused = false;
+        delete job.pauseReason;
+        if (event.name === "loop-now" || event.name === "loop-resume")
+          job.runNowRequestedAt = Math.max(1, now());
+      }
+    }
+    await save(scope, state);
+    if (state.jobs.some((job) => job.id === scope.active?.jobID && job.paused))
+      await cancelPending(scope, state);
+    if (["loop-stop", "loop-remove", "loop-clear"].includes(event.name)) {
+      state.jobs = state.jobs.filter((job, index) => !matches(job, index));
+      if (!state.jobs.length)
+        await removeState(scope.directory, scope.sessionID);
+      else
+        await save(scope, state);
+    }
+    await schedule(scope);
+    return result({ accepted: true, count, target });
+  }
+  async function onEvent(event) {
+    if (disposed)
+      return result({ reason: "disposed" });
+    if (event?.kind === "server" && event.action === "disposed") {
+      await dispose();
+      return result({ disposed: true });
+    }
+    const scope = scopeFor(event);
+    if (!scope)
+      return { handled: false };
+    if (event.kind === "foreground") {
+      scope.epoch++;
+      scope.busy = true;
+      if (scope.active)
+        scope.active.foreground = true;
+      clear(scope, "timer");
+      return result({ reason: "foreground-admission" });
+    }
+    if (event.kind === "compaction" && event.action === "started") {
+      scope.compaction ||= { ended: false, terminal: false };
+      scope.busy = true;
+      clear(scope, "timer");
+      return result({ reason: "compacting" });
+    }
+    if (event.kind === "session" && event.action === "status" && ["busy", "retry"].includes(event.status)) {
+      scope.busy = true;
+      clear(scope, "timer");
+      return result();
+    }
+    if (event.kind === "session" && event.action === "deleted") {
+      scope.deleted = true;
+      clear(scope, "timer");
+      clear(scope, "deadline");
+      clear(scope, "companionTimer");
+      scopes.delete(scope.key);
+      return result({ disposedScope: true });
+    }
+    return enqueue(scope, async () => {
+      if (event.kind === "command" && event.action === "executed")
+        return command(scope, event);
+      if (event.kind === "inbox") {
+        if (scope.active?.inboxID === event.inboxID || scope.active?.id === event.inboxID) {
+          if (event.action === "delivered")
+            scope.active.delivered = true;
+          if (event.action === "cancelled") {
+            const run = scope.active;
+            const state = await read(scope);
+            const job = (state.jobs || []).find((entry) => entry.id === run.jobID);
+            if (job?.v2Run?.id === run.id && !run.delivered) {
+              Object.assign(job, run.previous);
+              policy.pause(job, "inbox-cancelled");
+              delete job.v2Run;
+              await save(scope, state);
+            }
+            if (scope.active === run)
+              delete scope.active;
+            clear(scope, "deadline");
+            return result({ reason: "inbox-cancelled" });
+          }
+        }
+        return result();
+      }
+      if (event.kind === "shell" && event.action === "ended" && scope.active?.shellID === event.shellID) {
+        scope.active.shellFinished = true;
+        if (event.status !== "exited" || event.code !== 0) {
+          const run = scope.active;
+          const paused = await pauseActive(scope, "shell-failed");
+          const state = await read(scope);
+          const job = (state.jobs || []).find((entry) => entry.id === run.jobID);
+          if (job?.v2Run?.id === run.id) {
+            delete job.v2Run;
+            await save(scope, state);
+          }
+          if (scope.active === run)
+            delete scope.active;
+          return paused;
+        }
+        return finish(scope);
+      }
+      if (event.kind === "session" && ["error", "failed", "interrupted"].includes(event.action) || event.kind === "compaction" && event.action === "failed") {
+        delete scope.compaction;
+        scope.busy = false;
+        const run = scope.active;
+        const paused = await pauseActive(scope, event.reason || `${event.kind}-${event.action}`);
+        if (run && (run.delivered || ["compact", "cadence", "shell"].includes(run.kind))) {
+          const state = await read(scope);
+          const job = (state.jobs || []).find((entry) => entry.id === run.jobID);
+          if (job?.v2Run?.id === run.id) {
+            delete job.v2Run;
+            await save(scope, state);
+          }
+          if (scope.active === run)
+            delete scope.active;
+        }
+        return paused;
+      }
+      if (event.kind === "compaction" && event.action === "ended") {
+        scope.compaction ||= { ended: false, terminal: false };
+        scope.compaction.ended = true;
+        if (["compact", "cadence"].includes(scope.active?.kind))
+          scope.active.compactFinished = true;
+        if (!scope.compaction.terminal)
+          return result({ reason: "awaiting-execution-terminal" });
+      } else if (event.kind === "session" && event.action === "idle") {
+        if (scope.compaction) {
+          scope.compaction.terminal = true;
+          if (!scope.compaction.ended)
+            return result({ reason: "awaiting-compaction-end" });
+        }
+      } else if (event.kind === "session" && event.action === "status" && event.status === "idle") {
+        if (scope.active || scope.compaction)
+          return result({ reason: "awaiting-execution-terminal" });
+      } else
+        return { handled: false };
+      delete scope.compaction;
+      scope.busy = false;
+      return scope.active ? finish(scope) : advance(scope);
+    });
+  }
+  async function wake(event) {
+    const scope = scopeFor(event);
+    return scope ? enqueue(scope, () => advance(scope)) : { handled: false };
+  }
+  async function dispose() {
+    if (disposed)
+      return false;
+    disposed = true;
+    for (const scope of scopes.values()) {
+      clear(scope, "timer");
+      clear(scope, "deadline");
+      clear(scope, "companionTimer");
+    }
+    await Promise.allSettled([...scopes.values()].map((scope) => scope.queue));
+    scopes.clear();
+    return true;
+  }
+  return Object.freeze({ onEvent, wake, dispose, scheduledCount: () => [...scopes.values()].filter((scope) => scope.timer !== undefined).length });
 }
 
 // src/source/opencode2/commands.js
@@ -5297,9 +6195,461 @@ function parseOpenCode2LoopCommandText(value) {
   return;
 }
 
+// src/source/opencode2/events.js
+function record2(value) {
+  return value && typeof value === "object" ? value : undefined;
+}
+function text2(value) {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+function directoryFrom(raw) {
+  return text2(record2(raw?.location)?.directory);
+}
+function sessionIDFrom(raw) {
+  const data = record2(raw?.data);
+  return text2(data?.sessionID);
+}
+function normalizeOpenCode2NativeEvent(raw) {
+  const type = text2(raw?.type);
+  if (!type)
+    return;
+  const data = record2(raw?.data) || {};
+  const directory = directoryFrom(raw);
+  const sessionID = sessionIDFrom(raw);
+  if (type === "session.inbox.enqueued") {
+    const item = record2(data.item);
+    const payload = record2(item?.payload);
+    const parsed = item?.type === "user" ? parseOpenCode2LoopCommandText(payload?.text) : undefined;
+    if (!sessionID || !parsed)
+      return;
+    return Object.freeze({
+      kind: "command",
+      action: "executed",
+      sessionID,
+      directory,
+      name: parsed.name,
+      arguments: parsed.arguments
+    });
+  }
+  if (type === "session.status") {
+    const status = text2(record2(data.status)?.type);
+    if (!sessionID || !status)
+      return;
+    return Object.freeze({ kind: "session", action: "status", sessionID, directory, status });
+  }
+  if (type === "session.idle") {
+    if (!sessionID)
+      return;
+    return Object.freeze({ kind: "session", action: "idle", sessionID, directory });
+  }
+  if (type === "session.execution.started") {
+    if (!sessionID)
+      return;
+    return Object.freeze({ kind: "session", action: "status", sessionID, directory, status: "busy" });
+  }
+  if (type === "session.execution.succeeded") {
+    if (!sessionID)
+      return;
+    return Object.freeze({ kind: "session", action: "idle", sessionID, directory });
+  }
+  if (type === "session.inbox.delivered" || type === "session.inbox.cancelled") {
+    if (!sessionID || !text2(data.inboxID))
+      return;
+    return Object.freeze({ kind: "inbox", action: type.endsWith("delivered") ? "delivered" : "cancelled", sessionID, directory, inboxID: data.inboxID });
+  }
+  if (["session.compaction.started", "session.compaction.ended", "session.compaction.failed"].includes(type)) {
+    if (!sessionID)
+      return;
+    return Object.freeze({ kind: "compaction", action: type.split(".").at(-1), sessionID, directory });
+  }
+  if (["session.execution.failed", "session.execution.interrupted"].includes(type)) {
+    if (!sessionID)
+      return;
+    return Object.freeze({ kind: "session", action: "error", sessionID, directory, reason: type });
+  }
+  if (["session.shell.started", "session.shell.ended"].includes(type)) {
+    if (!sessionID)
+      return;
+    const shell = record2(data.shell) || {};
+    return Object.freeze({ kind: "shell", action: type.endsWith("started") ? "started" : "ended", sessionID, directory, shellID: shell.id, command: shell.command, code: typeof shell.exit === "number" ? shell.exit : -1, status: shell.status, metadata: shell.metadata });
+  }
+  if (type === "location.shutdown")
+    return Object.freeze({ kind: "server", action: "disposed", directory });
+  if (type === "session.created") {
+    if (!sessionID)
+      return;
+    return Object.freeze({ kind: "session", action: "created", sessionID, directory: directory || text2(record2(data.location)?.directory) });
+  }
+  if (type === "session.deleted") {
+    if (!sessionID)
+      return;
+    return Object.freeze({ kind: "session", action: "deleted", sessionID, directory });
+  }
+  return;
+}
+
+// src/source/opencode2/event-bridge.js
+function cleanupRegistration(registration) {
+  if (typeof registration === "function")
+    return registration;
+  if (!registration || typeof registration !== "object")
+    return;
+  for (const key of ["dispose", "unsubscribe", "close"]) {
+    if (typeof registration[key] === "function")
+      return registration[key].bind(registration);
+  }
+  return;
+}
+function eventStream(registration) {
+  const stream = registration?.stream ?? registration;
+  if (!stream || typeof stream[Symbol.asyncIterator] !== "function") {
+    throw new TypeError("OpenCode 2 event subscribe must return an async event stream");
+  }
+  return stream;
+}
+function sameDirectory(expected, actual) {
+  if (!expected || !actual)
+    return true;
+  return String(expected) === String(actual);
+}
+function createOpenCode2EventBridge({
+  directory,
+  allowInboxCommands = true,
+  onEvent = async () => {},
+  onError = () => {},
+  runtimeManager = createSessionRuntimeManager()
+} = {}) {
+  if (typeof onEvent !== "function")
+    throw new TypeError("OpenCode 2 event bridge requires onEvent to be a function");
+  if (typeof onError !== "function")
+    throw new TypeError("OpenCode 2 event bridge requires onError to be a function");
+  let registration;
+  let iterator;
+  let iteratorClosed = false;
+  let pump;
+  let attached = false;
+  let stopped = false;
+  let disposed = false;
+  let managerDisposed = false;
+  let queue = Promise.resolve();
+  const sessionDirectories = new Map;
+  const seenEventIDs = new Set;
+  function report(error) {
+    try {
+      onError(error);
+    } catch {}
+  }
+  function disposeManager(reason) {
+    if (managerDisposed)
+      return false;
+    managerDisposed = true;
+    return runtimeManager.dispose(reason);
+  }
+  async function closeIterator() {
+    if (iteratorClosed)
+      return false;
+    iteratorClosed = true;
+    const current = iterator;
+    iterator = undefined;
+    if (typeof current?.return === "function")
+      await current.return();
+    return Boolean(current);
+  }
+  function normalize(raw) {
+    const current = normalizeOpenCode2NativeEvent(raw) || normalizeOpenCodeEvent(raw);
+    if (!current)
+      return;
+    const sessionID = current.sessionID;
+    const rememberedDirectory = sessionID ? sessionDirectories.get(sessionID) : undefined;
+    const eventDirectory = current.directory || rememberedDirectory || directory;
+    const event = eventDirectory === current.directory ? current : Object.freeze({ ...current, directory: eventDirectory });
+    if (sessionID && event.directory)
+      sessionDirectories.set(sessionID, event.directory);
+    return event;
+  }
+  async function process2(raw) {
+    if (stopped)
+      return;
+    if (!allowInboxCommands && raw?.type === "session.inbox.enqueued")
+      return;
+    const event = normalize(raw);
+    if (!event || !sameDirectory(directory, event.directory))
+      return;
+    if (typeof raw?.id === "string") {
+      if (seenEventIDs.has(raw.id))
+        return;
+      seenEventIDs.add(raw.id);
+      if (seenEventIDs.size > 2048)
+        seenEventIDs.delete(seenEventIDs.values().next().value);
+    }
+    const runtime = event.sessionID ? runtimeManager.observeExternal(event.sessionID) : undefined;
+    await onEvent(event, runtime);
+    if (event.kind === "session" && event.action === "deleted") {
+      sessionDirectories.delete(event.sessionID);
+      runtimeManager.remove(event.sessionID, { expectedRuntime: runtime, reason: "session-deleted" });
+    }
+    if (event.kind === "server" && event.action === "disposed") {
+      stopped = true;
+      sessionDirectories.clear();
+      disposeManager("server-disposed");
+    }
+    return event;
+  }
+  function dispatch(raw) {
+    if (stopped)
+      return Promise.resolve(undefined);
+    const result = queue.then(() => process2(raw));
+    queue = result.catch(() => {
+      return;
+    });
+    return result;
+  }
+  function callback(raw) {
+    const pending = dispatch(raw);
+    pending.catch(report);
+    return pending.catch(() => {
+      return;
+    });
+  }
+  async function consume(stream) {
+    const current = stream[Symbol.asyncIterator]();
+    iterator = current;
+    iteratorClosed = false;
+    try {
+      while (!stopped) {
+        const next = await current.next();
+        if (next?.done)
+          break;
+        await dispatch(next?.value);
+      }
+    } catch (error) {
+      if (!stopped)
+        report(error);
+    } finally {
+      if (stopped && !iteratorClosed)
+        await closeIterator().catch(() => {
+          return;
+        });
+      if (iterator === current)
+        iterator = undefined;
+    }
+  }
+  async function attach(subscribe) {
+    if (disposed)
+      throw new Error("OpenCode 2 event bridge is disposed");
+    if (attached)
+      throw new Error("OpenCode 2 event bridge is already attached");
+    if (typeof subscribe !== "function")
+      throw new TypeError("OpenCode 2 event bridge requires an event subscribe function");
+    if (subscribe.length > 0) {
+      registration = await subscribe(callback);
+      attached = true;
+      return registration;
+    }
+    registration = await subscribe();
+    const stream = eventStream(registration);
+    attached = true;
+    pump = consume(stream);
+    return registration;
+  }
+  async function dispose(reason = "bridge-disposed") {
+    if (disposed)
+      return false;
+    disposed = true;
+    stopped = true;
+    await closeIterator().catch(() => {
+      return;
+    });
+    await pump?.catch(() => {
+      return;
+    });
+    await queue.catch(() => {
+      return;
+    });
+    const cleanup = cleanupRegistration(registration);
+    registration = undefined;
+    if (cleanup)
+      await cleanup();
+    sessionDirectories.clear();
+    disposeManager(reason);
+    return true;
+  }
+  return Object.freeze({
+    attach,
+    dispatch,
+    dispose,
+    runtimeManager,
+    isAttached: () => attached,
+    isDisposed: () => disposed
+  });
+}
+
+// src/source/opencode2/native-plugin.js
+init_process();
+init_state();
+var HELP = `OpenCode Loop: native OpenCode 2 runtime
+/loop 0s <task> --max-runs 3
+/loop 5m <task> --verify "npm test" --pause-on-verify-fail
+/loop --watch progress.md <task>
+/loop 0s <task> --prompt-file instructions.md --include-file progress.md
+/loop 0s <task> --compact-every 3
+/loop 5m --shell npm test
+/loop 15m --compact /compact
+Controls: /loop-now, /loop-pause, /loop-resume, /loop-stop, /loop-remove, /loop-clear, /loop-status, /loop-export.
+Preflight, postrun, notifications, stop files, completion markers, runtime/failure/run limits, branches and checkpoints are supported.
+Scheduled shell commands run as bounded local child processes when the plugin context has no session.shell.
+Scheduled/manual compaction requires session.compact on the host; unavailable capability is rejected before creating a job. Native automatic compaction is always left to OpenCode.
+An unfinished dedicated Goal reserves its session; Loop will not override it.
+--timeout pauses future iterations without aborting the current native model/tool/compaction operation.
+--safe is a command heuristic, not a sandbox. --dry-run does not dispatch or run hooks.
+Native sessions stay serialized; --allow-overlap is rejected.
+Use @bybrawe/opencode-goal and /goal for native Goal contracts. Legacy Loop Goal state is not silently migrated.
+An uncertain admission after a restart is paused for review instead of being replayed automatically.`;
+async function cleanup(value) {
+  if (typeof value === "function")
+    await value();
+  else if (typeof value?.dispose === "function")
+    await value.dispose();
+  else if (typeof value?.unsubscribe === "function")
+    await value.unsubscribe();
+}
+var OpenCodeLoopNativePlugin = Object.freeze({
+  id: "bybrawe.opencode-loop.native",
+  async setup(ctx) {
+    for (const [label, fn] of [["session.prompt", ctx?.session?.prompt], ["session.hook", ctx?.session?.hook], ["event.subscribe", ctx?.event?.subscribe], ["command.transform", ctx?.command?.transform]]) {
+      if (typeof fn !== "function")
+        throw new Error(`Native OpenCode Loop requires ${label}; use OpenCode 2.0.18 or newer.`);
+    }
+    const directory = String(ctx.location?.directory || ctx.options?.directory || "").trim();
+    if (!directory)
+      throw new Error("Native OpenCode Loop requires a project directory");
+    const registrations = [];
+    const prompt = (request) => ctx.session.prompt({ ...request, delivery: request.delivery || "queue", metadata: { ...request.metadata, opencode_loop_v2: true } });
+    const shellHost = createNativeShellHost({
+      directory,
+      onTerminal: (event) => runtime.onEvent(event),
+      onError: (error) => {
+        appendLoopLog(directory, "v2-shell-error", { message: String(error?.message || error) }).catch(() => {});
+      }
+    });
+    const runtime = createNativeLoopRuntime({
+      directory,
+      prompt,
+      command: typeof ctx.session.command === "function" ? (request) => ctx.session.command(request) : undefined,
+      wait: typeof ctx.session.wait === "function" ? (request) => ctx.session.wait(request) : undefined,
+      compact: typeof ctx.session.compact === "function" ? (request) => ctx.session.compact({ ...request, delivery: "queue" }) : undefined,
+      shell: typeof ctx.session.shell === "function" ? (request) => ctx.session.shell(request) : (request) => shellHost.dispatch(request),
+      cancel: typeof ctx.session.inbox?.cancel === "function" ? async (request) => {
+        await ctx.session.inbox.cancel(request);
+        return false;
+      } : undefined,
+      onError: (error) => {
+        appendLoopLog(directory, "v2-native-error", { message: String(error?.message || error) });
+      }
+    });
+    const bridge = createOpenCode2EventBridge({ directory, allowInboxCommands: false, onEvent: (event) => runtime.onEvent(event), onError: (error) => {
+      appendLoopLog(directory, "v2-native-event-error", { message: String(error?.message || error) });
+    } });
+    let closed = false;
+    async function dispose() {
+      if (closed)
+        return;
+      closed = true;
+      await runtime.dispose();
+      await shellHost.dispose();
+      await bridge.dispose("native-plugin-disposed");
+      for (const registration of registrations.reverse())
+        await cleanup(registration);
+    }
+    async function execute({ name, sessionID, arguments: argumentsText }) {
+      if (closed)
+        throw new Error("Native Loop is disposed");
+      if (["loop-help", "loop-doctor", "loop-logs"].includes(name)) {
+        const text = name === "loop-logs" ? (await readSmallTextFile(path12.join(stateDir(directory), "loop.log"), 2000000)).split(`
+`).slice(-60).join(`
+`) || "No Loop log entries." : name === "loop-doctor" ? `Native OpenCode Loop
+Host: ${ctx.app?.version || "unknown"}
+Directory: ${directory}
+Prompt hooks: enabled
+Compaction ownership: native host
+Delivery: durable queue
+Scheduled timers: ${runtime.scheduledCount()}
+Use /loop-status for paused/admitted job state.` : HELP;
+        await prompt({ sessionID, text, resume: false });
+        return { handled: true, accepted: true };
+      }
+      const event = { kind: "command", action: "executed", directory, sessionID, name, arguments: argumentsText };
+      const result = await runtime.onEvent(event);
+      if (result?.accepted === false)
+        throw new Error(result.error || result.blockers?.join(" ") || "Loop command rejected");
+      if (result?.accepted && ["loop", "loop-now", "loop-resume"].includes(name) && !(name === "loop" && result.job?.immediate === false))
+        await runtime.wake(event);
+      return result;
+    }
+    try {
+      registrations.push(await ctx.session.hook("prompt", (event) => {
+        if (event.metadata?.opencode_loop_v2 === true)
+          return;
+        return runtime.onEvent({ kind: "foreground", directory, sessionID: event.sessionID });
+      }));
+      registrations.push(await ctx.session.hook("compaction", (event) => runtime.onEvent({ kind: "compaction", action: "started", directory, sessionID: event.sessionID })));
+      registrations.push(await ctx.command.transform((draft) => {
+        registerOpenCode2LoopCommands(draft, { execute });
+        if (typeof draft.add !== "function")
+          return;
+        for (const [name, flag] of [["loop-shell", "--shell"], ["loop-command", "--command"], ["loop-compact", "--compact"]]) {
+          draft.add({ name, description: `Native Loop ${flag.slice(2)} schedule`, execute: (input) => {
+            const [duration, rest] = splitFirst(input.prompt?.text || input.arguments || "");
+            return execute({ name: "loop", sessionID: input.sessionID, arguments: `${duration || "0s"} ${flag} ${rest || (flag === "--compact" ? "/compact" : "")}` });
+          } });
+        }
+      }));
+      await bridge.attach(() => ctx.event.subscribe());
+      await appendLoopLog(directory, "v2-native-ready", { host: ctx.app?.version || "unknown" });
+      return dispose;
+    } catch (error) {
+      await dispose().catch(() => {});
+      throw error;
+    }
+  }
+});
+
+// src/source/opencode2/capabilities.js
+function hasFunction(value, key) {
+  return Boolean(value && typeof value[key] === "function");
+}
+function frozenRecord(value) {
+  return Object.freeze(value);
+}
+var OPENCODE_LOOP_V2_HOST_REQUIREMENTS = Object.freeze([
+  "event.subscribe",
+  "session.prompt"
+]);
+var OPENCODE_LOOP_V2_RUNTIME_REQUIREMENTS = Object.freeze([
+  ...OPENCODE_LOOP_V2_HOST_REQUIREMENTS,
+  "runtime.adapter"
+]);
+function inspectOpenCode2Context(ctx) {
+  const command = ctx?.command;
+  const session = ctx?.session;
+  const event = ctx?.event;
+  const tool = ctx?.tool;
+  return frozenRecord({
+    commandTransform: hasFunction(command, "transform"),
+    eventSubscribe: hasFunction(event, "subscribe"),
+    sessionHook: hasFunction(session, "hook"),
+    sessionPrompt: hasFunction(session, "prompt"),
+    sessionCommand: hasFunction(session, "command"),
+    sessionShell: hasFunction(session, "shell"),
+    toolTransform: hasFunction(tool, "transform"),
+    toolHook: hasFunction(tool, "hook")
+  });
+}
+
 // src/source/opencode2/diagnostics.js
+init_state();
 import { promises as fs8 } from "fs";
-import path10 from "path";
+import path13 from "path";
 var OPENCODE_LOOP_V2_HELP_TEXT = [
   "OpenCode Loop V2 experimental help:",
   "/loop 0s --max-runs 2 <prompt>                  autonomous prompt loop",
@@ -5379,7 +6729,7 @@ ${JSON.stringify(state, null, 2)}
       return { handled: false, reason: "missing-scope" };
     let text = "No OpenCode 2 Loop log found.";
     try {
-      const raw = await readFile(path10.join(stateDir(scope.directory), "loop.log"), "utf8");
+      const raw = await readFile(path13.join(stateDir(scope.directory), "loop.log"), "utf8");
       const lines = String(raw || "").trim().split(/\r?\n/).filter((line) => line.includes('"v2":true')).slice(-80);
       if (lines.length)
         text = lines.join(`
@@ -5407,6 +6757,7 @@ ${text}`, noReply: true };
 }
 
 // src/source/opencode2/logging.js
+init_process();
 function scopeFrom2(event) {
   const directory = typeof event?.directory === "string" ? event.directory.trim() : "";
   const sessionID = String(event?.sessionID || "").trim();
@@ -5468,49 +6819,11 @@ function createOpenCode2LogRuntime(options = {}) {
   return Object.freeze({ record });
 }
 
-// src/source/opencode2/status.js
-function dueAt(job, current) {
-  if (Number(job?.runNowRequestedAt || 0) > 0)
-    return current;
-  const intervalMs = Math.max(0, Number(job?.intervalMs || 0));
-  const lastRunAt = Number(job?.lastRunAt || 0);
-  if (intervalMs === 0)
-    return current;
-  if (lastRunAt > 0)
-    return lastRunAt + intervalMs;
-  if (job?.immediate === false) {
-    const createdAt = Date.parse(job?.createdAt || "");
-    return (Number.isFinite(createdAt) ? createdAt : current) + intervalMs;
-  }
-  return current;
-}
-function formatOpenCode2LoopStatus(state, current = Date.now()) {
-  const jobs = Array.isArray(state?.jobs) ? state.jobs : [];
-  const lines = jobs.length ? jobs.map((job, index) => {
-    const dueIn = Math.max(0, dueAt(job, current) - current);
-    const flags = [
-      isGoalJob(job) ? `goal:${goalStatusText(job)}` : undefined,
-      job.paused ? "paused" : "active",
-      Number(job.runNowRequestedAt || 0) > 0 ? "run-now" : undefined,
-      job.safe ? "safe" : undefined,
-      job.askNever ? "ask-never" : undefined,
-      job.noOverlap ? "no-overlap" : undefined,
-      job.checkpointOnly ? "checkpoint-only" : undefined,
-      job.gitCheckpoint ? "git-checkpoint" : undefined
-    ].filter(Boolean).join(",");
-    return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${jobLabel(job)} | runs=${job.runCount || 0} | failures=${job.failureCount || 0} | due in ${durationToText(dueIn)} | ${flags}`;
-  }) : ["No active loop jobs."];
-  return Object.freeze({
-    jobs,
-    text: `OpenCode loop status:
-${lines.join(`
-`)}`
-  });
-}
-
 // src/source/opencode2/prompt-runtime.js
+init_jobs();
+init_state();
 var OPENCODE_LOOP_V2_PROMPT_PREFIX = "AUTONOMOUS OPENCODE LOOP ITERATION. Continue the configured task now. Do not explain the /loop command. Do not search for documentation about this plugin. Do not create scheduler files. Do not ask questions. Make reasonable assumptions and work directly.";
-function directoryFrom(event) {
+function directoryFrom2(event) {
   return typeof event?.directory === "string" && event.directory.trim() ? event.directory : undefined;
 }
 function commandParts(action) {
@@ -5574,7 +6887,7 @@ function commandTarget(event, fallback = "all") {
   return String(event?.arguments || "").trim() || fallback;
 }
 function scopeFrom3(event) {
-  const directory = directoryFrom(event);
+  const directory = directoryFrom2(event);
   const sessionID = String(event?.sessionID || "").trim();
   if (!directory || !sessionID)
     return;
@@ -5757,6 +7070,8 @@ function createOpenCode2PromptRuntime(options = {}) {
       const blockers = unsupportedRuntimeJob(parsed.job, supportsCommand);
       if (blockers.length)
         return { handled: true, accepted: false, reason: "unsupported", blockers };
+      parsed.job.createdAt = new Date(now()).toISOString();
+      parsed.job.lastRunAt = parsed.job.immediate === false ? now() : 0;
       parsed.job.name = jobName2(parsed.job);
       const state = await readState(scope.directory, scope.sessionID);
       const jobs = Array.isArray(state.jobs) ? state.jobs : [];
@@ -5948,261 +7263,6 @@ function createOpenCode2PromptRuntime(options = {}) {
   });
 }
 
-// src/source/opencode2/events.js
-function record2(value) {
-  return value && typeof value === "object" ? value : undefined;
-}
-function text2(value) {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-function directoryFrom2(raw) {
-  return text2(record2(raw?.location)?.directory);
-}
-function sessionIDFrom(raw) {
-  const data = record2(raw?.data);
-  return text2(data?.sessionID);
-}
-function normalizeOpenCode2NativeEvent(raw) {
-  const type = text2(raw?.type);
-  if (!type)
-    return;
-  const data = record2(raw?.data) || {};
-  const directory = directoryFrom2(raw);
-  const sessionID = sessionIDFrom(raw);
-  if (type === "session.inbox.enqueued") {
-    const item = record2(data.item);
-    const payload = record2(item?.payload);
-    const parsed = item?.type === "user" ? parseOpenCode2LoopCommandText(payload?.text) : undefined;
-    if (!sessionID || !parsed)
-      return;
-    return Object.freeze({
-      kind: "command",
-      action: "executed",
-      sessionID,
-      directory,
-      name: parsed.name,
-      arguments: parsed.arguments
-    });
-  }
-  if (type === "session.status") {
-    const status = text2(record2(data.status)?.type);
-    if (!sessionID || !status)
-      return;
-    return Object.freeze({ kind: "session", action: "status", sessionID, directory, status });
-  }
-  if (type === "session.idle") {
-    if (!sessionID)
-      return;
-    return Object.freeze({ kind: "session", action: "idle", sessionID, directory });
-  }
-  if (type === "session.execution.started") {
-    if (!sessionID)
-      return;
-    return Object.freeze({ kind: "session", action: "status", sessionID, directory, status: "busy" });
-  }
-  if (type === "session.execution.succeeded") {
-    if (!sessionID)
-      return;
-    return Object.freeze({ kind: "session", action: "idle", sessionID, directory });
-  }
-  if (type === "session.created") {
-    if (!sessionID)
-      return;
-    return Object.freeze({ kind: "session", action: "created", sessionID, directory: directory || text2(record2(data.location)?.directory) });
-  }
-  if (type === "session.deleted") {
-    if (!sessionID)
-      return;
-    return Object.freeze({ kind: "session", action: "deleted", sessionID, directory });
-  }
-  return;
-}
-
-// src/source/opencode2/event-bridge.js
-function cleanupRegistration(registration) {
-  if (typeof registration === "function")
-    return registration;
-  if (!registration || typeof registration !== "object")
-    return;
-  for (const key of ["dispose", "unsubscribe", "close"]) {
-    if (typeof registration[key] === "function")
-      return registration[key].bind(registration);
-  }
-  return;
-}
-function eventStream(registration) {
-  const stream = registration?.stream ?? registration;
-  if (!stream || typeof stream[Symbol.asyncIterator] !== "function") {
-    throw new TypeError("OpenCode 2 event subscribe must return an async event stream");
-  }
-  return stream;
-}
-function sameDirectory(expected, actual) {
-  if (!expected || !actual)
-    return true;
-  return String(expected) === String(actual);
-}
-function createOpenCode2EventBridge({
-  directory,
-  onEvent = async () => {},
-  onError = () => {},
-  runtimeManager = createSessionRuntimeManager()
-} = {}) {
-  if (typeof onEvent !== "function")
-    throw new TypeError("OpenCode 2 event bridge requires onEvent to be a function");
-  if (typeof onError !== "function")
-    throw new TypeError("OpenCode 2 event bridge requires onError to be a function");
-  let registration;
-  let iterator;
-  let iteratorClosed = false;
-  let pump;
-  let attached = false;
-  let stopped = false;
-  let disposed = false;
-  let managerDisposed = false;
-  let queue = Promise.resolve();
-  const sessionDirectories = new Map;
-  function report(error) {
-    try {
-      onError(error);
-    } catch {}
-  }
-  function disposeManager(reason) {
-    if (managerDisposed)
-      return false;
-    managerDisposed = true;
-    return runtimeManager.dispose(reason);
-  }
-  async function closeIterator() {
-    if (iteratorClosed)
-      return false;
-    iteratorClosed = true;
-    const current = iterator;
-    iterator = undefined;
-    if (typeof current?.return === "function")
-      await current.return();
-    return Boolean(current);
-  }
-  function normalize(raw) {
-    const current = normalizeOpenCode2NativeEvent(raw) || normalizeOpenCodeEvent(raw);
-    if (!current)
-      return;
-    const sessionID = current.sessionID;
-    const rememberedDirectory = sessionID ? sessionDirectories.get(sessionID) : undefined;
-    const eventDirectory = current.directory || rememberedDirectory || directory;
-    const event = eventDirectory === current.directory ? current : Object.freeze({ ...current, directory: eventDirectory });
-    if (sessionID && event.directory)
-      sessionDirectories.set(sessionID, event.directory);
-    return event;
-  }
-  async function process2(raw) {
-    if (stopped)
-      return;
-    const event = normalize(raw);
-    if (!event || !sameDirectory(directory, event.directory))
-      return;
-    const runtime = event.sessionID ? runtimeManager.observeExternal(event.sessionID) : undefined;
-    await onEvent(event, runtime);
-    if (event.kind === "session" && event.action === "deleted") {
-      sessionDirectories.delete(event.sessionID);
-      runtimeManager.remove(event.sessionID, { expectedRuntime: runtime, reason: "session-deleted" });
-    }
-    if (event.kind === "server" && event.action === "disposed") {
-      stopped = true;
-      sessionDirectories.clear();
-      disposeManager("server-disposed");
-    }
-    return event;
-  }
-  function dispatch(raw) {
-    if (stopped)
-      return Promise.resolve(undefined);
-    const result = queue.then(() => process2(raw));
-    queue = result.catch(() => {
-      return;
-    });
-    return result;
-  }
-  function callback(raw) {
-    const pending = dispatch(raw);
-    pending.catch(report);
-    return pending.catch(() => {
-      return;
-    });
-  }
-  async function consume(stream) {
-    const current = stream[Symbol.asyncIterator]();
-    iterator = current;
-    iteratorClosed = false;
-    try {
-      while (!stopped) {
-        const next = await current.next();
-        if (next?.done)
-          break;
-        await dispatch(next?.value);
-      }
-    } catch (error) {
-      if (!stopped)
-        report(error);
-    } finally {
-      if (stopped && !iteratorClosed)
-        await closeIterator().catch(() => {
-          return;
-        });
-      if (iterator === current)
-        iterator = undefined;
-    }
-  }
-  async function attach(subscribe) {
-    if (disposed)
-      throw new Error("OpenCode 2 event bridge is disposed");
-    if (attached)
-      throw new Error("OpenCode 2 event bridge is already attached");
-    if (typeof subscribe !== "function")
-      throw new TypeError("OpenCode 2 event bridge requires an event subscribe function");
-    if (subscribe.length > 0) {
-      registration = await subscribe(callback);
-      attached = true;
-      return registration;
-    }
-    registration = await subscribe();
-    const stream = eventStream(registration);
-    attached = true;
-    pump = consume(stream);
-    return registration;
-  }
-  async function dispose(reason = "bridge-disposed") {
-    if (disposed)
-      return false;
-    disposed = true;
-    stopped = true;
-    await closeIterator().catch(() => {
-      return;
-    });
-    await pump?.catch(() => {
-      return;
-    });
-    await queue.catch(() => {
-      return;
-    });
-    const cleanup = cleanupRegistration(registration);
-    registration = undefined;
-    if (cleanup)
-      await cleanup();
-    sessionDirectories.clear();
-    disposeManager(reason);
-    return true;
-  }
-  return Object.freeze({
-    attach,
-    dispatch,
-    dispose,
-    runtimeManager,
-    isAttached: () => attached,
-    isDisposed: () => disposed
-  });
-}
-
 // src/source/opencode2/host-contract.js
 function normalizePrompt(input) {
   const sessionID = String(input?.sessionID || "").trim();
@@ -6373,6 +7433,8 @@ var OPENCODE_LOOP_V2_PLUGIN_ID = "bybrawe.opencode-loop.v2.experimental";
 var OpenCodeLoopV2ExperimentalPlugin = {
   id: OPENCODE_LOOP_V2_PLUGIN_ID,
   async setup(ctx) {
+    if (typeof ctx?.session?.hook === "function")
+      return OpenCodeLoopNativePlugin.setup(ctx);
     const capabilities = inspectOpenCode2Context(ctx);
     if (!capabilities.commandTransform) {
       throw new Error("OpenCode 2 command.transform capability is unavailable");

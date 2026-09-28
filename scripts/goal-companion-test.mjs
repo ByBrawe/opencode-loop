@@ -26,7 +26,7 @@ process.exit(Number(process.env.FAKE_NPM_EXIT || 0))
 
 async function runInstaller(config, cliArgs = [], env = {}) {
   return await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [installer, ...cliArgs], {
+    const child = spawn(process.execPath, [installer, "--legacy-v1", ...cliArgs], {
       cwd: root,
       env: {
         ...process.env,

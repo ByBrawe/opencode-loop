@@ -26,6 +26,7 @@ function sameDirectory(expected, actual) {
 
 export function createOpenCode2EventBridge({
   directory,
+  allowInboxCommands = true,
   onEvent = async () => {},
   onError = () => {},
   runtimeManager = createSessionRuntimeManager(),
@@ -43,6 +44,7 @@ export function createOpenCode2EventBridge({
   let managerDisposed = false
   let queue = Promise.resolve()
   const sessionDirectories = new Map()
+  const seenEventIDs = new Set()
 
   function report(error) {
     try { onError(error) } catch {}
@@ -78,8 +80,14 @@ export function createOpenCode2EventBridge({
 
   async function process(raw) {
     if (stopped) return undefined
+    if (!allowInboxCommands && raw?.type === "session.inbox.enqueued") return undefined
     const event = normalize(raw)
     if (!event || !sameDirectory(directory, event.directory)) return undefined
+    if (typeof raw?.id === "string") {
+      if (seenEventIDs.has(raw.id)) return undefined
+      seenEventIDs.add(raw.id)
+      if (seenEventIDs.size > 2048) seenEventIDs.delete(seenEventIDs.values().next().value)
+    }
 
     const runtime = event.sessionID ? runtimeManager.observeExternal(event.sessionID) : undefined
     await onEvent(event, runtime)

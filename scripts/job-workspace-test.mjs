@@ -72,7 +72,8 @@ try {
   processResults.push({ code: 1, stdout: "", stderr: "not a repo" })
   const nonRepo = { id: "nonrepo", branch: "feature/test" }
   await runtime.ensureBranch(directory, nonRepo, {}, "session")
-  assert.equal(nonRepo.branchDone, true)
+  assert.equal(nonRepo.branchDone, false, "a non-repository cannot claim a successful branch switch")
+  assert.equal(nonRepo.branchUnavailable, true)
   assert.equal(processCalls.at(-1)[0], "git")
   assert.deepEqual(processCalls.at(-1)[1], ["rev-parse", "--is-inside-work-tree"])
   assert.equal(toasts.length, 0)
@@ -94,6 +95,15 @@ try {
   ])
   assert.deepEqual(toasts.at(-1), [client, "Loop branch active: feature-test", "success"])
   assert.deepEqual(logs.at(-1), [directory, "branch", { sessionID: "session", branch: "feature-test", code: 0 }])
+
+  processResults.push(
+    { code: 0, stdout: "true", stderr: "" },
+    { code: 1, stdout: "", stderr: "switch failed" },
+    { code: 1, stdout: "", stderr: "create failed" },
+  )
+  const failedBranch = { branch: "cannot-switch" }
+  await runtime.ensureBranch(directory, failedBranch, client, "session")
+  assert.equal(failedBranch.branchDone, false, "failed switch/create must not admit work on the wrong branch")
 
   const watched = path.join(directory, "watched.txt")
   await fs.writeFile(watched, "one", "utf8")

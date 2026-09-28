@@ -181,7 +181,7 @@ export default {
               return {
                 async *[Symbol.asyncIterator]() {
                   for await (const event of source) {
-                    const line = JSON.stringify(event) + "\\n"
+                    const line = JSON.stringify(String(event?.type || "").startsWith("session.") ? event : { id: event?.id, type: event?.type }) + "\\n"
                     if (traceFile) await appendFile(traceFile, line, "utf8")
                     if (pluginTraceFile) await appendFile(pluginTraceFile, line, "utf8")
                     yield event
@@ -192,10 +192,13 @@ export default {
           },
         }
       : ctx
+    const goalURL = process.env.OPENCODE_GOAL_V2_PLUGIN_URL
+    const goalCleanup = goalURL ? await (await import(goalURL)).default.setup(ctx) : undefined
     const cleanup = await module.default.setup(pluginContext)
     await writeFile(process.env.OPENCODE_LOOP_V2_MARKER, JSON.stringify({ activated: true }, null, 2), "utf8")
     return async () => {
       if (typeof cleanup === "function") await cleanup()
+      if (typeof goalCleanup === "function") await goalCleanup()
     }
   },
 }
@@ -252,6 +255,7 @@ async function main() {
     },
   }, null, 2)}\n`)
 
+  await writeFile(path.join(workspace, ".gitignore"), ".home/\n.opencode/\n*v2*events.jsonl\n")
   execFileSync("git", ["init", "--quiet", workspace], { stdio: "ignore" })
   execFileSync("git", ["-C", workspace, "config", "user.email", "opencode-loop-ci@example.invalid"], { stdio: "ignore" })
   execFileSync("git", ["-C", workspace, "config", "user.name", "OpenCode Loop CI"], { stdio: "ignore" })
@@ -266,7 +270,7 @@ async function main() {
     XDG_DATA_HOME: path.join(home, ".local", "share"),
     XDG_STATE_HOME: path.join(home, ".local", "state"),
     XDG_CACHE_HOME: path.join(home, ".cache"),
-    OPENCODE_LOOP_V2_PLUGIN_URL: pathToFileURL(path.join(repoRoot, "src", "source", "opencode2", "experimental.js")).href,
+    OPENCODE_LOOP_V2_PLUGIN_URL: pathToFileURL(path.join(repoRoot, "src", ...(process.env.OPENCODE2_NATIVE_REQUIRED === "1" ? ["native.js"] : ["source", "opencode2", "experimental.js"]))).href,
     OPENCODE_LOOP_V2_MARKER: marker,
     OPENCODE_LOOP_V2_EVENT_TRACE: eventTrace,
     OPENCODE_LOOP_V2_PLUGIN_EVENT_TRACE: pluginEventTrace,
@@ -364,6 +368,8 @@ async function main() {
       return EXPECTED_COMMANDS.every((name) => latestCommands.has(name))
     }, "plugin-registered Loop commands to enter the real V2 registry", diagnostics, 30_000)
 
+    if (process.env.OPENCODE_GOAL_V2_PLUGIN_URL) assert.ok(latestCommands.has("goal"), "both native plugin command registries must load")
+
     const createdResponse = await request(`${apiPrefix}/session`, {
       method: "POST",
       body: JSON.stringify({ title: "OpenCode 2 Loop canary" }),
@@ -424,7 +430,7 @@ async function main() {
     await sendControl("loop-resume", "default")
     await waitFor(async () => {
       const job = await jobNamed("default")
-      return job?.paused === false && job?.lastRunAt === 0
+      return job?.paused === false && (job?.lastRunAt === 0 || job?.runNowRequestedAt > 0)
     }, "real V2 loop-resume state mutation", diagnostics, 30_000)
 
     await sendControl("loop-stop", "default")
@@ -449,6 +455,29 @@ async function main() {
 
     assert.equal(provider.stats.loopRequests, EXPECTED_TURNS + 2, `control lifecycle should add exactly two autonomous Loop turns\n${await diagnostics()}`)
     assert.equal(server.exitCode, null, `OpenCode 2 server exited during control lifecycle canary\n${await diagnostics()}`)
+
+    if (process.env.OPENCODE2_NATIVE_REQUIRED === "1") {
+      const nativeLog = await readFile(path.join(workspace, ".opencode/opencode-loop/loop.log"), "utf8")
+      assert.match(nativeLog, /v2-native-ready/, "the real host must load the native implementation")
+      assert.match(nativeLog, /v2-native-admitted/, "the native implementation must own the admissions")
+      await writeFile(path.join(workspace, "native-preflight.cjs"), 'require("node:fs").appendFileSync("native-preflight.txt", "P")')
+      await writeFile(path.join(workspace, "native-verify.cjs"), 'require("node:fs").appendFileSync("native-verify.txt", "V")')
+      await sendControl("loop", '0s native verified task --max-runs 1 --name verified --preflight "node native-preflight.cjs" --verify "node native-verify.cjs"')
+      await waitFor(async () => {
+        const job = await jobNamed("verified")
+        return job?.runCount === 1 && !job.v2Run && job.lastVerifyCode === 0
+      }, "native preflight and post-turn verification", diagnostics, 30_000)
+      assert.equal(await readFile(path.join(workspace, "native-preflight.txt"), "utf8"), "P")
+      assert.equal(await readFile(path.join(workspace, "native-verify.txt"), "utf8"), "V")
+      await sendControl("loop-clear")
+      await sendControl("loop-shell", '0s node native-preflight.cjs --max-runs 1 --name native-shell')
+      await waitFor(async () => {
+        const job = await jobNamed("native-shell")
+        return job?.runCount === 1 && !job.v2Run
+      }, "native shell terminal correlation", diagnostics, 20_000)
+      assert.equal(await readFile(path.join(workspace, "native-preflight.txt"), "utf8"), "PP")
+      await sendControl("loop-clear")
+    }
 
     console.log(JSON.stringify({
       ok: true,

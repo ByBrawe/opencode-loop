@@ -1,3 +1,4 @@
+import { OpenCodeLoopNativePlugin } from "./native-plugin.js"
 import { inspectOpenCode2Context } from "./capabilities.js"
 import { OPENCODE_LOOP_V2_COMMANDS, registerOpenCode2LoopCommands } from "./commands.js"
 import { createOpenCode2DiagnosticsRuntime } from "./diagnostics.js"
@@ -11,6 +12,7 @@ export { OPENCODE_LOOP_V2_COMMANDS }
 export const OpenCodeLoopV2ExperimentalPlugin = {
   id: OPENCODE_LOOP_V2_PLUGIN_ID,
   async setup(ctx) {
+    if (typeof ctx?.session?.hook === "function") return OpenCodeLoopNativePlugin.setup(ctx)
     const capabilities = inspectOpenCode2Context(ctx)
     if (!capabilities.commandTransform) {
       throw new Error("OpenCode 2 command.transform capability is unavailable")

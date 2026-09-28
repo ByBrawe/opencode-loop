@@ -18,7 +18,8 @@ const withGoals = rawArgs.includes("--with-goals")
 const loopOnly = rawArgs.includes("--loop-only")
 const withoutLoopGoals = rawArgs.includes("--without-loop-goals")
 const loopArgs = rawArgs.filter((arg) => !["--with-goals", "--loop-only", "--without-loop-goals"].includes(arg))
-const uninstallRequested = loopArgs.length === 1 && ["--uninstall", "uninstall", "--remove"].includes(loopArgs[0] || "")
+const commandArgs = loopArgs.filter((arg) => arg !== "--legacy-v1")
+const uninstallRequested = commandArgs.length === 1 && ["--uninstall", "uninstall", "--remove"].includes(commandArgs[0] || "")
 const helpRequested = loopArgs.some((arg) => ["--help", "-h"].includes(arg))
 const versionRequested = loopArgs.some((arg) => ["--version", "-v"].includes(arg))
 const informational = helpRequested || versionRequested
@@ -87,6 +88,7 @@ function parseJsonc(input) {
 }
 
 function isGoalPluginSpec(value) {
+  if (value && typeof value === "object") value = value.package
   if (typeof value !== "string") return false
   const spec = value.trim()
   if (spec === goalPackageName || spec.startsWith(`${goalPackageName}@`)) return true
@@ -101,7 +103,7 @@ async function goalsAlreadyInstalled() {
   for (const name of configCandidates) {
     try {
       const parsed = parseJsonc(await readFile(join(config, name), "utf8"))
-      if (Array.isArray(parsed.plugin) && parsed.plugin.some(isGoalPluginSpec)) return true
+      if ([parsed.plugin, parsed.plugins].some((entries) => Array.isArray(entries) && entries.some(isGoalPluginSpec))) return true
     } catch (error) {
       if (error?.code !== "ENOENT") {
         console.warn(`Could not inspect ${join(config, name)} for OpenCode Goals: ${error.message}`)

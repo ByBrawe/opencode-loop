@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.0 - 2026-09-29
+
+- Fix #164: persisted core user-message events cannot abort compaction; trusted admission hooks alone may steer legacy turns.
+- Activate native V2 queued scheduling and default local installation, preserving explicit V1 compatibility.
+- Correct unsupported plugin shell assumptions with a bounded local process lifecycle and correlated terminals.
+- Preserve dedicated Goal ownership, native compaction barriers, uncertain-admission safety, and configuration options.
+- Fix branch success reporting, timeout exit codes and self-matching completion markers.
+- Explicitly report the OpenCode 2.0.18 scheduled-compaction capability gap.
+
+
 ## 0.5.38
 
 Long-session provider-error, waiting-user, and OpenCode 2.0.11 compatibility release.

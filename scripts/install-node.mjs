@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isDeepStrictEqual } from "node:util"
 import { copyFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
@@ -14,11 +15,13 @@ const packageName = "@bybrawe/opencode-loop"
 const packageVersion = JSON.parse(await readFile(join(root, "package.json"), "utf8")).version
 const packageSpec = `${packageName}@${packageVersion}`
 const configCandidates = ["opencode.json", "opencode.jsonc", "config.json", "config.jsonc"]
-const installerArgs = process.argv.slice(2)
+const rawInstallerArgs = process.argv.slice(2)
+const legacyV1 = rawInstallerArgs.includes("--legacy-v1")
+const installerArgs = rawInstallerArgs.filter((arg) => arg !== "--legacy-v1")
 const uninstallRequested = installerArgs.length === 1 && ["--uninstall", "uninstall", "--remove"].includes(installerArgs[0] || "")
 
 if (installerArgs.includes("--help") || installerArgs.includes("-h")) {
-  console.log(`OpenCode Loop installer/updater\n\nUsage:\n  opencode-loop\n  npx -y @bybrawe/opencode-loop@latest\n  npx -y @bybrawe/opencode-loop@latest --uninstall\n\nInstall/update copies the dual OpenCode 1/2 Loop plugin plus command files and local command agent, and keeps an existing npm package entry pinned to the exact version.\nUninstall removes Loop package registrations plus known local plugin/command/agent files while preserving project Loop state.\n\nSet OPENCODE_CONFIG_DIR to target a non-default OpenCode config directory.`)
+  console.log(`OpenCode Loop installer/updater\n\nUsage:\n  opencode-loop\n  npx -y @bybrawe/opencode-loop@latest\n  npx -y @bybrawe/opencode-loop@latest --uninstall\n\nInstall/update defaults to native OpenCode 2: no V1 SDK or legacy command files are needed for a local install. Existing npm registrations are pinned to the exact version and migrated to plugins while retaining object options. Use --legacy-v1 to install the compatibility loader and legacy command files explicitly.\nUninstall removes Loop package registrations plus known local plugin/command/agent files while preserving project Loop state.\n\nSet OPENCODE_CONFIG_DIR to target a non-default OpenCode config directory.`)
   process.exit(0)
 }
 
@@ -96,7 +99,7 @@ function parseJsonc(input) {
 }
 
 function isPackageSpec(value) {
-  const spec = String(value || "").trim()
+  const spec = String(typeof value === "object" && value !== null ? value.package || "" : value || "").trim()
   return spec === packageName || spec.startsWith(`${packageName}@`)
 }
 
@@ -207,38 +210,72 @@ function formatPluginArray(values, indent, eol) {
   return `[${eol}${values.map((value) => `${childIndent}${JSON.stringify(value)}`).join(`,${eol}`)}${eol}${indent}]`
 }
 
-function rewriteExistingPluginArray(source, nextPlugins) {
-  const property = findRootProperty(source, "plugin")
+function rewriteExistingPluginArray(source, nextPlugins, key = "plugin") {
+  const property = findRootProperty(source, key)
   if (!property) return source
   const eol = source.includes("\r\n") ? "\r\n" : "\n"
   const replacement = formatPluginArray(nextPlugins, property.indent, eol)
   return `${source.slice(0, property.valueStart)}${replacement}${source.slice(property.valueEnd)}`
 }
 
+function appendPluginProperty(source, values, key) {
+  const parsed = parseJsonc(source)
+  const keys = Object.keys(parsed)
+  if (keys.length) {
+    const last = findRootProperty(source, keys.at(-1))
+    const after = skipTrivia(source, last.valueEnd)
+    if (source[after] !== ",") source = source.slice(0, last.valueEnd) + "," + source.slice(last.valueEnd)
+  }
+  const end = skipJsonValue(source, 0) - 1
+  const eol = source.includes("\r\n") ? "\r\n" : "\n"
+  return source.slice(0, end) + `${eol}  ${JSON.stringify(key)}: ${formatPluginArray(values, "  ", eol)}${eol}` + source.slice(end)
+}
+
 async function configurePackagePlugin() {
+  const plans = []
   let configured = false
-  const updatedFiles = []
   for (const name of configCandidates) {
     const target = join(config, name)
     try {
       const source = await readFile(target, "utf8")
       const parsed = parseJsonc(source)
-      if (parsed.plugin !== undefined && !Array.isArray(parsed.plugin)) throw new Error("OpenCode config 'plugin' must be an array")
-      const plugins = parsed.plugin || []
-      if (!plugins.some(isPackageSpec)) continue
-      configured = true
-      const nextPlugins = plugins.filter((value) => !isPackageSpec(value))
-      nextPlugins.push(packageSpec)
-      const updated = rewriteExistingPluginArray(source, nextPlugins)
-      if (updated !== source) {
-        await writeFile(target, updated, "utf8")
-        updatedFiles.push(target)
+      for (const key of ["plugin", "plugins"]) {
+        if (parsed[key] !== undefined && !Array.isArray(parsed[key])) throw new Error(`OpenCode config '${key}' must be an array`)
       }
+      let updated = source
+      const own = [...(parsed.plugins || []), ...(parsed.plugin || [])].filter(isPackageSpec)
+      if (own.length) {
+        configured = true
+        if (legacyV1) {
+          for (const key of ["plugin", "plugins"]) {
+            const entries = parsed[key] || []
+            const matching = entries.filter(isPackageSpec)
+            if (!matching.length) continue
+            const preferred = matching.find((entry) => typeof entry === "object")
+            const pinned = preferred ? { ...preferred, package: packageSpec } : packageSpec
+            updated = rewriteExistingPluginArray(updated, [...entries.filter((entry) => !isPackageSpec(entry)), pinned], key)
+          }
+        } else {
+          const objects = own.filter((entry) => typeof entry === "object" && entry !== null)
+          const preferred = objects[0]
+          const optionsOf = (entry) => { const { package: _package, ...options } = entry; return options }
+          if (objects.some((entry) => !isDeepStrictEqual(optionsOf(entry), optionsOf(preferred)))) throw new Error("Conflicting Loop object registrations; reconcile their options before updating")
+          const pinned = preferred ? { ...preferred, package: packageSpec } : packageSpec
+          if (Array.isArray(parsed.plugin) && parsed.plugin.some(isPackageSpec)) updated = rewriteExistingPluginArray(updated, parsed.plugin.filter((entry) => !isPackageSpec(entry)), "plugin")
+          const next = [...(parsed.plugins || []).filter((entry) => !isPackageSpec(entry)), pinned]
+          updated = parsed.plugins === undefined ? appendPluginProperty(updated, next, "plugins") : rewriteExistingPluginArray(updated, next, "plugins")
+        }
+      }
+      parseJsonc(updated)
+      plans.push({ target, source, updated })
     } catch (error) {
       if (error?.code !== "ENOENT") throw new Error(`Could not inspect ${target}: ${error.message}`)
     }
   }
-  return { configured, updatedFiles }
+  // Validate every candidate before writing any config. Malformed later files
+  // must not leave the earlier file migrated and the plugin half-installed.
+  for (const plan of plans) if (plan.source !== plan.updated) await writeFile(plan.target, plan.updated, "utf8")
+  return { configured, updatedFiles: plans.filter((plan) => plan.source !== plan.updated).map((plan) => plan.target) }
 }
 
 async function ensureDependency() {
@@ -262,7 +299,13 @@ async function ensureDependency() {
 
 async function removePackagedFiles(sourceDir, targetDir) {
   for (const name of await readdir(sourceDir)) {
-    if (name.endsWith(".md")) await rm(join(targetDir, name), { force: true })
+    if (!name.endsWith(".md")) continue
+    try {
+      const installed = await readFile(join(targetDir, name), "utf8")
+      const packaged = await readFile(join(sourceDir, name), "utf8")
+      const recognized = /OpenCode Loop[^\n]{0,120}handled (?:locally|exactly)/.test(installed) || /OpenCode Loop local command handled/.test(installed)
+      if (installed === packaged || recognized) await rm(join(targetDir, name), { force: true })
+    } catch (error) { if (error?.code !== "ENOENT") throw error }
   }
 }
 
@@ -273,68 +316,55 @@ async function uninstall() {
     try {
       const source = await readFile(target, "utf8")
       const parsed = parseJsonc(source)
-      if (parsed.plugin !== undefined && !Array.isArray(parsed.plugin)) throw new Error("OpenCode config 'plugin' must be an array")
-      const plugins = parsed.plugin || []
-      const nextPlugins = plugins.filter((value) => !isPackageSpec(value))
-      const updated = nextPlugins.length === plugins.length ? source : rewriteExistingPluginArray(source, nextPlugins)
+      let updated = source
+      for (const key of ["plugin", "plugins"]) {
+        if (parsed[key] !== undefined && !Array.isArray(parsed[key])) throw new Error(`OpenCode config '${key}' must be an array`)
+        const entries = parsed[key] || []
+        if (entries.some(isPackageSpec)) updated = rewriteExistingPluginArray(updated, entries.filter((entry) => !isPackageSpec(entry)), key)
+      }
       plans.push({ target, source, updated })
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw new Error(`Could not inspect ${target}: ${error.message}`)
-    }
+    } catch (error) { if (error?.code !== "ENOENT") throw new Error(`Could not inspect ${target}: ${error.message}`) }
   }
-
-  for (const plan of plans) {
-    if (plan.updated !== plan.source) await writeFile(plan.target, plan.updated, "utf8")
-  }
+  for (const plan of plans) if (plan.updated !== plan.source) await writeFile(plan.target, plan.updated, "utf8")
   await rm(join(pluginDir, "opencode-loop.ts"), { force: true })
   await rm(join(pluginDir, "opencode-loop.js"), { force: true })
   await removePackagedFiles(join(root, "commands"), commandDir)
   await removePackagedFiles(join(root, "agents"), agentDir)
-
-  const changedConfigs = plans.filter((plan) => plan.updated !== plan.source).length
-  console.log(changedConfigs
-    ? `Removed ${packageName} package registrations from ${changedConfigs} OpenCode config file(s).`
-    : `${packageName} was not registered as an npm package in the inspected OpenCode config files.`)
-  console.log("Removed known local OpenCode Loop plugin, slash-command, and local-agent files when present.")
+  const changed = plans.filter((plan) => plan.source !== plan.updated).length
+  console.log(`Removed ${packageName} registrations from ${changed} OpenCode config file(s).`)
+  console.log("Removed known local Loop plugin and managed legacy command/agent files; custom files are preserved.")
   console.log("Project state under .opencode/opencode-loop is preserved.")
   console.log("Restart OpenCode to finish unloading OpenCode Loop.")
 }
 
 async function installOrUpdate() {
   await mkdir(pluginDir, { recursive: true })
-  await mkdir(commandDir, { recursive: true })
-  await mkdir(agentDir, { recursive: true })
   const packageConfig = await configurePackagePlugin()
-  const useConfiguredPackage = packageConfig.configured
-  if (useConfiguredPackage) {
+  if (packageConfig.configured) {
     await rm(join(pluginDir, "opencode-loop.ts"), { force: true })
     await rm(join(pluginDir, "opencode-loop.js"), { force: true })
   } else {
-    await ensureDependency()
-    // Copy the dual contract bundle: OpenCode 1.x consumes default.server,
-    // while OpenCode 2.x consumes default.setup from the same local file.
-    await copyFile(join(root, "src", "server.js"), join(pluginDir, "opencode-loop.ts"))
+    if (legacyV1) await ensureDependency()
+    await copyFile(join(root, "src", legacyV1 ? "server.js" : "native.js"), join(pluginDir, "opencode-loop.ts"))
     await rm(join(pluginDir, "opencode-loop.js"), { force: true })
   }
-
-  for (const name of await readdir(join(root, "commands"))) {
-    if (name.endsWith(".md")) await copyFile(join(root, "commands", name), join(commandDir, name))
-  }
-
-  for (const name of await readdir(join(root, "agents"))) {
-    if (name.endsWith(".md")) await copyFile(join(root, "agents", name), join(agentDir, name))
-  }
-
-  if (useConfiguredPackage) {
-    const pinResult = packageConfig.updatedFiles.length
-      ? `pinned the config entry to ${packageSpec}`
-      : `the config entry is already pinned to ${packageSpec}`
-    console.log(`OpenCode Loop is already configured as a package in ${config}; ${pinResult} and removed the duplicate local plugin copy.`)
+  if (legacyV1) {
+    await mkdir(commandDir, { recursive: true })
+    await mkdir(agentDir, { recursive: true })
+    for (const name of await readdir(join(root, "commands"))) if (name.endsWith(".md")) await copyFile(join(root, "commands", name), join(commandDir, name))
+    for (const name of await readdir(join(root, "agents"))) if (name.endsWith(".md")) await copyFile(join(root, "agents", name), join(agentDir, name))
   } else {
-    console.log(`Installed OpenCode Loop plugin to ${config}`)
+    await removePackagedFiles(join(root, "commands"), commandDir)
+    await removePackagedFiles(join(root, "agents"), agentDir)
   }
-  console.log(`Installed ${packageName} commands to ${commandDir}`)
-  console.log(`Installed ${packageName} local command agent to ${agentDir}`)
+  if (packageConfig.configured) {
+    const pinResult = packageConfig.updatedFiles.length ? `pinned the config entry to ${packageSpec}` : `the config entry is already pinned to ${packageSpec}`
+    console.log(`OpenCode Loop is already configured as a package in ${config}; ${pinResult} and removed the duplicate local plugin copy.`)
+  } else console.log(`Installed OpenCode Loop plugin to ${config}`)
+  if (legacyV1) {
+    console.log(`Installed ${packageName} commands to ${commandDir}`)
+    console.log(`Installed ${packageName} local command agent to ${agentDir}`)
+  } else console.log("Native OpenCode 2 commands are registered by the plugin; no legacy command files or V1 SDK are needed for a local install.")
   console.log("Restart OpenCode, then run: /loop-help")
 }
 

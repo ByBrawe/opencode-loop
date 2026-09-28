@@ -1,5 +1,16 @@
 # OpenCode Loop
 
+## Native OpenCode 2 (0.6.0)
+
+The installer now defaults to the standalone native V2 plugin. It needs no V1 SDK or legacy command files for a local installation. Existing npm registrations migrate from `plugin` to `plugins` without dropping object options. Use `--legacy-v1` explicitly for the compatibility installation.
+
+V2 prompt admission and durable inbox/execution/compaction events own scheduling. Core-generated user-role messages never authorize a session abort. An unfinished dedicated Goal reserves its session, including paused and handed-off states; Loop does not wake or replace that Goal. Soft iteration timeouts do not abort a native model/tool/compaction turn.
+
+Scheduled shell commands use bounded local child processes when OpenCode does not expose `session.shell` to plugins. Automatic compaction stays host-owned. **Scheduled compaction requires a host exposing `session.compact`; OpenCode 2.0.18's published plugin Context does not expose it, and those commands are rejected before job creation rather than silently ignored.** Use OpenCode's built-in manual/automatic compaction on that host.
+
+Prompt/command timers, watch and stop conditions, verification, preflight/postrun, notifications, checkpoints and diagnostic commands use the V2 runtime. Uncertain restart admissions pause for review rather than replaying potentially admitted work. The dedicated `@bybrawe/opencode-goal` plugin owns `/goal`; legacy Loop Goal records are preserved and are not silently reinterpreted as new Goal contracts.
+
+
 **Idle-safe auto-continue, scheduled OpenCode work, and background loops.**
 
 OpenCode Loop adds `/loop`, scheduled prompt/command/shell jobs, compact scheduling, verification/checkpoints, and the `opencode-loopd` background daemon.

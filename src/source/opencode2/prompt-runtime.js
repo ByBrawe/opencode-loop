@@ -230,6 +230,8 @@ export function createOpenCode2PromptRuntime(options = {}) {
       const blockers = unsupportedRuntimeJob(parsed.job, supportsCommand)
       if (blockers.length) return { handled: true, accepted: false, reason: "unsupported", blockers }
 
+      parsed.job.createdAt = new Date(now()).toISOString()
+      parsed.job.lastRunAt = parsed.job.immediate === false ? now() : 0
       parsed.job.name = jobName(parsed.job)
       const state = await readState(scope.directory, scope.sessionID)
       const jobs = Array.isArray(state.jobs) ? state.jobs : []

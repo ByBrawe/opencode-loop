@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { nativeGoalReservesSession } from "./native-companion.js"
 import { parseLoopArgs, splitFirst } from "../core/args.js"
 import { actionKind, matchJob } from "../core/jobs.js"
 import { readState, writeState, removeState } from "../core/state.js"
@@ -119,7 +120,7 @@ export function createNativeLoopRuntime(options = {}) {
 
   async function finish(scope) {
     const run = scope.active
-    if (!run || scope.compaction) return result({ reason: "no-terminal-boundary" })
+    if (!run || scope.compaction || scope.busy) return result({ reason: "no-terminal-boundary" })
     if ((run.kind === "prompt" && !run.delivered) || (run.kind === "command" && !run.commandFinished) || (run.kind === "shell" && !run.shellFinished) || (["compact", "cadence"].includes(run.kind) && !run.compactFinished)) {
       return result({ reason: "awaiting-owned-completion" })
     }
@@ -148,11 +149,11 @@ export function createNativeLoopRuntime(options = {}) {
     const isCurrent = () => current(scope) && scope.epoch === epoch && !scope.busy && !scope.compaction
     let request
     if (kind === "prompt") request = { sessionID: scope.sessionID, id: id(), text: `${PREFIX}\n\n${await policy.buildPrompt(scope.directory, job)}`, delivery: "queue", metadata: { opencode_loop_v2: true, opencode_loop_job: job.id } }
-    else if (kind === "compact" || kind === "cadence") request = { sessionID: scope.sessionID, id: id() }
-    else if (kind === "shell") request = { sessionID: scope.sessionID, command: String(job.action).replace(/^[!$]\s*/, "") }
+    else if (kind === "compact" || kind === "cadence") request = { sessionID: scope.sessionID, id: id(), delivery: "queue" }
+    else if (kind === "shell") request = { sessionID: scope.sessionID, id: id(), command: String(job.action).replace(/^[!$]\s*/, ""), timeoutMs: job.timeoutMs }
     else {
       const [name, text] = splitFirst(String(job.action).replace(/^\/+/, ""))
-      request = { sessionID: scope.sessionID, name, ...(text ? { text } : {}), delivery: "queue" }
+      request = { sessionID: scope.sessionID, name, text: text || "", delivery: "queue" }
     }
     if (!isCurrent()) return result({ reason: "foreground-or-compaction" })
     if (job.dryRun) {
@@ -189,7 +190,7 @@ export function createNativeLoopRuntime(options = {}) {
       else response = await options.command(request)
       if (response?.error || response?.accepted === false) throw new Error(String(response.error?.message || response.error || "Native admission rejected"))
       run.inboxID = response?.id || response?.data?.id || request.id
-      run.shellID = kind === "shell" ? (response?.id || response?.shell?.id) : undefined
+      run.shellID = kind === "shell" ? (response?.id || response?.shell?.id || request.id) : undefined
       if (kind !== "cadence") {
         job.runCount = (job.runCount || 0) + 1
         job.lastRunAt = now()
@@ -231,6 +232,18 @@ export function createNativeLoopRuntime(options = {}) {
     if (!current(scope) || scope.busy || scope.compaction || scope.active) return result({ reason: "host-not-idle" })
     const epoch = scope.epoch
     const state = await read(scope)
+    clear(scope, "companionTimer")
+    if (!(state.jobs || []).some(eligible)) return result()
+    if (await nativeGoalReservesSession(scope.directory, scope.sessionID)) {
+      if (current(scope)) {
+        scope.companionTimer = setTimer(() => {
+          delete scope.companionTimer
+          return enqueue(scope, () => advance(scope)).catch(report)
+        }, 1000)
+        scope.companionTimer?.unref?.()
+      }
+      return result({ reason: "dedicated-goal-owns-session" })
+    }
     for (const job of state.jobs || []) {
       if (!eligible(job)) continue
       if (job.v2Run) {
@@ -243,9 +256,14 @@ export function createNativeLoopRuntime(options = {}) {
       const safe = () => current(scope) && !scope.busy && !scope.compaction && !scope.active && scope.epoch === epoch
       if (!safe()) return result({ reason: "foreground-or-compaction" })
       // Stop conditions apply even when a future timer or watch is not due.
+      if (!await policy.checkStop(scope, job)) {
+        await save(scope, state)
+        await policy.notify(scope, job, job.pauseReason)
+        return advance(scope)
+      }
       if (dueAt(job) > now()) continue
       if (!await policy.prepare(scope, job, safe)) {
-        if (job.paused || job.enabled === false) { await save(scope, state); await policy.notify(scope, job, job.pauseReason) }
+        if (job.paused || job.enabled === false) { await save(scope, state); await policy.notify(scope, job, job.pauseReason); return advance(scope) }
         return result({ reason: job.pauseReason || "foreground-or-compaction" })
       }
       const kind = actionKind(job.action, job)
@@ -337,7 +355,7 @@ export function createNativeLoopRuntime(options = {}) {
     }
     if (event.kind === "session" && event.action === "deleted") {
       scope.deleted = true
-      clear(scope, "timer"); clear(scope, "deadline")
+      clear(scope, "timer"); clear(scope, "deadline"); clear(scope, "companionTimer")
       scopes.delete(scope.key)
       return result({ disposedScope: true })
     }
@@ -346,20 +364,49 @@ export function createNativeLoopRuntime(options = {}) {
       if (event.kind === "inbox") {
         if (scope.active?.inboxID === event.inboxID || scope.active?.id === event.inboxID) {
           if (event.action === "delivered") scope.active.delivered = true
-          if (event.action === "cancelled") return pauseActive(scope, "inbox-cancelled", false)
+          if (event.action === "cancelled") {
+            const run = scope.active
+            const state = await read(scope)
+            const job = (state.jobs || []).find((entry) => entry.id === run.jobID)
+            if (job?.v2Run?.id === run.id && !run.delivered) {
+              Object.assign(job, run.previous)
+              policy.pause(job, "inbox-cancelled")
+              delete job.v2Run
+              await save(scope, state)
+            }
+            if (scope.active === run) delete scope.active
+            clear(scope, "deadline")
+            return result({ reason: "inbox-cancelled" })
+          }
         }
         return result()
       }
       if (event.kind === "shell" && event.action === "ended" && scope.active?.shellID === event.shellID) {
         scope.active.shellFinished = true
-        scope.busy = false
-        if (event.status !== "exited" || event.code !== 0) return pauseActive(scope, "shell-failed")
+        // A local shell terminal is not the terminal of a foreground model turn.
+        if (event.status !== "exited" || event.code !== 0) {
+          const run = scope.active
+          const paused = await pauseActive(scope, "shell-failed")
+          const state = await read(scope)
+          const job = (state.jobs || []).find((entry) => entry.id === run.jobID)
+          if (job?.v2Run?.id === run.id) { delete job.v2Run; await save(scope, state) }
+          if (scope.active === run) delete scope.active
+          return paused
+        }
         return finish(scope)
       }
       if ((event.kind === "session" && ["error", "failed", "interrupted"].includes(event.action)) || (event.kind === "compaction" && event.action === "failed")) {
         delete scope.compaction
         scope.busy = false
-        return pauseActive(scope, event.reason || `${event.kind}-${event.action}`)
+        const run = scope.active
+        const paused = await pauseActive(scope, event.reason || `${event.kind}-${event.action}`)
+        if (run && (run.delivered || ["compact", "cadence", "shell"].includes(run.kind))) {
+          const state = await read(scope)
+          const job = (state.jobs || []).find((entry) => entry.id === run.jobID)
+          if (job?.v2Run?.id === run.id) { delete job.v2Run; await save(scope, state) }
+          if (scope.active === run) delete scope.active
+        }
+        return paused
       }
       if (event.kind === "compaction" && event.action === "ended") {
         scope.compaction ||= { ended: false, terminal: false }
@@ -384,7 +431,7 @@ export function createNativeLoopRuntime(options = {}) {
   async function dispose() {
     if (disposed) return false
     disposed = true
-    for (const scope of scopes.values()) { clear(scope, "timer"); clear(scope, "deadline") }
+    for (const scope of scopes.values()) { clear(scope, "timer"); clear(scope, "deadline"); clear(scope, "companionTimer") }
     await Promise.allSettled([...scopes.values()].map((scope) => scope.queue))
     scopes.clear()
     return true

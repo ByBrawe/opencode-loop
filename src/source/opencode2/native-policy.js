@@ -27,7 +27,7 @@ export function createNativeJobPolicy(options = {}) {
     return result
   }
 
-  async function prepare(scope, job, isCurrent = () => true) {
+  async function checkStop(scope, job) {
     const created = Date.parse(job.createdAt)
     if (job.maxRuntimeMs > 0 && Number.isFinite(created) && now() - created >= job.maxRuntimeMs) {
       job.enabled = false
@@ -44,7 +44,11 @@ export function createNativeJobPolicy(options = {}) {
       job.enabled = false
       return pause(job, "until-reached")
     }
-    if (!isCurrent()) return false
+    return true
+  }
+
+  async function prepare(scope, job, isCurrent = () => true) {
+    if (!await checkStop(scope, job) || !isCurrent()) return false
     if (job.dryRun) return true
     if (job.preflightCommand) {
       const result = await shell(scope, job, job.preflightCommand, "preflight")
@@ -94,7 +98,7 @@ export function createNativeJobPolicy(options = {}) {
   }
 
   return {
-    pause, prepare, finish, notify, shell,
+    pause, checkStop, prepare, finish, notify, shell,
     buildPrompt: workspace.buildPrompt,
     snapshotPaths: workspace.snapshotPaths,
     watchChanged: workspace.watchChanged,

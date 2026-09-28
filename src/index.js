@@ -619,7 +619,9 @@ async function runProcess(command, args, cwd, timeoutMs = 60000) {
     const child = spawn(command, args, { cwd, shell: false, windowsHide: true });
     const stdout = [];
     const stderr = [];
+    let timedOut = false;
     const timer = setTimeout(() => {
+      timedOut = true;
       try {
         child.kill("SIGTERM");
       } catch {}
@@ -632,7 +634,7 @@ async function runProcess(command, args, cwd, timeoutMs = 60000) {
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      resolve({ code: code ?? 0, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") });
+      resolve({ code: timedOut ? 124 : code ?? -1, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") });
     });
   });
 }
@@ -641,7 +643,9 @@ async function runShellCommand(command, cwd, timeoutMs = 120000) {
     const child = spawn(command, [], { cwd, shell: true, windowsHide: true });
     const stdout = [];
     const stderr = [];
+    let timedOut = false;
     const timer = setTimeout(() => {
+      timedOut = true;
       try {
         child.kill("SIGTERM");
       } catch {}
@@ -654,7 +658,7 @@ async function runShellCommand(command, cwd, timeoutMs = 120000) {
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      resolve({ code: code ?? 0, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") });
+      resolve({ code: timedOut ? 124 : code ?? -1, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") });
     });
   });
 }
@@ -2778,13 +2782,14 @@ ${text.trim().slice(0, 20000)}`);
     const branch = safeID(job.branch);
     const inRepo = await runProcess2("git", ["rev-parse", "--is-inside-work-tree"], directory, 1e4);
     if (inRepo.code !== 0) {
-      job.branchDone = true;
+      job.branchDone = false;
+      job.branchUnavailable = true;
       return job;
     }
     let result = await runProcess2("git", ["switch", branch], directory, 30000);
     if (result.code !== 0)
       result = await runProcess2("git", ["switch", "-c", branch], directory, 30000);
-    job.branchDone = true;
+    job.branchDone = result.code === 0;
     await toast(client, result.code === 0 ? `Loop branch active: ${branch}` : `Could not switch/create branch: ${branch}`, result.code === 0 ? "success" : "warning");
     await appendLoopLog2(directory, "branch", { sessionID, branch, code: result.code });
     return job;
@@ -2844,6 +2849,8 @@ ${text.trim().slice(0, 20000)}`);
         if ([".git", "node_modules", "dist", "build", ".next", "coverage"].includes(entry.name))
           continue;
         const full = path8.join(current, entry.name);
+        if (path8.resolve(full) === path8.resolve(stateDir(directory)))
+          continue;
         if (entry.isDirectory()) {
           if (await walk(full))
             return true;

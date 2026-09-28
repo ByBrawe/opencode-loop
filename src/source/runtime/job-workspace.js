@@ -58,10 +58,10 @@ export function createJobWorkspaceRuntime(options = {}) {
     if (!job.branch || job.branchDone) return job
     const branch = safeID(job.branch)
     const inRepo = await runProcess("git", ["rev-parse", "--is-inside-work-tree"], directory, 10_000)
-    if (inRepo.code !== 0) { job.branchDone = true; return job }
+    if (inRepo.code !== 0) { job.branchDone = false; job.branchUnavailable = true; return job }
     let result = await runProcess("git", ["switch", branch], directory, 30_000)
     if (result.code !== 0) result = await runProcess("git", ["switch", "-c", branch], directory, 30_000)
-    job.branchDone = true
+    job.branchDone = result.code === 0
     await toast(client, result.code === 0 ? `Loop branch active: ${branch}` : `Could not switch/create branch: ${branch}`, result.code === 0 ? "success" : "warning")
     await appendLoopLog(directory, "branch", { sessionID, branch, code: result.code })
     return job
@@ -108,6 +108,8 @@ export function createJobWorkspaceRuntime(options = {}) {
         if (scanned >= MAX_SCAN_FILES) return false
         if ([".git", "node_modules", "dist", "build", ".next", "coverage"].includes(entry.name)) continue
         const full = path.join(current, entry.name)
+        // The control state contains the configured --until text; it is not completion evidence.
+        if (path.resolve(full) === path.resolve(stateDir(directory))) continue
         if (entry.isDirectory()) { if (await walk(full)) return true }
         else if (entry.isFile() && /\.(md|txt|json|yaml|yml)$/i.test(entry.name)) { scanned++; if (await fileContains(full, job.until)) return true }
       }

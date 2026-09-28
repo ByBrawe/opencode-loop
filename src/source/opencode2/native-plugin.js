@@ -1,4 +1,5 @@
 import path from "node:path"
+import { createNativeShellHost } from "./native-shell.js"
 import { createNativeLoopRuntime } from "./native-runtime.js"
 import { createOpenCode2EventBridge } from "./event-bridge.js"
 import { registerOpenCode2LoopCommands } from "./commands.js"
@@ -16,6 +17,9 @@ const HELP = `OpenCode Loop: native OpenCode 2 runtime
 /loop 15m --compact /compact
 Controls: /loop-now, /loop-pause, /loop-resume, /loop-stop, /loop-remove, /loop-clear, /loop-status, /loop-export.
 Preflight, postrun, notifications, stop files, completion markers, runtime/failure/run limits, branches and checkpoints are supported.
+Scheduled shell commands run as bounded local child processes when the plugin context has no session.shell.
+Scheduled/manual compaction requires session.compact on the host; unavailable capability is rejected before creating a job. Native automatic compaction is always left to OpenCode.
+An unfinished dedicated Goal reserves its session; Loop will not override it.
 --timeout pauses future iterations without aborting the current native model/tool/compaction operation.
 --safe is a command heuristic, not a sandbox. --dry-run does not dispatch or run hooks.
 Native sessions stay serialized; --allow-overlap is rejected.
@@ -38,24 +42,30 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
     if (!directory) throw new Error("Native OpenCode Loop requires a project directory")
     const registrations = []
     const prompt = (request) => ctx.session.prompt({ ...request, delivery: request.delivery || "queue", metadata: { ...request.metadata, opencode_loop_v2: true } })
+    const shellHost = createNativeShellHost({
+      directory,
+      onTerminal: (event) => runtime.onEvent(event),
+      onError: (error) => { void appendLoopLog(directory, "v2-shell-error", { message: String(error?.message || error) }).catch(() => {}) },
+    })
     const runtime = createNativeLoopRuntime({
       directory,
       prompt,
       command: typeof ctx.session.command === "function" ? (request) => ctx.session.command(request) : undefined,
       wait: typeof ctx.session.wait === "function" ? (request) => ctx.session.wait(request) : undefined,
       compact: typeof ctx.session.compact === "function" ? (request) => ctx.session.compact({ ...request, delivery: "queue" }) : undefined,
-      shell: typeof ctx.session.shell === "function" ? (request) => ctx.session.shell(request) : undefined,
+      shell: typeof ctx.session.shell === "function" ? (request) => ctx.session.shell(request) : (request) => shellHost.dispatch(request),
       // cancel() returns void. The durable inbox.cancelled event, not this
       // response alone, proves that an undelivered input can be refunded.
       cancel: typeof ctx.session.inbox?.cancel === "function" ? async (request) => { await ctx.session.inbox.cancel(request); return false } : undefined,
       onError: (error) => { void appendLoopLog(directory, "v2-native-error", { message: String(error?.message || error) }) },
     })
-    const bridge = createOpenCode2EventBridge({ directory, onEvent: (event) => runtime.onEvent(event), onError: (error) => { void appendLoopLog(directory, "v2-native-event-error", { message: String(error?.message || error) }) } })
+    const bridge = createOpenCode2EventBridge({ directory, allowInboxCommands: false, onEvent: (event) => runtime.onEvent(event), onError: (error) => { void appendLoopLog(directory, "v2-native-event-error", { message: String(error?.message || error) }) } })
     let closed = false
     async function dispose() {
       if (closed) return
       closed = true
       await runtime.dispose()
+      await shellHost.dispose()
       await bridge.dispose("native-plugin-disposed")
       for (const registration of registrations.reverse()) await cleanup(registration)
     }

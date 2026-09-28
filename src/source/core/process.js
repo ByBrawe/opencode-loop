@@ -23,11 +23,12 @@ export async function runProcess(command, args, cwd, timeoutMs = 60_000) {
     const child = spawn(command, args, { cwd, shell: false, windowsHide: true })
     const stdout = []
     const stderr = []
-    const timer = setTimeout(() => { try { child.kill("SIGTERM") } catch {} }, timeoutMs)
+    let timedOut = false
+    const timer = setTimeout(() => { timedOut = true; try { child.kill("SIGTERM") } catch {} }, timeoutMs)
     child.stdout?.on("data", (data) => stdout.push(Buffer.from(data)))
     child.stderr?.on("data", (data) => stderr.push(Buffer.from(data)))
     child.on("error", (error) => { clearTimeout(timer); resolve({ code: -1, stdout: "", stderr: String(error) }) })
-    child.on("close", (code) => { clearTimeout(timer); resolve({ code: code ?? 0, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") }) })
+    child.on("close", (code) => { clearTimeout(timer); resolve({ code: timedOut ? 124 : (code ?? -1), stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") }) })
   })
 }
 
@@ -36,11 +37,12 @@ export async function runShellCommand(command, cwd, timeoutMs = 120_000) {
     const child = spawn(command, [], { cwd, shell: true, windowsHide: true })
     const stdout = []
     const stderr = []
-    const timer = setTimeout(() => { try { child.kill("SIGTERM") } catch {} }, timeoutMs)
+    let timedOut = false
+    const timer = setTimeout(() => { timedOut = true; try { child.kill("SIGTERM") } catch {} }, timeoutMs)
     child.stdout?.on("data", (data) => stdout.push(Buffer.from(data)))
     child.stderr?.on("data", (data) => stderr.push(Buffer.from(data)))
     child.on("error", (error) => { clearTimeout(timer); resolve({ code: -1, stdout: "", stderr: String(error) }) })
-    child.on("close", (code) => { clearTimeout(timer); resolve({ code: code ?? 0, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") }) })
+    child.on("close", (code) => { clearTimeout(timer); resolve({ code: timedOut ? 124 : (code ?? -1), stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") }) })
   })
 }
 
