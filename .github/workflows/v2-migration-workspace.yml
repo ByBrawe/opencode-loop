@@ -27,24 +27,31 @@ jobs:
         run: |
           if ! grep -q 'compactingSessions' src/source/runtime/goal-steering.js; then node .github/scripts/repair-164.mjs; fi
           node .github/scripts/native-migration.mjs
-          if [ -f .github/scripts/install-native.mjs ]; then node .github/scripts/install-native.mjs; fi
+          node .github/scripts/install-native.mjs
+          node .github/scripts/review-native.mjs
       - name: Build exact native and compatibility bundles
         run: npm run build:plugin && npm run check
-      - name: Native execution safety regressions
-        run: node scripts/native-v2-test.mjs
-      - name: Complete regression suite
-        run: npm test
+      - name: All regression suites
+        id: regressions
+        continue-on-error: true
+        run: node .github/scripts/run-native-review.mjs
       - name: Install exact native host
         run: npm install --prefix /tmp/native-host --package-lock=false @opencode/cli@2.0.18 @opencode/plugin@2.0.18
       - name: Inspect public lifecycle types
         run: |
           find /tmp/native-host/node_modules -path '*/generated/types.d.ts' -exec node -e 'const s=require("fs").readFileSync(process.argv[1],"utf8");for(const n of ["SessionInboxUser","SessionInboxInfo","ShellInfo"]){let a=s.indexOf("export type "+n+" =");let b=s.indexOf("\nexport ",a+1);if(a>=0)console.log(s.slice(a,b<0?undefined:b));}' {} \;
       - name: Real OpenCode 2.0.18 native canary
+        id: canary
+        continue-on-error: true
         run: |
           BINARY=/tmp/native-host/node_modules/.bin/opencode2
-          if [ ! -x "$BINARY" ]; then BINARY=/tmp/native-host/node_modules/.bin/opencode; fi
           "$BINARY" --version
-          OPENCODE2_BINARY="$BINARY" OPENCODE2_CURRENT_COMMAND_FIELDS=1 node scripts/opencode2-loop-canary.mjs
+          OPENCODE2_BINARY="$BINARY" OPENCODE2_CURRENT_COMMAND_FIELDS=1 OPENCODE2_NATIVE_REQUIRED=1 node scripts/opencode2-loop-canary.mjs
+      - name: Require every regression and host canary to pass
+        if: always()
+        run: |
+          test '${{ steps.regressions.outcome }}' = success
+          test '${{ steps.canary.outcome }}' = success
       - name: Commit verified source and bundles to repair branch only
         run: |
           git config user.name 'github-actions[bot]'
