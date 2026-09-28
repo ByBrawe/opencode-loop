@@ -56,6 +56,22 @@ jobs:
           const messages = 'src/source/opencode/messages.js'
           writeFileSync(messages, readFileSync(messages, 'utf8').replace('pending guard; message.updated will later bind and retain the real ID.', 'pending guard. Prefer the resolved ID from the trusted hook output.'))
           JS
+      - name: Await durable failure state in asynchronous action regressions
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync, writeFileSync } from 'node:fs'
+          import assert from 'node:assert/strict'
+          const file = 'scripts/comprehensive-test.mjs'
+          let source = readFileSync(file, 'utf8')
+          for (const reason of ['empty_command', 'compact_failed']) {
+            const before = `    const state = await h.readState()\n    assert.equal(state.jobs[0].paused, true)\n    assert.equal(state.jobs[0].lastFailureReason, "${reason}")`
+            const after = `    const state = await waitForValue(async () => {\n      const candidate = await h.readState()\n      return candidate.jobs[0]?.paused === true && candidate.jobs[0]?.lastFailureReason === "${reason}" ? candidate : undefined\n    }, 2_000)\n    assert.equal(state?.jobs[0]?.paused, true)\n    assert.equal(state?.jobs[0]?.lastFailureReason, "${reason}")`
+            if (source.includes(after)) continue
+            assert.equal(source.split(before).length, 2, `Expected one failure-state assertion for ${reason}`)
+            source = source.replace(before, after)
+          }
+          writeFileSync(file, source)
+          JS
       - name: Build actual shipping bundles
         run: npm run build:plugin
       - name: Syntax and complete regression suite
@@ -63,6 +79,7 @@ jobs:
           npm run check > /tmp/loop-check.log 2>&1 || { tail -60 /tmp/loop-check.log; exit 1; }
           npm test > /tmp/loop-test.log 2>&1 || { tail -120 /tmp/loop-test.log; exit 1; }
           tail -35 /tmp/loop-test.log
+          for attempt in 1 2 3; do node scripts/comprehensive-watchdog.mjs; done
           npm pack --dry-run
       - name: Verify the compatibility path without restoring unsafe message-event aborts
         run: |
@@ -102,7 +119,7 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src scripts package.json package-lock.json README.md CHANGELOG.md
           if ! git diff --cached --quiet; then
-            git commit -m 'fix: preserve queued legacy steering with trusted resolved admission IDs'
+            git commit -m 'test: await durable failure settlement in action routing regressions'
             git push origin HEAD:refs/heads/main
           fi
           echo "Verified native Loop head: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
