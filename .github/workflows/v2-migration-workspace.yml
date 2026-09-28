@@ -37,9 +37,24 @@ jobs:
         run: node .github/scripts/run-native-review.mjs
       - name: Install exact native host
         run: npm install --prefix /tmp/native-host --package-lock=false @opencode/cli@2.0.18 @opencode/plugin@2.0.18
-      - name: Inspect public lifecycle types
+      - name: Archive public source, locked dependencies and exact host
         run: |
-          find /tmp/native-host/node_modules -path '*/generated/types.d.ts' -exec node -e 'const s=require("fs").readFileSync(process.argv[1],"utf8");for(const n of ["SessionInboxUser","SessionInboxInfo","ShellInfo"]){let a=s.indexOf("export type "+n+" =");let b=s.indexOf("\nexport ",a+1);if(a>=0)console.log(s.slice(a,b<0?undefined:b));}' {} \;
+          mkdir -p /tmp/native-review-workspace/project /tmp/native-review-workspace/tools
+          tar -cf - src scripts commands agents examples .github package.json package-lock.json README.md CHANGELOG.md LICENSE node_modules | tar -xf - -C /tmp/native-review-workspace/project
+          cp -a /tmp/native-host /tmp/native-review-workspace/host
+          cp "$(command -v bun)" /tmp/native-review-workspace/tools/bun
+          git rev-parse HEAD > /tmp/native-review-workspace/source-sha.txt
+          tar -czf /tmp/native-review-workspace.tar.gz -C /tmp/native-review-workspace .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prepared-native-review-workspace
+          path: /tmp/native-review-workspace.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+      - name: Inspect exact published plugin context
+        run: |
+          cat /tmp/native-host/node_modules/@opencode/plugin/package.json
+          grep -R -n -E 'shell:|shell\??\(|Shell|session:|SessionApi|PluginContext' /tmp/native-host/node_modules/@opencode/plugin --include='*.d.ts' --include='*.ts' | head -100
       - name: Real OpenCode 2.0.18 native canary
         id: canary
         continue-on-error: true
