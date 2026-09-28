@@ -62,7 +62,7 @@ jobs:
           grep -q 'not ok.*native schedule grammar: every 1h' "$RUNNER_TEMP/baseline.log"
           python "$RUNNER_TEMP/command-parity.py" fix
           python "$RUNNER_TEMP/schedule-parity.py" fix
-      - name: Build and verify full corrected suites
+      - name: Build and verify corrected suites including current native identity and lifetime tests
         shell: bash
         run: |
           npm run build:plugin
@@ -76,7 +76,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         with:
           repository: ByBrawe/opencode-goal
-          ref: da4b1c1745e4fa76cf38f982c9582adf880fc7eb
+          ref: cb7e7cabed1370551860a46a876d5d87a69e6c2b
           path: companion-goal
           persist-credentials: false
       - name: Real 2.0.18 command registry, schedules, progress initialization and daemon
@@ -112,5 +112,5 @@ jobs:
             if (blob.sha !== expected) throw new Error('verified source digest mismatch')
             console.log(`VERIFIED_FILE ${path} ${blob.sha}`)
           }
-          console.log(`CHECKOUT ${process.env.GITHUB_SHA}; GOAL da4b1c1745e4fa76cf38f982c9582adf880fc7eb`)
+          console.log(`CHECKOUT ${process.env.GITHUB_SHA}; GOAL cb7e7cabed1370551860a46a876d5d87a69e6c2b`)
           JS
