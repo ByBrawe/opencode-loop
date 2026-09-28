@@ -15,6 +15,9 @@ await writeFile(script, `const fs = require('node:fs');
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.NATIVE_CLI_LOG, JSON.stringify({ args, cwd: process.cwd() }) + '\\n');
 if (args[0] === '--version') { console.log(process.env.NATIVE_CLI_VERSION || 'opencode v2.0.18'); process.exit(0); }
+if (args[0] !== '--version' && process.env.NATIVE_CLI_EXPECT_PASSWORD && process.env.OPENCODE_PASSWORD !== process.env.NATIVE_CLI_EXPECT_PASSWORD) {
+  console.error('test host rejected missing native password'); process.exit(19);
+}
 if (args[0] === 'session') {
   if (process.env.NATIVE_CLI_BAD_LIST) { console.log('invalid-json'); process.exit(0); }
   console.log(JSON.stringify([
@@ -98,6 +101,15 @@ try {
   result = await run(["--project", project, "--max-runs", "1", "--prompt", "--server not-a-flag"])
   assert.equal(result.code, 0, result.stderr)
   assert.deepEqual((await calls()).find((call) => call.args[0] === "run").args.slice(-2), ["--", "--server not-a-flag"])
+  cases++
+
+  result = await run([...base, "--server", "http://127.0.0.1:12345"], {
+    OPENCODE_PASSWORD: "isolated-cli-test-password",
+    NATIVE_CLI_EXPECT_PASSWORD: "isolated-cli-test-password",
+  })
+  assert.equal(result.code, 0, result.stderr)
+  assert.equal((await calls()).filter((call) => call.args[0] === "run").length, 2)
+  assert.doesNotMatch(result.stdout + result.stderr + JSON.stringify(await calls()), /isolated-cli-test-password/, "native auth must stay in the environment, not argv or logs")
   cases++
 
   const { selectOpenCodeHost, projectSessions } = await import("./opencode-host.mjs")

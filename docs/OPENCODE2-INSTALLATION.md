@@ -52,6 +52,12 @@ to the current directory/worktree, rejects malformed session output, and pins
 subsequent iterations to the same session. A `--` separator keeps prompt text
 from becoming CLI options. No permission auto-approval flags are added.
 
+For an authenticated explicit `--server`, set `OPENCODE_PASSWORD` in the
+client environment to that server's password. The pinned V2 CLI uses Basic
+username `opencode`; it also honors `OPENCODE_SERVER_PASSWORD` as a legacy
+alias. An empty password is not an instruction to disable server authentication.
+The daemon inherits these values without adding credentials to command arguments.
+
 A V2 CLI client failure or timeout stops automatic replay. The native server may
 still own the admitted execution after its client exits; inspect that session
 before restarting the daemon. Legacy retry behavior stays on the explicit V1

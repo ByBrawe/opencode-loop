@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { spawn, execFileSync } from "node:child_process"
 import { createServer } from "node:http"
 import net from "node:net"
+import { randomBytes } from "node:crypto"
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -11,6 +12,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const binary = process.env.OPENCODE2_BINARY || "opencode2"
 const workspace = await mkdtemp(path.join(os.tmpdir(), "native-loop-cli-host-"))
 const home = path.join(workspace, ".home")
+const password = randomBytes(24).toString("hex")
+const redact = (value) => String(value).replaceAll(password, "[redacted]").replace(/server password[^\r\n]*/gi, "server password [redacted]")
 const prompt = "NATIVE_CLI_CANARY: reply OK, do not use tools"
 let turns = 0
 let server, serverLog = ""
@@ -36,11 +39,11 @@ function run(command, args, env, timeout = 90_000) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd: workspace, env, windowsHide: true })
     let stdout = "", stderr = ""
-    const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error(`CLI deadline: ${args[0]}\n${stdout}\n${stderr}\n${serverLog}`)) }, timeout)
+    const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error(redact(`CLI deadline: ${args[0]}\n${stdout}\n${stderr}\n${serverLog}`))) }, timeout)
     child.stdout.on("data", (data) => { stdout = (stdout + data).slice(-40_000) })
     child.stderr.on("data", (data) => { stderr = (stderr + data).slice(-40_000) })
     child.once("error", (error) => { clearTimeout(timer); reject(error) })
-    child.once("close", (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }) })
+    child.once("close", (code) => { clearTimeout(timer); resolve({ code, stdout: redact(stdout), stderr: redact(stderr) }) })
   })
 }
 async function stop(child) {
@@ -68,7 +71,10 @@ try {
     ...process.env, HOME: home, USERPROFILE: home, OPENCODE_CONFIG_DIR: path.join(home, ".config/opencode"),
     XDG_CONFIG_HOME: path.join(home, ".config"), XDG_DATA_HOME: path.join(home, ".local/share"),
     XDG_STATE_HOME: path.join(home, ".local/state"), XDG_CACHE_HOME: path.join(home, ".cache"),
-    OPENCODE_SERVER_USERNAME: "", OPENCODE_SERVER_PASSWORD: "", OPENCODE_DISABLE_AUTOUPDATE: "true",
+    // Both the CLI and the manually started V2 server consume this value.
+    // Empty legacy credentials do not disable auth: the server generates a password.
+    OPENCODE_PASSWORD: password, OPENCODE_SERVER_USERNAME: "opencode", OPENCODE_SERVER_PASSWORD: password,
+    OPENCODE_DISABLE_AUTOUPDATE: "true",
     OPENCODE_DISABLE_LSP_DOWNLOAD: "true", OPENCODE_BIN: binary, CI: "true",
   }
   const version = await run(binary, ["--version"], env, 10_000)
@@ -93,11 +99,11 @@ try {
     })
     if (!ready) await new Promise((resolve) => setTimeout(resolve, 100))
   }
-  assert.ok(ready, serverLog)
+  assert.ok(ready, redact(serverLog))
   const result = await run(process.execPath, [path.join(root, "scripts/loopd.mjs"), "--project", workspace, "--server", url, "--max-runs", "2", "--timeout", "60s", "--model", "canary/canary", "--prompt", prompt], env, 150_000)
-  assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}\n${serverLog}`)
+  assert.equal(result.code, 0, redact(`${result.stdout}\n${result.stderr}\n${serverLog}`))
   assert.match(result.stdout, /pinned session/)
-  assert.equal(turns, 2, `expected exactly two daemon turns\n${result.stdout}\n${serverLog}`)
+  assert.equal(turns, 2, redact(`expected exactly two daemon turns\n${result.stdout}\n${serverLog}`))
   const listed = await run(binary, ["session", "list", "--format", "json", "-n", "100", "--server", url], env)
   assert.equal(listed.code, 0, listed.stderr)
   const sessions = JSON.parse(listed.stdout)
