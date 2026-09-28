@@ -73,12 +73,16 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: ByBrawe/opencode-goal
-          ref: 2c21251d65e0f2c2df291f76bd4e92e325934b46
+          ref: 612612d01e1dd71c19994fe27ef03be58a38f7bf
           path: companion-goal
           persist-credentials: false
       - name: Build exact Goal companion
         working-directory: companion-goal
         run: npm install && npm run build
+      - name: Verify native joint installer without network package resolution
+        env:
+          OPENCODE_GOAL_INSTALLER: ${{ github.workspace }}/companion-goal/dist/install.js
+        run: node scripts/native-install-pair-test.mjs
       - name: Install exact OpenCode host
         run: npm install --prefix /tmp/native-host --package-lock=false @opencode/cli@2.0.18
       - name: Real host with both shipped plugin entries
@@ -90,3 +94,7 @@ jobs:
           test "$("$OPENCODE2_BINARY" --version)" = 'opencode v2.0.18'
           export OPENCODE_GOAL_V2_PLUGIN_URL="file://$GITHUB_WORKSPACE/companion-goal/dist/server.js"
           node scripts/opencode2-loop-canary.mjs
+      - name: Real native CLI daemon keeps two turns in one session
+        env:
+          OPENCODE2_BINARY: /tmp/native-host/node_modules/.bin/opencode2
+        run: node scripts/native-cli-host-canary.mjs

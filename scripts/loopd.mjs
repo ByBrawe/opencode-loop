@@ -5,12 +5,13 @@ import { spawn, spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { homedir } from "node:os"
 import { fileURLToPath } from "node:url"
+import { selectOpenCodeHost, projectSessions } from "./opencode-host.mjs"
 import { checkGoalPulse, parsePulseDurationMs } from "./pulse-check.mjs"
 
 const args = process.argv.slice(2)
 const configuredRetryMs = Number(process.env.OPENCODE_LOOPD_FAILED_RUN_RETRY_MS)
 const FAILED_RUN_RETRY_MS = Number.isFinite(configuredRetryMs) && configuredRetryMs >= 0 ? configuredRetryMs : 5_000
-const OPENCODE_BIN = process.env.OPENCODE_BIN || "opencode"
+const OPENCODE_BIN = process.env.OPENCODE_BIN || process.env.OPENCODE_BINARY || process.env.OPENCODE2_BINARY
 const SCHTASKS_BIN = process.env.SCHTASKS_BIN || "schtasks"
 const TASK_ROOT = process.env.OPENCODE_LOOPD_TASK_DIR || path.join(process.env.LOCALAPPDATA || path.join(homedir(), "AppData", "Local"), "opencode-loop", "tasks")
 
@@ -137,7 +138,7 @@ function spawnOnce(command, commandArgs, cwd, options = {}) {
       timer.unref?.()
     }
     child.on("error", (error) => done({ code: -1, error }))
-    child.on("exit", (code, signal) => done({ code: timedOut ? 124 : (code ?? (signal ? 1 : 0)), signal }))
+    child.on("close", (code, signal) => done({ code: timedOut ? 124 : (code ?? (signal ? 1 : 0)), signal }))
   })
 }
 
@@ -161,27 +162,47 @@ async function run(command, commandArgs, cwd, options = {}) {
   return fallback
 }
 
-async function resolveLatestSessionID(opencodeBin, project, preferredTitle) {
-  const result = await run(opencodeBin, ["session", "list", "--format", "json", "-n", "20"], project, { capture: true, timeoutMs: 15_000 })
-  if (result.code !== 0 || result.timedOut) return undefined
-  let parsed
-  try { parsed = JSON.parse(result.stdout || "[]") } catch { return undefined }
-  const sessions = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.data) ? parsed.data : []
-  const match = preferredTitle ? sessions.find((item) => item?.title === preferredTitle) : sessions[0]
-  return typeof match?.id === "string" && match.id ? match.id : undefined
+async function selectHost(project, options = {}) {
+  const legacyV1 = options.legacyV1 ?? has("--legacy-v1")
+  if (legacyV1 && has("--native-v2")) throw new Error("Use either --native-v2 or --legacy-v1, not both")
+  const server = options.server ?? arg("--server")
+  if (server) {
+    if (legacyV1) throw new Error("--server is a native OpenCode 2 option")
+    if (!["http:", "https:"].includes(new URL(server).protocol)) throw new Error("--server must be an HTTP(S) URL")
+  }
+  const host = await selectOpenCodeHost({
+    binary: options.opencodeBin || OPENCODE_BIN,
+    legacyV1,
+    probe: (binary) => run(binary, ["--version"], project, { capture: true, timeoutMs: 5_000 }),
+  })
+  return { ...host, server, legacyV1 }
 }
 
-async function resolveSessionActivity(opencodeBin, project) {
-  const result = await run(opencodeBin, ["session", "list", "--format", "json", "-n", "100"], project, { capture: true, timeoutMs: 15_000 })
-  if (result.code !== 0 || result.timedOut) return {}
-  let parsed
-  try { parsed = JSON.parse(result.stdout || "[]") } catch { return {} }
-  const sessions = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.data) ? parsed.data : []
+async function listSessions(host, project, limit) {
+  const argv = ["session", "list", "--format", "json", "-n", String(limit)]
+  if (host.server) argv.push("--server", host.server)
+  const result = await run(host.binary, argv, project, { capture: true, timeoutMs: 15_000 })
+  if (result.code !== 0 || result.timedOut) throw new Error("OpenCode session list failed; refusing to guess a session")
+  return projectSessions(result.stdout, project, host.major === 2)
+}
+
+async function resolveLatestSessionID(host, project, preferredTitle) {
+  const sessions = await listSessions(host, project, 100)
+  const match = preferredTitle ? sessions.find((item) => item.title === preferredTitle) : sessions[0]
+  return match?.id
+}
+
+async function resolveSessionActivity(host, project) {
+  if (!host) return {}
+  let sessions
+  try { sessions = await listSessions(host, project, 100) } catch (error) {
+    console.warn(`[opencode-loopd] session telemetry unavailable: ${error.message}`)
+    return {}
+  }
   const activity = {}
   for (const session of sessions) {
-    const id = typeof session?.id === "string" ? session.id : ""
-    const updated = Number(session?.updated ?? session?.time?.updated)
-    if (id && Number.isFinite(updated) && updated >= 0) activity[id] = updated
+    const updated = Number(session.updated ?? session.time?.updated)
+    if (Number.isFinite(updated) && updated >= 0) activity[session.id] = updated
   }
   return activity
 }
@@ -228,12 +249,13 @@ async function daemon(options = {}) {
   const prompt = readPrompt(project, options)
   const model = options.model ?? arg("--model")
   const agent = options.agent ?? arg("--agent")
-  const opencodeBin = options.opencodeBin || OPENCODE_BIN
+  const host = await selectHost(project, options)
   const explicitSessionID = options.session ?? arg("--session")
-  let sessionID = explicitSessionID || await resolveLatestSessionID(opencodeBin, project)
+  let sessionID = explicitSessionID || await resolveLatestSessionID(host, project)
   const sessionTitle = `OpenCode Loop daemon ${process.pid}-${Date.now()}`
 
   console.log("OpenCode Loop daemon")
+  console.log(`host: ${host.version}`)
   console.log(`project: ${project}`)
   console.log(`every: ${every}`)
   console.log(`maxRuns: ${maxRuns || "unlimited"}`)
@@ -250,18 +272,27 @@ async function daemon(options = {}) {
     console.log(`[opencode-loopd] run #${count} ${new Date().toISOString()}`)
 
     const runArgs = ["run"]
+    if (host.server) runArgs.push("--server", host.server)
     if (sessionID) runArgs.push("--session", sessionID)
     else runArgs.push("--title", sessionTitle)
     if (model) runArgs.push("--model", model)
     if (agent) runArgs.push("--agent", agent)
-    runArgs.push(prompt)
+    runArgs.push("--", prompt)
 
-    const result = await run(opencodeBin, runArgs, project, { timeoutMs })
+    const result = await run(host.binary, runArgs, project, { timeoutMs })
     const code = result.timedOut ? 124 : result.code
     const moreRunsRemain = maxRuns === 0 || count < maxRuns
 
+    // V2 run is a client of a persistent native server. A failed/timed-out
+    // client is not proof that its admitted execution stopped. Replaying here
+    // could queue a duplicate turn while the original still runs.
+    if (host.major === 2 && code !== 0) {
+      console.error(`[opencode-loopd] native CLI ended with code ${code}; the server execution may still be active. Automatic replay stopped. Inspect the session before restarting.`)
+      return Number.isInteger(code) && code > 0 ? code : 1
+    }
+
     if (!sessionID && code === 0 && moreRunsRemain) {
-      sessionID = await resolveLatestSessionID(opencodeBin, project, sessionTitle)
+      sessionID = await resolveLatestSessionID(host, project, sessionTitle)
       if (!sessionID) {
         console.error("[opencode-loopd] could not resolve the newly created session; refusing to continue unpinned")
         return 1
@@ -291,7 +322,10 @@ async function pulseCheck(options = {}) {
   const delay = parseMs(every)
   const maxChecks = parseMaxChecks(options.maxChecks ?? arg("--max-checks", "0"))
   const target = options.target ?? arg("--goal")
-  const opencodeBin = options.opencodeBin || OPENCODE_BIN
+  let host
+  try { host = await selectHost(project, options) } catch (error) {
+    console.warn(`[opencode-loopd] ${error.message} Pulse-check will use persisted Goal timestamps only.`)
+  }
 
   console.log("OpenCode Goal pulse-check")
   console.log(`project: ${project}`)
@@ -302,7 +336,7 @@ async function pulseCheck(options = {}) {
   let checks = 0
   while (true) {
     checks += 1
-    const sessionActivity = await resolveSessionActivity(opencodeBin, project)
+    const sessionActivity = await resolveSessionActivity(host, project)
     const result = await checkGoalPulse(project, {
       staleAfterMs,
       ...(target ? { target } : {}),
@@ -341,7 +375,7 @@ async function taskRun() {
   return await daemon(config)
 }
 
-function installTask() {
+async function installTask() {
   if (process.platform !== "win32") {
     throw new Error("install-task is currently implemented for Windows Task Scheduler only. Use daemon mode on macOS/Linux.")
   }
@@ -356,6 +390,8 @@ function installTask() {
   const model = arg("--model")
   const agent = arg("--agent")
   const timeout = arg("--timeout", "30m")
+  parseMs(timeout)
+  const host = await selectHost(project)
   const node = process.execPath
   const script = fileURLToPath(import.meta.url)
   const artifacts = taskArtifacts(name)
@@ -369,7 +405,10 @@ function installTask() {
     model: model || undefined,
     agent: agent || undefined,
     timeout,
-    opencodeBin: OPENCODE_BIN,
+    opencodeBin: host.binary,
+    legacyV1: host.legacyV1,
+    server: host.server || undefined,
+    session: arg("--session") || undefined,
   }
   fs.writeFileSync(artifacts.config, JSON.stringify(taskConfig, null, 2) + "\n", "utf8")
   const launcherCommand = [quoteWindowsArg(node), quoteWindowsArg(script), "task-run", "--config", quoteWindowsArg(artifacts.config)].join(" ")
@@ -429,9 +468,17 @@ Options:
   --model <provider/id>  OpenCode model used for each run
   --agent <name>         OpenCode agent used for each run
   --session <id>         Pin an existing OpenCode session (auto-pinned otherwise)
-  --timeout <duration>   Max time per OpenCode run (default: 30m, 0s disables)
+  --server <url>         Native V2 server used for both session lookup and runs
+  --legacy-v1            Explicitly select the legacy V1 CLI (default: native V2)
+  --timeout <duration>   Max time per CLI client run (default: 30m, 0s disables)
   --max-runs <n>         Stop after n runs
   --sleep-first          Wait before first run
+
+Host selection: OPENCODE_BIN (or OPENCODE_BINARY), otherwise opencode then
+opencode2, requiring a 2.x version. V1 is never selected without --legacy-v1.
+Native failures/timeouts stop the daemon without replay: the server execution
+may still be running after its CLI client exits. Inspect it before restarting.
+No automatic permission approval is added. Pulse-check never dispatches work.
 
 Pulse-check options:
   --stale-after <duration>  Alert when an active dedicated Goal has not changed (default: 30m)
@@ -445,7 +492,9 @@ const command = args[0]
 
 try {
   let exitCode = 0
-  if (command === "daemon" || command === "loopd") {
+  if (has("--help") || has("-h") || command === "help") {
+    help()
+  } else if (command === "daemon" || command === "loopd") {
     args.shift()
     exitCode = await daemon()
   } else if (command === "pulse-check") {
@@ -453,15 +502,13 @@ try {
     exitCode = await pulseCheck()
   } else if (command === "install-task") {
     args.shift()
-    exitCode = installTask()
+    exitCode = await installTask()
   } else if (command === "uninstall-task") {
     args.shift()
     exitCode = uninstallTask()
   } else if (command === "task-run") {
     args.shift()
     exitCode = await taskRun()
-  } else if (has("--help") || has("-h") || command === "help") {
-    help()
   } else {
     exitCode = await daemon()
   }

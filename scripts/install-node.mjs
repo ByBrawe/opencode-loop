@@ -99,6 +99,7 @@ function parseJsonc(input) {
 }
 
 function isPackageSpec(value) {
+  if (Array.isArray(value)) value = value[0]
   const spec = String(typeof value === "object" && value !== null ? value.package || "" : value || "").trim()
   return spec === packageName || spec.startsWith(`${packageName}@`)
 }
@@ -231,6 +232,25 @@ function appendPluginProperty(source, values, key) {
   return source.slice(0, end) + `${eol}  ${JSON.stringify(key)}: ${formatPluginArray(values, "  ", eol)}${eol}` + source.slice(end)
 }
 
+function pinRegistration(entries) {
+  const objects = entries.map((entry) => {
+    if (!Array.isArray(entry)) return entry
+    if (entry.length !== 2 || !entry[1] || typeof entry[1] !== "object" || Array.isArray(entry[1])) {
+      throw new Error("Invalid Loop package/options tuple; no configuration was changed")
+    }
+    return { package: entry[0], options: entry[1] }
+  }).filter((entry) => typeof entry === "object" && entry !== null)
+  const optionsOf = (entry) => { const { package: _package, ...options } = entry; return options }
+  const configured = objects.filter((entry) => Object.keys(optionsOf(entry)).length > 0)
+  const preferred = configured[0]
+  if (!preferred) return packageSpec
+  if (configured.some((entry) => !isDeepStrictEqual(optionsOf(entry), optionsOf(preferred)))) {
+    throw new Error("Conflicting Loop object registrations; reconcile their options before updating")
+  }
+  const legacyTuple = entries.some((entry) => Array.isArray(entry) && isDeepStrictEqual(entry[1], preferred.options))
+  return legacyV1 && legacyTuple ? [packageSpec, preferred.options] : { ...preferred, package: packageSpec }
+}
+
 async function configurePackagePlugin() {
   const plans = []
   let configured = false
@@ -251,16 +271,11 @@ async function configurePackagePlugin() {
             const entries = parsed[key] || []
             const matching = entries.filter(isPackageSpec)
             if (!matching.length) continue
-            const preferred = matching.find((entry) => typeof entry === "object")
-            const pinned = preferred ? { ...preferred, package: packageSpec } : packageSpec
+            const pinned = pinRegistration(matching)
             updated = rewriteExistingPluginArray(updated, [...entries.filter((entry) => !isPackageSpec(entry)), pinned], key)
           }
         } else {
-          const objects = own.filter((entry) => typeof entry === "object" && entry !== null)
-          const preferred = objects[0]
-          const optionsOf = (entry) => { const { package: _package, ...options } = entry; return options }
-          if (objects.some((entry) => !isDeepStrictEqual(optionsOf(entry), optionsOf(preferred)))) throw new Error("Conflicting Loop object registrations; reconcile their options before updating")
-          const pinned = preferred ? { ...preferred, package: packageSpec } : packageSpec
+          const pinned = pinRegistration(own)
           if (Array.isArray(parsed.plugin) && parsed.plugin.some(isPackageSpec)) updated = rewriteExistingPluginArray(updated, parsed.plugin.filter((entry) => !isPackageSpec(entry)), "plugin")
           const next = [...(parsed.plugins || []).filter((entry) => !isPackageSpec(entry)), pinned]
           updated = parsed.plugins === undefined ? appendPluginProperty(updated, next, "plugins") : rewriteExistingPluginArray(updated, next, "plugins")

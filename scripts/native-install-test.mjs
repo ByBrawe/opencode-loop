@@ -103,3 +103,5 @@ try {
   cases++
   console.log(`Native installer: ${cases} scenarios passed`)
 } finally { await rm(temp, { recursive: true, force: true }) }
+
+await import("./native-guide-test.mjs")

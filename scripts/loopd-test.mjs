@@ -11,7 +11,7 @@ const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-loopd-te
 
 function runCli(cliArgs, env = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [loopd, ...cliArgs], {
+    const child = spawn(process.execPath, [loopd, ...cliArgs, "--legacy-v1"], {
       cwd: root,
       env: { ...process.env, ...env },
       windowsHide: true,
@@ -32,7 +32,7 @@ function runCli(cliArgs, env = {}) {
 async function makeFakeCommand(name) {
   const script = path.join(temporaryRoot, `${name}.mjs`)
   const log = path.join(temporaryRoot, `${name}.jsonl`)
-  await fs.writeFile(script, "\nimport fs from \"node:fs\"\nconst log = process.env.FAKE_COMMAND_LOG\nconst argv = process.argv.slice(2)\nlet previous = []\ntry { previous = fs.readFileSync(log, \"utf8\").trim().split(/\\r?\\n/).filter(Boolean).map((line) => JSON.parse(line)) } catch {}\nfs.appendFileSync(log, JSON.stringify({ args: argv, cwd: process.cwd() }) + \"\\n\")\nif (argv[0] === \"session\" && argv[1] === \"list\") {\n  console.log(process.env.FAKE_SESSION_LIST_JSON || \"[]\")\n  process.exit(0)\n}\nconst sleepMs = Number(process.env.FAKE_SLEEP_MS || 0)\nif (sleepMs > 0) await new Promise((resolve) => setTimeout(resolve, sleepMs))\nconst previousRuns = previous.filter((entry) => entry?.args?.[0] === \"run\").length\nconst codes = String(process.env.FAKE_EXIT_CODES || \"0\").split(\",\").map((value) => Number(value.trim()))\nconst code = codes[Math.min(previousRuns, codes.length - 1)]\nprocess.exit(Number.isInteger(code) ? code : 0)\n", "utf8")
+  await fs.writeFile(script, "\nimport fs from \"node:fs\"\nconst log = process.env.FAKE_COMMAND_LOG\nconst argv = process.argv.slice(2)\nif (argv[0] === \"--version\") { console.log(\"1.18.15\"); process.exit(0) }\nlet previous = []\ntry { previous = fs.readFileSync(log, \"utf8\").trim().split(/\\r?\\n/).filter(Boolean).map((line) => JSON.parse(line)) } catch {}\nfs.appendFileSync(log, JSON.stringify({ args: argv, cwd: process.cwd() }) + \"\\n\")\nif (argv[0] === \"session\" && argv[1] === \"list\") {\n  console.log(process.env.FAKE_SESSION_LIST_JSON || \"[]\")\n  process.exit(0)\n}\nconst sleepMs = Number(process.env.FAKE_SLEEP_MS || 0)\nif (sleepMs > 0) await new Promise((resolve) => setTimeout(resolve, sleepMs))\nconst previousRuns = previous.filter((entry) => entry?.args?.[0] === \"run\").length\nconst codes = String(process.env.FAKE_EXIT_CODES || \"0\").split(\",\").map((value) => Number(value.trim()))\nconst code = codes[Math.min(previousRuns, codes.length - 1)]\nprocess.exit(Number.isInteger(code) ? code : 0)\n", "utf8")
 
   if (process.platform === "win32") {
     const command = path.join(temporaryRoot, `${name}.cmd`)
@@ -81,7 +81,7 @@ try {
     "run", "--title", runCalls[0].args[2],
     "--model", "opencode/nemotron-3-ultra-free",
     "--agent", "build",
-    inlinePrompt,
+    "--", inlinePrompt,
   ], "loopd must preserve model, agent, quotes, and shell metacharacters as literal arguments")
   assert.match(runCalls[0].args[2], /^OpenCode Loop daemon /)
 
@@ -275,7 +275,7 @@ try {
       "run", "--title", taskRunCalls[0].args[2],
       "--model", "opencode/nemotron-3-ultra-free",
       "--agent", "build",
-      "scheduled task prompt",
+      "--", "scheduled task prompt",
     ])
 
     result = await runCli(["uninstall-task", "--name", taskName], {
@@ -290,6 +290,7 @@ try {
 
     result = await runCli(["install-task", "--project", project, "--name", taskName, "--prompt", "test"], {
       SCHTASKS_BIN: path.join(temporaryRoot, "missing-schtasks.exe"),
+      OPENCODE_BIN: fakeOpenCode.command,
       OPENCODE_LOOPD_TASK_DIR: path.join(temporaryRoot, "missing-task-files"),
     })
     assert.equal(result.code, 1, "a missing Task Scheduler executable must not report success")
@@ -300,3 +301,5 @@ try {
 } finally {
   await fs.rm(temporaryRoot, { recursive: true, force: true })
 }
+
+await import("./native-cli-test.mjs")

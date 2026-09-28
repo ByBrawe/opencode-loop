@@ -88,6 +88,7 @@ function parseJsonc(input) {
 }
 
 function isGoalPluginSpec(value) {
+  if (Array.isArray(value)) value = value[0]
   if (value && typeof value === "object") value = value.package
   if (typeof value !== "string") return false
   const spec = value.trim()
@@ -127,6 +128,10 @@ async function removeLoopGoalCommands() {
   let removed = 0
   for (const name of names) {
     try {
+      const installed = await readFile(join(commandDir, name), "utf8")
+      const packaged = await readFile(join(root, "commands", name), "utf8")
+      const recognized = /OpenCode Loop[^\n]{0,120}handled (?:locally|exactly)/.test(installed) || /OpenCode Loop local command handled/.test(installed)
+      if (installed !== packaged && !recognized) continue
       await rm(join(commandDir, name))
       removed++
     } catch (error) {
@@ -154,7 +159,13 @@ function runGoalInstaller() {
 
   return spawnSync(command, args, {
     cwd: root,
-    env: { ...process.env, OPENCODE_CONFIG_DIR: config },
+    // This is a target-dialect hint, not a claim about an installed binary.
+    // Older Goal installers already understand this variable, unlike new CLI flags.
+    env: {
+      ...process.env,
+      OPENCODE_CONFIG_DIR: config,
+      OPENCODE_GOAL_HOST_VERSION: rawArgs.includes("--legacy-v1") ? "1.0.0" : "2.0.0",
+    },
     stdio: "inherit",
     windowsHide: true,
     timeout: 180_000,
