@@ -10,39 +10,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
-        with:
-          path: loop
-          persist-credentials: false
-      - uses: actions/checkout@v6
-        with:
-          repository: ByBrawe/opencode-goal
-          path: goal
-          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
-      - uses: oven-sh/setup-bun@v2
-      - name: Install development dependencies
-        run: |
-          (cd loop && npm ci)
-          (cd goal && npm install --package-lock=false)
-      - name: Archive public source and development dependencies only
-        run: |
-          mkdir workspace
-          (cd loop && git archive HEAD) | tar -x -C workspace
-          mv workspace opencode-loop
-          mv loop/node_modules opencode-loop/node_modules
-          mkdir opencode-goal
-          (cd goal && git archive HEAD) | tar -x -C opencode-goal
-          mv goal/node_modules opencode-goal/node_modules
-          mkdir tools
-          cp "$(command -v bun)" tools/bun
-          printf '%s\n' "loop=$(git -C loop rev-parse HEAD)" "goal=$(git -C goal rev-parse HEAD)" > source-refs.txt
-          tar -czf migration-workspace.tar.gz opencode-loop opencode-goal tools source-refs.txt
+      - name: Install pinned official native host
+        run: npm install --prefix host --package-lock=false @opencode/cli@2.0.18 @opencode/plugin@2.0.18
+      - name: Archive public host packages only
+        run: tar -czf v2-native-host.tar.gz host
       - uses: actions/upload-artifact@v4
         with:
-          name: v2-migration-workspace
-          path: migration-workspace.tar.gz
+          name: v2-native-host
+          path: v2-native-host.tar.gz
           retention-days: 1
           if-no-files-found: error
