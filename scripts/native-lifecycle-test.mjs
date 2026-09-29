@@ -47,6 +47,18 @@ async function bounded(promise) {
   finally { clearTimeout(timer) }
 }
 
+test("native setup never treats plugin options.directory as location authority", async () => {
+  const host = await fixture()
+  try {
+    host.ctx.location = {}
+    host.ctx.options.directory = "/not-a-v2-location"
+    await assert.rejects(
+      plugin.setup(host.ctx),
+      /requires a project directory/i,
+    )
+  } finally { host.release(); await host.remove() }
+})
+
 test("native unload aborts a pending public event stream and shares cleanup", async () => {
   const host = await fixture()
   let dispose
