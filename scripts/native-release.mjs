@@ -33,6 +33,23 @@ export function releaseDecision(status, manifest, request, sha, latest) {
   return true
 }
 
+export async function waitForPublishedGoal(goal, options = {}) {
+  const request = options.request ?? fetch
+  const sleep = options.sleep ?? delay
+  const attempts = options.attempts ?? 60
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const response = await request("https://registry.npmjs.org/" + encodeURIComponent("@bybrawe/opencode-goal") + "/" + goal.version, { signal: AbortSignal.timeout(20000) })
+    if (response.ok) {
+      const manifest = await response.json()
+      assertPublishedSource(manifest, "@bybrawe/opencode-goal", goal.version, goal.sha)
+      return manifest
+    }
+    assert.equal(response.status, 404, "Goal registry transport/auth errors cannot authorize the joint release")
+    if (attempt + 1 < attempts) await sleep(10000)
+  }
+  throw new Error("Declared Goal release is not published; Loop publication refused")
+}
+
 async function json(url, headers = {}) {
   const response = await fetch(url, { headers, signal: AbortSignal.timeout(20000) })
   if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`)
@@ -74,13 +91,13 @@ async function main() {
     throw new Error("Timed out waiting for exact-main CI")
   }
   if (mode === "decide") {
+    // Wait only for an absent, concurrently publishing companion. A different
+    // immutable source or an actual registry error fails immediately.
+    const goal = await waitForPublishedGoal(request.goal)
     const exact = await fetch(base + "/" + request.version, { signal: AbortSignal.timeout(20000) })
     const existing = exact.ok ? await exact.json() : null
     const latest = exact.status === 404 ? await json(base + "/latest") : null
     const publish = releaseDecision(exact.status, existing, request, sha, latest?.version)
-    // The joint release must consume the same Goal source that its host job tested.
-    const goal = await json("https://registry.npmjs.org/" + encodeURIComponent("@bybrawe/opencode-goal") + "/" + request.goal.version)
-    assertPublishedSource(goal, "@bybrawe/opencode-goal", request.goal.version, request.goal.sha)
     await appendFile(process.env.GITHUB_OUTPUT, `publish=${publish}\n`)
     console.log(JSON.stringify({ publish, loop: request.version, goal: goal.version, goalSHA: goal.gitHead }))
     return

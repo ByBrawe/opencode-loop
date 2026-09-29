@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { validateRelease, releaseDecision, assertPublishedSource } from "./native-release.mjs"
+import { validateRelease, releaseDecision, assertPublishedSource, waitForPublishedGoal } from "./native-release.mjs"
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const workflow = await readFile(path.join(repoRoot, ".github/workflows/publish-npm.yml"), "utf8")
@@ -27,6 +27,7 @@ assert.match(workflow, /--registry=https:\/\/registry\.npmjs\.org/)
 assert.match(workflow, /native-release\.mjs verify/)
 assert.match(workflow, /node_modules\/@bybrawe\/opencode-loop\/scripts\/opencode2-loop-canary.mjs/)
 assert.match(workflow, /node_modules\/@bybrawe\/opencode-goal\/dist\/server.js/)
+assert.match(workflow, /ref: \$\{\{ steps.release.outputs.goal_sha \}\}/)
 assert.doesNotMatch(workflow, /secrets\.NPM_TOKEN/)
 
 const publishIndex = workflow.indexOf("npm publish --access public")
@@ -54,4 +55,17 @@ const manifest = { ...pkg, gitHead: sha }
 assert.equal(releaseDecision(200, manifest, request, sha), false)
 assert.throws(() => releaseDecision(200, { ...manifest, gitHead: "b".repeat(40) }, request, sha))
 assert.throws(() => assertPublishedSource({ ...manifest, gitHead: undefined }, pkg.name, pkg.version, sha))
+
+let calls = 0, sleeps = 0
+const goalManifest = { name: "@bybrawe/opencode-goal", version: request.goal.version, gitHead: request.goal.sha }
+const recovered = await waitForPublishedGoal(request.goal, {
+  attempts: 2, sleep: async () => { sleeps++ },
+  request: async () => ++calls === 1 ? { ok: false, status: 404 } : { ok: true, json: async () => goalManifest },
+})
+assert.deepEqual(recovered, goalManifest)
+assert.equal(calls, 2)
+assert.equal(sleeps, 1)
+await assert.rejects(waitForPublishedGoal(request.goal, { attempts: 1, request: async () => ({ ok: false, status: 404 }) }), /not published/)
+for (const status of [403, 429, 503]) await assert.rejects(waitForPublishedGoal(request.goal, { attempts: 1, request: async () => ({ ok: false, status }) }), /transport\/auth/)
+await assert.rejects(waitForPublishedGoal(request.goal, { attempts: 1, request: async () => ({ ok: true, json: async () => ({ ...goalManifest, gitHead: sha }) }) }), /different source/)
 console.log("main-only publish workflow, source identity and registry failure regressions passed")
