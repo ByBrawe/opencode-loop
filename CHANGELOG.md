@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.2 - 2026-09-30
+
+- Conform the native OpenCode 2 runtime to the migration-guide location/options boundary: project scope comes only from `ctx.location.directory`; plugin `ctx.options` can no longer masquerade as project location.
+- Keep session/worktree isolation on public `session.get(...).location.directory` and fail setup/dispatch closed when project or session location cannot be established.
+- Retain the official root/server/`./v2` `Plugin.define({ id, setup })` entrypoints, plural `plugins` installer migration, abortable event subscription cleanup, public command/session capabilities and separately isolated V1 compatibility.
+- Keep undocumented `session.shell`, `session.compact` and `session.inbox` properties out of the V2 runtime; scheduled shell remains Loop-managed and automatic compaction remains host-owned.
+- Add lifecycle regression coverage proving `options.directory` is not V2 location authority.
+- Pair trusted publication with immutable OpenCode Goal 1.3.42 and re-run production tarballs plus the joint OpenCode 2.0.18 host matrix.
+
 ## 0.6.1 - 2026-09-29
 
 - Expose the root/server and `./v2` npm entrypoints through the official `@opencode/plugin` `Plugin.define({ id, setup })` contract while keeping V1 `server()` as a separate compatibility implementation.
@@ -7,7 +16,7 @@
 - Make native local-file installs use the same real V2 entrypoint: `plugins/opencode-loop/index.js` is the `Plugin.define()` wrapper and `native.js` is only its supporting generated runtime.
 - Preserve configured package options while migrating `plugin` to `plugins`; remove old single-file local copies during native upgrades and uninstall.
 - Extend Windows production-tarball smoke time only at the harness boundary so the larger V2 dependency graph can install without weakening runtime assertions.
-- Pair trusted publication with OpenCode Goal 1.3.41 from its exact immutable source and re-run the installed npm pair on OpenCode 2.0.18.
+- Pair trusted publication with OpenCode Goal 1.3.40 from its exact immutable source and re-run the installed npm pair on OpenCode 2.0.18.
 
 ## 0.6.0 - 2026-09-29
 
