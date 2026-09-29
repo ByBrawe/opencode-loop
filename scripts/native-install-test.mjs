@@ -27,8 +27,13 @@ try {
   const fresh = await config("fresh")
   run(fresh)
   const native = await readFile(path.join(root, "src/native.js"), "utf8")
-  assert.equal(await readFile(path.join(fresh, "plugins/opencode-loop.ts"), "utf8"), native)
+  const v2 = await readFile(path.join(root, "src/v2.js"), "utf8")
+  assert.equal(await readFile(path.join(fresh, "plugins/opencode-loop/index.js"), "utf8"), v2)
+  assert.equal(await readFile(path.join(fresh, "plugins/opencode-loop/native.js"), "utf8"), native)
+  assert.match(v2, /from\s+["']@opencode\/plugin["']/)
+  assert.match(v2, /Plugin\.define\s*\(/)
   assert.doesNotMatch(native, /(?:from\s*|import\s*\()["']@opencode-ai\/plugin/)
+  assert.equal(await exists(path.join(fresh, "plugins/opencode-loop.ts")), false)
   assert.equal(await exists(path.join(fresh, "package.json")), false)
   assert.equal(await exists(path.join(fresh, "commands/loop.md")), false)
   assert.equal(await exists(path.join(fresh, "agents/opencode-loop-local.md")), false)
@@ -43,7 +48,7 @@ try {
   const before = await readFile(path.join(obj, "opencode.json"), "utf8")
   run(obj)
   assert.equal(await readFile(path.join(obj, "opencode.json"), "utf8"), before)
-  assert.equal(await exists(path.join(obj, "plugins/opencode-loop.ts")), false)
+  assert.equal(await exists(path.join(obj, "plugins/opencode-loop")), false)
   cases++
 
   const both = await config("both", { plugin: ["legacy-unrelated", "@bybrawe/opencode-loop@old"], plugins: [options, "native-unrelated"] })
@@ -83,7 +88,9 @@ try {
   run(upgrade)
   assert.equal(await exists(path.join(upgrade, "commands/loop.md")), false)
   assert.equal(await readFile(path.join(upgrade, "commands/loop-help.md"), "utf8"), "This is a custom user command; keep it.")
-  assert.equal(await readFile(path.join(upgrade, "plugins/opencode-loop.ts"), "utf8"), native)
+  assert.equal(await readFile(path.join(upgrade, "plugins/opencode-loop/index.js"), "utf8"), v2)
+  assert.equal(await readFile(path.join(upgrade, "plugins/opencode-loop/native.js"), "utf8"), native)
+  assert.equal(await exists(path.join(upgrade, "plugins/opencode-loop.ts")), false)
   cases++
 
   await mkdir(path.join(obj, ".opencode/opencode-loop"), { recursive: true })

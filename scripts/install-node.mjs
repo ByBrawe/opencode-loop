@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url"
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const config = process.env.OPENCODE_CONFIG_DIR || join(homedir(), ".config", "opencode")
 const pluginDir = join(config, "plugins")
+const nativePluginDir = join(pluginDir, "opencode-loop")
 const commandDir = join(config, "commands")
 const agentDir = join(config, "agents")
 const packagePath = join(config, "package.json")
@@ -343,6 +344,7 @@ async function uninstall() {
   for (const plan of plans) if (plan.updated !== plan.source) await writeFile(plan.target, plan.updated, "utf8")
   await rm(join(pluginDir, "opencode-loop.ts"), { force: true })
   await rm(join(pluginDir, "opencode-loop.js"), { force: true })
+  await rm(nativePluginDir, { recursive: true, force: true })
   await removePackagedFiles(join(root, "commands"), commandDir)
   await removePackagedFiles(join(root, "agents"), agentDir)
   const changed = plans.filter((plan) => plan.source !== plan.updated).length
@@ -358,10 +360,21 @@ async function installOrUpdate() {
   if (packageConfig.configured) {
     await rm(join(pluginDir, "opencode-loop.ts"), { force: true })
     await rm(join(pluginDir, "opencode-loop.js"), { force: true })
-  } else {
-    if (legacyV1) await ensureDependency()
-    await copyFile(join(root, "src", legacyV1 ? "index.js" : "native.js"), join(pluginDir, "opencode-loop.ts"))
+    await rm(nativePluginDir, { recursive: true, force: true })
+  } else if (legacyV1) {
+    await ensureDependency()
+    await rm(nativePluginDir, { recursive: true, force: true })
+    await copyFile(join(root, "src", "index.js"), join(pluginDir, "opencode-loop.ts"))
     await rm(join(pluginDir, "opencode-loop.js"), { force: true })
+  } else {
+    // V2 local plugins use the same Plugin.define entrypoint as the npm package.
+    // Keep the generated native runtime beside it as a supporting module instead
+    // of auto-discovering that implementation object as a second plugin.
+    await rm(join(pluginDir, "opencode-loop.ts"), { force: true })
+    await rm(join(pluginDir, "opencode-loop.js"), { force: true })
+    await mkdir(nativePluginDir, { recursive: true })
+    await copyFile(join(root, "src", "v2.js"), join(nativePluginDir, "index.js"))
+    await copyFile(join(root, "src", "native.js"), join(nativePluginDir, "native.js"))
   }
   if (legacyV1) {
     await mkdir(commandDir, { recursive: true })
@@ -375,7 +388,7 @@ async function installOrUpdate() {
   if (packageConfig.configured) {
     const pinResult = packageConfig.updatedFiles.length ? `pinned the config entry to ${packageSpec}` : `the config entry is already pinned to ${packageSpec}`
     console.log(`OpenCode Loop is already configured as a package in ${config}; ${pinResult} and removed the duplicate local plugin copy.`)
-  } else console.log(`Installed OpenCode Loop plugin to ${config}`)
+  } else console.log(`Installed OpenCode Loop plugin to ${legacyV1 ? join(pluginDir, "opencode-loop.ts") : nativePluginDir}`)
   if (legacyV1) {
     console.log(`Installed ${packageName} commands to ${commandDir}`)
     console.log(`Installed ${packageName} local command agent to ${agentDir}`)
