@@ -74,7 +74,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: ByBrawe/opencode-goal
-          ref: 25232138c3d7ce5821028753d8b31b9031243f6e
+          ref: 4fe29ee4c53fc58cec1ebb1d37b6a6261b5d911a
           path: companion-goal
           persist-credentials: false
       - name: Build exact Goal companion
@@ -107,3 +107,8 @@ jobs:
         run: |
           node scripts/opencode2-unit-handoff-canary.mjs > "$RUNNER_TEMP/handoff.log" 2>&1 || { tail -100 "$RUNNER_TEMP/handoff.log"; exit 1; }
           head -48 "$RUNNER_TEMP/handoff.log"
+      - name: Native Goal status RPC rejects foreign session locations
+        working-directory: companion-goal
+        env:
+          OPENCODE2_BINARY: /tmp/native-host/node_modules/.bin/opencode2
+        run: node scripts/native-status-host-canary.mjs
