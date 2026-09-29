@@ -97,6 +97,13 @@ export function createJobWorkspaceRuntime(options = {}) {
 
   async function untilReached(directory, job) {
     if (!job.until) return false
+    // Goal contracts/archives/leases can contain the configured marker too.
+    // None of this control state proves completion of user-project work.
+    const controlRoots = new Set([
+      stateDir(directory),
+      ...["goals", "goal-locks", "goal-handoff-locks", "goal-sequences"]
+        .map((name) => path.join(directory, ".opencode", name)),
+    ].map((root) => path.resolve(root).toLowerCase()))
     const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path.join(".opencode", "opencode-loop", "until.txt")]
     for (const file of files) if (await fileContains(path.resolve(directory, file), job.until)) return true
     let scanned = 0
@@ -108,8 +115,8 @@ export function createJobWorkspaceRuntime(options = {}) {
         if (scanned >= MAX_SCAN_FILES) return false
         if ([".git", "node_modules", "dist", "build", ".next", "coverage"].includes(entry.name)) continue
         const full = path.join(current, entry.name)
-        // The control state contains the configured --until text; it is not completion evidence.
-        if (path.resolve(full) === path.resolve(stateDir(directory))) continue
+        // Keep the explicit until.txt marker above, but never scan plugin state.
+        if (controlRoots.has(path.resolve(full).toLowerCase())) continue
         if (entry.isDirectory()) { if (await walk(full)) return true }
         else if (entry.isFile() && /\.(md|txt|json|yaml|yml)$/i.test(entry.name)) { scanned++; if (await fileContains(full, job.until)) return true }
       }

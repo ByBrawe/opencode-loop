@@ -1040,6 +1040,10 @@ ${text.trim().slice(0, 20000)}`);
   async function untilReached(directory, job) {
     if (!job.until)
       return false;
+    const controlRoots = new Set([
+      stateDir(directory),
+      ...["goals", "goal-locks", "goal-handoff-locks", "goal-sequences"].map((name) => path5.join(directory, ".opencode", name))
+    ].map((root) => path5.resolve(root).toLowerCase()));
     const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path5.join(".opencode", "opencode-loop", "until.txt")];
     for (const file of files)
       if (await fileContains(path5.resolve(directory, file), job.until))
@@ -1060,7 +1064,7 @@ ${text.trim().slice(0, 20000)}`);
         if ([".git", "node_modules", "dist", "build", ".next", "coverage"].includes(entry.name))
           continue;
         const full = path5.join(current, entry.name);
-        if (path5.resolve(full) === path5.resolve(stateDir(directory)))
+        if (controlRoots.has(path5.resolve(full).toLowerCase()))
           continue;
         if (entry.isDirectory()) {
           if (await walk(full))
