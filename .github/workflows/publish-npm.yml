@@ -53,12 +53,22 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
-      - run: node scripts/native-release.mjs validate
+      - name: Validate and resolve immutable release companion
+        id: release
+        shell: bash
+        run: |
+          node scripts/native-release.mjs validate
+          node --input-type=module <<'JS'
+          import { readFileSync, appendFileSync } from 'node:fs'
+          const release = JSON.parse(readFileSync('.github/npm-release.json', 'utf8'))
+          if (!/^[a-f0-9]{40}$/.test(release.goal.sha)) throw new Error('Invalid Goal source identity')
+          appendFileSync(process.env.GITHUB_OUTPUT, `goal_sha=${release.goal.sha}\n`)
+          JS
       - run: npm ci
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: ByBrawe/opencode-goal
-          ref: a66db6b4c9ab52e7098c46bdf784db9061762e89
+          ref: ${{ steps.release.outputs.goal_sha }}
           path: companion-goal
           persist-credentials: false
       - name: Build the declared Goal companion

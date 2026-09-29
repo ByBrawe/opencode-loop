@@ -71,10 +71,21 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci
+      - name: Resolve immutable Goal companion
+        id: goal
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import { existsSync, readFileSync, appendFileSync } from 'node:fs'
+          const request = '.github/npm-release.json'
+          const sha = existsSync(request) ? JSON.parse(readFileSync(request, 'utf8')).goal.sha : 'e414660b74e3cc1fbc645ab9c79888dd54971a4a'
+          if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error('Invalid companion commit')
+          appendFileSync(process.env.GITHUB_OUTPUT, `sha=${sha}\n`)
+          JS
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: ByBrawe/opencode-goal
-          ref: 4fe29ee4c53fc58cec1ebb1d37b6a6261b5d911a
+          ref: ${{ steps.goal.outputs.sha }}
           path: companion-goal
           persist-credentials: false
       - name: Build exact Goal companion
