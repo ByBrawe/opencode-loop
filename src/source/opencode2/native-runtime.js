@@ -166,7 +166,7 @@ export function createNativeLoopRuntime(options = {}) {
     else if (kind === "shell") request = { sessionID: scope.sessionID, id: id(), command: String(job.action).replace(/^[!$]\s*/, ""), timeoutMs: job.timeoutMs }
     else {
       const [name, text] = splitFirst(String(job.action).replace(/^\/+/, ""))
-      request = { sessionID: scope.sessionID, name, text: text || "", delivery: "queue" }
+      request = { sessionID: scope.sessionID, command: name, arguments: text || "", delivery: "queue" }
     }
     if (!isCurrent()) return result({ reason: "foreground-or-compaction" })
     if (job.dryRun) {

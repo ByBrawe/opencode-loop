@@ -183,6 +183,16 @@ await test("preflight failure does not consume a run", async (f) => {
   assert.equal(f.prompts.length, 0)
 }, { runShellCommand: async () => ({ code: 3, stdout: "", stderr: "not ready" }) })
 
+await test("native slash command dispatch uses OpenCode 2 command and arguments fields", async (f) => {
+  await f.add("0s --command /review --staged --max-runs 1")
+  await f.wake()
+  assert.equal(f.commands.length, 1)
+  assert.equal(f.commands[0].command, "review")
+  assert.equal(f.commands[0].arguments, "--staged")
+  assert.equal("name" in f.commands[0], false)
+  assert.equal("text" in f.commands[0], false)
+})
+
 await test("safe guard covers verification commands too", async (f) => {
   await f.add('0s task --safe --verify "git reset --hard" --max-runs 1')
   await f.wake()
