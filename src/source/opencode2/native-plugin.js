@@ -20,8 +20,8 @@ Presets: /loop-dev, /loop-testfix, /loop-progress, /loop-safe-dev, /loop-ask, /l
 /loop-init [progress.md] creates a missing project-local progress file without overwriting existing data.
 Controls: /loop-now, /loop-pause, /loop-resume, /loop-stop, /loop-remove, /loop-clear, /loop-status, /loop-export.
 Preflight, postrun, notifications, stop files, completion markers, runtime/failure/run limits, branches and checkpoints are supported.
-Scheduled shell commands run as bounded local child processes when the plugin context has no session.shell.
-Scheduled/manual compaction requires session.compact on the host; unavailable capability is rejected before creating a job. Native automatic compaction is always left to OpenCode.
+Scheduled shell commands run as bounded local child processes managed by Loop; OpenCode 2's ctx.shell surface is a hook API, not a shell-execution method.
+The public OpenCode 2 plugin API does not expose manual session compaction. /loop-compact, --compact and --compact-every are rejected before job creation on V2; native automatic compaction remains host-owned and is observed through the compaction hook.
 An unfinished dedicated Goal reserves its session; Loop will not override it.
 --timeout pauses future iterations without aborting the current native model/tool/compaction operation.
 --safe is a command heuristic, not a sandbox. --dry-run does not dispatch or run hooks.
@@ -61,11 +61,13 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
       prompt,
       command: typeof ctx.session.command === "function" ? (request) => ctx.session.command(request) : undefined,
       wait: typeof ctx.session.wait === "function" ? (request) => ctx.session.wait(request) : undefined,
-      compact: typeof ctx.session.compact === "function" ? (request) => ctx.session.compact({ ...request, delivery: "queue" }) : undefined,
-      shell: typeof ctx.session.shell === "function" ? (request) => ctx.session.shell(request) : (request) => shellHost.dispatch(request),
-      // cancel() returns void. The durable inbox.cancelled event, not this
-      // response alone, proves that an undelivered input can be refunded.
-      cancel: typeof ctx.session.inbox?.cancel === "function" ? async (request) => { await ctx.session.inbox.cancel(request); return false } : undefined,
+      // OpenCode 2 exposes ctx.shell as a hook domain, not an execution method,
+      // and SessionDomain has no public compact/inbox-cancel action. Keep those
+      // undocumented capabilities out of the V2 runtime instead of probing
+      // private host fields that may disappear between releases.
+      compact: undefined,
+      shell: (request) => shellHost.dispatch(request),
+      cancel: undefined,
       onError: (error) => { void appendLoopLog(directory, "v2-native-error", { message: String(error?.message || error) }).catch(() => {}) },
     })
     const bridge = createOpenCode2EventBridge({ directory, allowInboxCommands: false, onEvent: async (event) => {

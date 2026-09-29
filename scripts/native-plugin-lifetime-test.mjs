@@ -87,6 +87,26 @@ test("native Loop cleanup is shared and drains all registrations after an error"
   }
 })
 
+test("native Loop never probes undocumented SessionDomain shell compact or inbox fields", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "loop-v2-public-session-"))
+  const host = fixture(directory)
+  let dispose
+  try {
+    for (const field of ["shell", "compact", "inbox"]) {
+      Object.defineProperty(host.ctx.session, field, {
+        configurable: true,
+        get() { throw new Error(`undocumented session.${field} was accessed`) },
+      })
+    }
+    dispose = await plugin.setup(host.ctx)
+    assert.equal(typeof dispose, "function")
+  } finally {
+    host.end()
+    await dispose?.().catch(() => {})
+    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+  }
+})
+
 test("native Loop uses the same public plugin identity as the package entry", () => {
   assert.equal(plugin.id, "@bybrawe/opencode-loop", "native entry must share canonical plugin identity")
 })
