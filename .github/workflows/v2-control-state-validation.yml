@@ -60,7 +60,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           repository: ByBrawe/opencode-goal
-          ref: 16a276bb219a512d9a7d2a4dd8b6883eb76b9b54
+          ref: f94449761ca521ad8a0848b91b1b496da5515c23
           path: companion-goal
           persist-credentials: false
       - name: Verify the corrected Goal companion
@@ -87,7 +87,8 @@ jobs:
           export OPENCODE_GOAL_V2_PLUGIN_URL="file://$GITHUB_WORKSPACE/companion-goal/dist/server.js"
           node scripts/opencode2-loop-canary.mjs
           node scripts/native-cli-host-canary.mjs
-          (cd companion-goal && node scripts/opencode2-unit-handoff-canary.mjs)
+          (cd companion-goal && node scripts/opencode2-unit-handoff-canary.mjs > "$RUNNER_TEMP/handoff.log" 2>&1) || { tail -160 "$RUNNER_TEMP/handoff.log"; exit 1; }
+          head -60 "$RUNNER_TEMP/handoff.log"
       - name: Store verified content without changing branches
         if: matrix.os == 'ubuntu-latest'
         shell: bash
@@ -97,6 +98,7 @@ jobs:
           node --input-type=module <<'JS'
           import { readFileSync } from 'node:fs'
           import { createHash } from 'node:crypto'
+          import { execFileSync } from 'node:child_process'
           const paths = ['src/source/runtime/job-workspace.js', 'scripts/control-plane-until-test.mjs', 'src/index.js', 'src/server.js', 'src/native.js', 'package.json', 'docs/OPENCODE2-CONTROL-STATE.md']
           for (const path of paths) {
             const data = readFileSync(path)
@@ -111,6 +113,7 @@ jobs:
             if (blob.sha !== expected) throw new Error('verified blob mismatch')
             console.log(`VERIFIED_FILE ${path} ${blob.sha}`)
           }
-          console.log(`CHECKOUT ${process.env.GITHUB_SHA}; GOAL 16a276bb219a512d9a7d2a4dd8b6883eb76b9b54`)
+          const goal = execFileSync('git', ['-C', 'companion-goal', 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+          console.log(`CHECKOUT ${process.env.GITHUB_SHA}; GOAL ${goal}`)
           console.log('No branch or commit modified by this validation job.')
           JS
