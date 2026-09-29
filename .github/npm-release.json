@@ -4,8 +4,8 @@
   "predecessor": "0.5.38",
   "goal": {
     "version": "1.3.39",
-    "sha": "71b61a5adcf92648bf70010b3e1d510a913f8c18"
+    "sha": "0803422eb86b4d1cdc4ea1ec8d0fbb4acca5f0ed"
   },
   "requestedAt": "2026-09-29",
-  "reason": "User-authorized native OpenCode 2 npm release from main; exact Goal candidate includes metadata-triggered handoff validation. Preserve all installed-package and joint-host gates."
+  "reason": "User-authorized native OpenCode 2 npm release from main; exact Goal candidate includes portable LF/CRLF release-gate regressions. Preserve all installed-package and joint-host gates."
 }
