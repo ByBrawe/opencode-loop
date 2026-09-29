@@ -41,7 +41,7 @@ const publisher = workflow.slice(workflow.indexOf("  publish:\n"), workflow.inde
 assert.doesNotMatch(publisher, /contents:\s*write/, "OIDC publisher must not gain repository mutation privileges")
 
 const sha = "a".repeat(40)
-const request = { name: "@bybrawe/opencode-loop", version: "0.6.1", predecessor: "0.6.0", goal: { version: "1.3.40", sha: "b".repeat(40) } }
+const request = { name: "@bybrawe/opencode-loop", version: "0.6.1", predecessor: "0.6.0", goal: { version: "1.3.41", sha: "b".repeat(40) } }
 const pkg = { name: request.name, version: request.version }
 const env = { GITHUB_REPOSITORY: "ByBrawe/opencode-loop", GITHUB_REF: "refs/heads/main", GITHUB_SHA: sha }
 assert.strictEqual(validateRelease(request, pkg, env), request)
