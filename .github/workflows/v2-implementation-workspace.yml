@@ -1,0 +1,72 @@
+name: Native implementation workspace
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/v2-implementation-workspace.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          path: loop
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: ByBrawe/opencode-goal
+          ref: 3128b20c76f0044eee1503be806d875326a9dabe
+          path: goal
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: '1.4.2'
+      - name: Build isolated candidates without repository write credentials
+        shell: bash
+        run: |
+          ruby <<'RUBY'
+          require 'yaml'
+          [['loop', 'v2-session-scope-pass.yml'], ['goal', 'v2-native-sidebar-pass.yml']].each do |repo, file|
+            Dir.chdir(repo) do
+              steps = YAML.safe_load(File.read(".github/workflows/#{file}"), aliases: true).fetch('jobs').fetch('verify').fetch('steps')
+              steps.each do |step|
+                next unless step['run']
+                break if step['name']&.start_with?('Commit only verified')
+                script = step['run']
+                script = 'npm install --no-audit --no-fund' if repo == 'goal' && script.strip == 'npm ci'
+                if repo == 'loop' && step['name']&.start_with?('Bind commands, hooks')
+                  raise 'missing reviewed syntax boundary' unless script.include?('}))`)')
+                  script = script.sub('}))`)', '})`)')
+                end
+                puts "::group::#{repo}: #{step['name'] || script.lines.first}"
+                success = system({'GH_TOKEN'=>nil, 'GITHUB_TOKEN'=>nil}, 'bash', '-e', '-o', 'pipefail', '-c', script)
+                puts '::endgroup::'
+                unless success
+                  puts "::warning::#{repo} candidate stopped at #{step['name'] || script.lines.first}; source and dependencies are archived for local correction."
+                  break
+                end
+              end
+            end
+          end
+          RUBY
+      - name: Archive public code and development dependencies only
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p tools
+          cp "$(command -v bun)" tools/bun
+          printf '%s\n' "loop=$(git -C loop rev-parse HEAD)" "goal=$(git -C goal rev-parse HEAD)" > source-refs.txt
+          tar --exclude=.git --exclude='*.tgz' -czf "$RUNNER_TEMP/native-workspace.tar.gz" loop goal tools source-refs.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: native-implementation-workspace
+          path: ${{ runner.temp }}/native-workspace.tar.gz
+          retention-days: 1
+          if-no-files-found: error
