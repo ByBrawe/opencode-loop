@@ -1,6 +1,6 @@
 # OpenCode Loop 0.6.1
 
-Official OpenCode 2 plugin-definition release, paired with OpenCode Goal 1.3.41.
+Official OpenCode 2 plugin-definition release, paired with OpenCode Goal 1.3.40.
 
 ## V2 package and local entrypoints
 
@@ -27,7 +27,7 @@ remain unchanged.
 
 ## Paired Goal release
 
-Goal 1.3.41 defines its server, native-only and TUI entries with the official V2
+Goal 1.3.40 defines its server, native-only and TUI entries with the official V2
 plugin APIs while preserving separate V1 compatibility. Loop publication is pinned
 to Goal's immutable 1.3.40 source and refuses publication until that exact package
 is visible on npm.
@@ -39,7 +39,7 @@ normal exact-main CI and Native V2 CI. It builds the declared Goal source, insta
 the actual Loop and Goal tarballs together, and exercises them on OpenCode 2.0.18.
 
 After publication, registry latest, gitHead, exports, bins and integrity are checked.
-A fresh npm consumer then installs Loop 0.6.1 and Goal 1.3.41 and re-runs joint
+A fresh npm consumer then installs Loop 0.6.1 and Goal 1.3.40 and re-runs joint
 installation/options/uninstall, real native commands and the two-turn
 single-session daemon before the GitHub v0.6.1 tag/release is created.
 
@@ -53,7 +53,7 @@ are functional verification, not live-model cost or endurance measurements.
 Install the verified pair after registry publication:
 
 ```sh
-npx -y @bybrawe/opencode-goal@1.3.41
+npx -y @bybrawe/opencode-goal@1.3.40
 npx -y @bybrawe/opencode-loop@0.6.1 --loop-only --without-loop-goals
 ```
 
