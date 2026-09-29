@@ -2986,7 +2986,7 @@ var OpenCodeLoopNativePlugin = Object.freeze({
       if (typeof fn !== "function")
         throw new Error(`Native OpenCode Loop requires ${label}; use OpenCode 2.0.18 or newer.`);
     }
-    const directory = String(ctx.location?.directory || ctx.options?.directory || "").trim();
+    const directory = String(ctx.location?.directory || "").trim();
     if (!directory)
       throw new Error("Native OpenCode Loop requires a project directory");
     const ownsSession = createNativeSessionLocationGuard({
