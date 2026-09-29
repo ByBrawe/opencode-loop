@@ -1,3 +1,8 @@
+export const OPENCODE_LOOP_V2_PRESET_NAMES = Object.freeze([
+  "loop-dev", "loop-testfix", "loop-compact", "loop-progress", "loop-safe-dev",
+  "loop-command", "loop-cmd", "loop-prompt", "loop-ask", "loop-shell",
+])
+
 export const OPENCODE_LOOP_V2_COMMANDS = Object.freeze({
   loop: Object.freeze({
     description: "Start an OpenCode auto-continue loop. Usage: /loop 5m <task>",
@@ -36,20 +41,20 @@ export const OPENCODE_LOOP_V2_COMMANDS = Object.freeze({
     template: "OpenCode Loop export command handled locally. Reply exactly: OK.",
   }),
   "loop-help": Object.freeze({
-    description: "Show the experimental OpenCode 2 Loop command help.",
+    description: "Show the native OpenCode 2 Loop command help.",
     template: "OpenCode Loop help command handled locally. Reply exactly: OK.",
   }),
   "loop-doctor": Object.freeze({
-    description: "Show experimental OpenCode 2 Loop diagnostics.",
+    description: "Show native OpenCode 2 Loop diagnostics.",
     template: "OpenCode Loop doctor command handled locally. Reply exactly: OK.",
   }),
   "loop-logs": Object.freeze({
-    description: "Show recent experimental OpenCode 2 Loop runtime events.",
+    description: "Show recent native OpenCode 2 Loop runtime events.",
     template: "OpenCode Loop logs command handled locally. Reply exactly: OK.",
   }),
 })
 
-function commandArguments(input) {
+export function commandArguments(input) {
   const prompt = input?.prompt
   if (typeof prompt?.text === "string") return prompt.text.trim()
   if (typeof input?.arguments === "string") return input.arguments.trim()

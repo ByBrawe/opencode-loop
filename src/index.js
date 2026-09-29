@@ -1244,6 +1244,20 @@ function goalStatusText(job) {
     return "paused";
   return status;
 }
+function applyTestfixPreset(job, defaults = {}) {
+  if (defaults.testfixPreset) {
+    const defaultCommand = String(defaults.verifyCommand || "npm test");
+    const parsedAction = String(job.action || "").trim();
+    const usedDefaultAction = parsedAction === String(defaults.action || "").trim();
+    if (!usedDefaultAction && job.verifyCommand === defaults.verifyCommand) {
+      job.verifyCommand = parsedAction;
+      job.action = `Run the project tests. Fix failures. Re-run the tests. Test command hint: ${parsedAction}`;
+    } else if (usedDefaultAction && job.verifyCommand !== defaults.verifyCommand) {
+      job.action = `Run the project tests. Fix failures. Re-run the tests. Test command hint: ${job.verifyCommand || defaultCommand}`;
+    }
+  }
+  return job;
+}
 
 // src/source/opencode/command-router.js
 var HANDLER_NAMES = [
@@ -1745,6 +1759,34 @@ function createGoalCommandHandlers(options = {}) {
 import { promises as fs6 } from "fs";
 import path7 from "path";
 
+// src/source/core/progress.js
+var DEFAULT_PROGRESS_MD = `# Progress
+
+## Current Goal
+Describe the current project goal here.
+
+## Agent Rules
+- Do not ask questions unless truly blocked.
+- Make reasonable assumptions and continue.
+- Work on unfinished TODOs in order.
+- Mark completed TODOs with [x].
+- Add new bugs, ideas, and follow-up work as TODOs.
+- Run tests, lint, or build when available.
+- Do not run destructive commands, force pushes, production deploys, or database resets.
+
+## Active TODO
+- [ ] Review the project structure and pick the next safe improvement.
+
+## Completed
+- [x] Created progress.md.
+
+## Backlog Ideas
+- [ ] Add more project-specific tasks here.
+
+## Blocked
+- None.
+`;
+
 // src/source/runtime/companion-goal.js
 import { promises as fs4 } from "fs";
 import path5 from "path";
@@ -1922,32 +1964,6 @@ async function listPersistedLoopSessions(directory, currentSessionID) {
 
 // src/source/opencode/loop-commands.js
 var SERVICE2 = "opencode-loop";
-var DEFAULT_PROGRESS_MD = `# Progress
-
-## Current Goal
-Describe the current project goal here.
-
-## Agent Rules
-- Do not ask questions unless truly blocked.
-- Make reasonable assumptions and continue.
-- Work on unfinished TODOs in order.
-- Mark completed TODOs with [x].
-- Add new bugs, ideas, and follow-up work as TODOs.
-- Run tests, lint, or build when available.
-- Do not run destructive commands, force pushes, production deploys, or database resets.
-
-## Active TODO
-- [ ] Review the project structure and pick the next safe improvement.
-
-## Completed
-- [x] Created progress.md.
-
-## Backlog Ideas
-- [ ] Add more project-specific tasks here.
-
-## Blocked
-- None.
-`;
 function requireFunction3(value, name) {
   if (typeof value !== "function")
     throw new TypeError(`createLoopCommandHandlers requires ${name}`);
@@ -2247,17 +2263,7 @@ function createLoopRegistration(options = {}) {
     const executionContext = getSessionExecutionContext2(sessionID) || { agent: "build" };
     parsed.job.agent = defaults.agent || executionContext.agent || "build";
     parsed.job.model = normalizedModelRef2(defaults.model) || executionContext.model;
-    if (defaults.testfixPreset) {
-      const defaultCommand = String(defaults.verifyCommand || "npm test");
-      const parsedAction = String(parsed.job.action || "").trim();
-      const usedDefaultAction = parsedAction === String(defaults.action || "").trim();
-      if (!usedDefaultAction && parsed.job.verifyCommand === defaults.verifyCommand) {
-        parsed.job.verifyCommand = parsedAction;
-        parsed.job.action = `Run the project tests. Fix failures. Re-run the tests. Test command hint: ${parsedAction}`;
-      } else if (usedDefaultAction && parsed.job.verifyCommand !== defaults.verifyCommand) {
-        parsed.job.action = `Run the project tests. Fix failures. Re-run the tests. Test command hint: ${parsed.job.verifyCommand || defaultCommand}`;
-      }
-    }
+    applyTestfixPreset(parsed.job, defaults);
     if (parsed.job.watchPaths.length)
       parsed.job.watchSnapshot = await snapshotPaths(directory, parsed.job.watchPaths);
     if (!parsed.job.activeRecoveryMs) {

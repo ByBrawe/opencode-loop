@@ -81,3 +81,20 @@ export function goalStatusText(job) {
   if (job?.paused) return "paused"
   return status
 }
+
+
+// Preserve the same custom test-command semantics in both host adapters.
+export function applyTestfixPreset(job, defaults = {}) {
+  if (defaults.testfixPreset) {
+    const defaultCommand = String(defaults.verifyCommand || "npm test")
+    const parsedAction = String(job.action || "").trim()
+    const usedDefaultAction = parsedAction === String(defaults.action || "").trim()
+    if (!usedDefaultAction && job.verifyCommand === defaults.verifyCommand) {
+      job.verifyCommand = parsedAction
+      job.action = `Run the project tests. Fix failures. Re-run the tests. Test command hint: ${parsedAction}`
+    } else if (usedDefaultAction && job.verifyCommand !== defaults.verifyCommand) {
+      job.action = `Run the project tests. Fix failures. Re-run the tests. Test command hint: ${job.verifyCommand || defaultCommand}`
+    }
+  }
+  return job
+}

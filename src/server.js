@@ -421,6 +421,25 @@ var init_continuation = __esm(() => {
 });
 
 // src/source/core/jobs.js
+function presetDefaults(name) {
+  if (name === "loop-compact")
+    return { intervalMs: parseDuration("200m"), action: "/compact", kind: "compact", name: "compact", immediate: false };
+  if (name === "loop-command" || name === "loop-cmd")
+    return { intervalMs: 0, kind: "command", name: "command", immediate: false };
+  if (name === "loop-prompt")
+    return { intervalMs: 0, kind: "prompt", name: "prompt", immediate: true };
+  if (name === "loop-ask")
+    return { intervalMs: 0, kind: "prompt", name: "ask", immediate: false };
+  if (name === "loop-shell")
+    return { intervalMs: 0, kind: "shell", name: "shell", immediate: false };
+  if (name === "loop-testfix")
+    return { intervalMs: 0, name: "testfix", safe: true, askNever: true, verifyCommand: "npm test", testfixPreset: true, action: "Run the project tests. Fix failures. Re-run the tests. Test command hint: npm test" };
+  if (name === "loop-progress")
+    return { intervalMs: 0, name: "progress", safe: true, askNever: true, progressFile: "progress.md", action: "Read progress.md and continue the next unfinished TODO. Mark completed TODOs with [x]. Add useful TODOs when you discover them." };
+  if (name === "loop-safe-dev")
+    return { intervalMs: 0, name: "safe-dev", safe: true, askNever: true, noOverlap: true, checkpointOnly: true, batch: 5, progressFile: "progress.md", action: "Develop the project from progress.md. Work in small safe batches. Mark completed TODOs with [x]. Add new ideas to progress.md. Run tests/lint/build if available." };
+  return { intervalMs: 0, name: "dev", askNever: true, progressFile: "progress.md", action: "Continue developing the project from progress.md. Mark completed TODOs with [x]. Add new ideas to progress.md. Run tests/lint/build if available." };
+}
 function jobLabel(job) {
   const title = job.name ? `${job.name}: ` : "";
   const kind = job.kind ? ` [${job.kind}]` : "";
@@ -507,6 +526,20 @@ function goalStatusText(job) {
   if (job?.paused)
     return "paused";
   return status;
+}
+function applyTestfixPreset(job, defaults = {}) {
+  if (defaults.testfixPreset) {
+    const defaultCommand = String(defaults.verifyCommand || "npm test");
+    const parsedAction = String(job.action || "").trim();
+    const usedDefaultAction = parsedAction === String(defaults.action || "").trim();
+    if (!usedDefaultAction && job.verifyCommand === defaults.verifyCommand) {
+      job.verifyCommand = parsedAction;
+      job.action = `Run the project tests. Fix failures. Re-run the tests. Test command hint: ${parsedAction}`;
+    } else if (usedDefaultAction && job.verifyCommand !== defaults.verifyCommand) {
+      job.action = `Run the project tests. Fix failures. Re-run the tests. Test command hint: ${job.verifyCommand || defaultCommand}`;
+    }
+  }
+  return job;
 }
 var init_jobs = __esm(() => {
   init_continuation();
@@ -1084,7 +1117,7 @@ var init_job_workspace = __esm(() => {
 });
 
 // src/source/opencode2/native-plugin.js
-import path7 from "path";
+import path8 from "path";
 
 // src/source/opencode2/native-shell.js
 import { spawn } from "child_process";
@@ -1248,6 +1281,207 @@ async function nativeGoalReservesSession(directory, sessionID) {
 
 // src/source/opencode2/native-runtime.js
 init_jobs();
+
+// src/source/core/schedule-syntax.js
+function removeBooleanFlag(input, flag) {
+  const pattern = new RegExp(`(^|\\s)${flag.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}(?=\\s|$)`, "i");
+  const found = pattern.test(input);
+  return {
+    found,
+    value: String(input || "").replace(pattern, " ").replace(/\s+/g, " ").trim()
+  };
+}
+function firstToken(input) {
+  const match = String(input || "").trim().match(/^(\S+)(?:\s+([\s\S]*))?$/);
+  return match ? { token: match[1], rest: String(match[2] || "").trim() } : { token: "", rest: "" };
+}
+function inferredMode(intervalMs, maxRuns) {
+  if (Number(maxRuns || 0) === 1 && Number(intervalMs || 0) > 0)
+    return "once";
+  return Number(intervalMs || 0) === 0 ? "idle" : "interval";
+}
+function normalizeLoopScheduleArgs(raw, defaults = {}) {
+  const overlap = removeBooleanFlag(String(raw || "").trim(), "--allow-goal-overlap");
+  let input = overlap.value;
+  const nextDefaults = { ...defaults };
+  let scheduleMode = defaults.scheduleMode;
+  let scheduleSyntax = "legacy";
+  const first = firstToken(input);
+  const keyword = first.token.toLowerCase();
+  if (keyword === "idle") {
+    nextDefaults.intervalMs = 0;
+    nextDefaults.immediate = true;
+    scheduleMode = "idle";
+    scheduleSyntax = "idle";
+    input = first.rest;
+  } else if (keyword === "every" || keyword === "after" || keyword === "in") {
+    const duration = firstToken(first.rest);
+    const intervalMs = parseDuration(duration.token);
+    if (intervalMs === null) {
+      return {
+        ok: false,
+        error: `Invalid ${keyword} schedule. Example: /loop ${keyword === "every" ? "every" : "after"} 5m continue the project`
+      };
+    }
+    nextDefaults.intervalMs = intervalMs;
+    nextDefaults.immediate = false;
+    input = duration.rest;
+    if (keyword === "every") {
+      scheduleMode = intervalMs === 0 ? "idle" : "interval";
+      scheduleSyntax = "every";
+    } else {
+      nextDefaults.maxRuns = 1;
+      scheduleMode = "once";
+      scheduleSyntax = "after";
+    }
+  } else {
+    const duration = parseDuration(first.token);
+    if (duration !== null) {
+      scheduleMode = duration === 0 ? "idle" : "interval";
+    } else if (nextDefaults.intervalMs === undefined || nextDefaults.intervalMs === null) {
+      nextDefaults.intervalMs = 0;
+      nextDefaults.immediate = nextDefaults.immediate ?? true;
+      scheduleMode = "idle";
+      scheduleSyntax = "idle-shorthand";
+    } else {
+      scheduleMode = scheduleMode || inferredMode(nextDefaults.intervalMs, nextDefaults.maxRuns);
+    }
+  }
+  return {
+    ok: true,
+    args: input,
+    defaults: nextDefaults,
+    scheduleMode: scheduleMode || inferredMode(nextDefaults.intervalMs, nextDefaults.maxRuns),
+    scheduleSyntax,
+    allowGoalOverlap: overlap.found || defaults.allowGoalOverlap === true
+  };
+}
+
+// src/source/opencode2/commands.js
+var OPENCODE_LOOP_V2_PRESET_NAMES = Object.freeze([
+  "loop-dev",
+  "loop-testfix",
+  "loop-compact",
+  "loop-progress",
+  "loop-safe-dev",
+  "loop-command",
+  "loop-cmd",
+  "loop-prompt",
+  "loop-ask",
+  "loop-shell"
+]);
+var OPENCODE_LOOP_V2_COMMANDS = Object.freeze({
+  loop: Object.freeze({
+    description: "Start an OpenCode auto-continue loop. Usage: /loop 5m <task>",
+    template: "OpenCode Loop local command handled. Reply exactly: OK."
+  }),
+  "loop-pause": Object.freeze({
+    description: "Pause OpenCode Loop jobs.",
+    template: "OpenCode Loop pause command handled locally. Reply exactly: OK."
+  }),
+  "loop-resume": Object.freeze({
+    description: "Resume OpenCode Loop jobs.",
+    template: "OpenCode Loop resume command handled locally. Reply exactly: OK."
+  }),
+  "loop-stop": Object.freeze({
+    description: "Stop OpenCode Loop jobs.",
+    template: "OpenCode Loop stop command handled locally. Reply exactly: OK."
+  }),
+  "loop-remove": Object.freeze({
+    description: "Remove OpenCode Loop jobs.",
+    template: "OpenCode Loop remove command handled locally. Reply exactly: OK."
+  }),
+  "loop-clear": Object.freeze({
+    description: "Clear all OpenCode Loop jobs.",
+    template: "OpenCode Loop clear command handled locally. Reply exactly: OK."
+  }),
+  "loop-status": Object.freeze({
+    description: "Show OpenCode Loop status for the current session.",
+    template: "OpenCode Loop status command handled locally. Reply exactly: OK."
+  }),
+  "loop-now": Object.freeze({
+    description: "Run matching OpenCode Loop jobs on the next idle boundary.",
+    template: "OpenCode Loop run-now command handled locally. Reply exactly: OK."
+  }),
+  "loop-export": Object.freeze({
+    description: "Export OpenCode Loop state for the current session.",
+    template: "OpenCode Loop export command handled locally. Reply exactly: OK."
+  }),
+  "loop-help": Object.freeze({
+    description: "Show the native OpenCode 2 Loop command help.",
+    template: "OpenCode Loop help command handled locally. Reply exactly: OK."
+  }),
+  "loop-doctor": Object.freeze({
+    description: "Show native OpenCode 2 Loop diagnostics.",
+    template: "OpenCode Loop doctor command handled locally. Reply exactly: OK."
+  }),
+  "loop-logs": Object.freeze({
+    description: "Show recent native OpenCode 2 Loop runtime events.",
+    template: "OpenCode Loop logs command handled locally. Reply exactly: OK."
+  })
+});
+function commandArguments(input) {
+  const prompt = input?.prompt;
+  if (typeof prompt?.text === "string")
+    return prompt.text.trim();
+  if (typeof input?.arguments === "string")
+    return input.arguments.trim();
+  return "";
+}
+function registerOpenCode2LoopCommands(draft, options = {}) {
+  if (!draft || typeof draft !== "object") {
+    throw new Error("OpenCode 2 command transform draft is unavailable");
+  }
+  if (typeof draft.add === "function") {
+    const execute = options.execute;
+    if (typeof execute !== "function") {
+      throw new Error("OpenCode 2 command draft.add requires a local Loop command executor");
+    }
+    for (const [name, definition] of Object.entries(OPENCODE_LOOP_V2_COMMANDS)) {
+      draft.add({
+        name,
+        description: definition.description,
+        execute: async (input) => await execute({
+          name,
+          sessionID: input?.sessionID,
+          arguments: commandArguments(input),
+          delivery: input?.delivery
+        })
+      });
+    }
+    return;
+  }
+  if (typeof draft.update === "function") {
+    for (const [name, definition] of Object.entries(OPENCODE_LOOP_V2_COMMANDS)) {
+      draft.update(name, (command) => {
+        command.template = definition.template;
+        command.description = definition.description;
+      });
+    }
+    return;
+  }
+  throw new Error("OpenCode 2 command transform exposes neither add() nor update()");
+}
+function parseOpenCode2LoopCommandText(value) {
+  if (typeof value !== "string")
+    return;
+  for (const [name, definition] of Object.entries(OPENCODE_LOOP_V2_COMMANDS)) {
+    const template = definition.template;
+    if (value === template)
+      return Object.freeze({ name, arguments: "" });
+    if (!value.startsWith(`${template}
+
+`))
+      continue;
+    return Object.freeze({
+      name,
+      arguments: value.slice(template.length + 2).trim()
+    });
+  }
+  return;
+}
+
+// src/source/opencode2/native-runtime.js
 init_state();
 init_process();
 
@@ -1499,6 +1733,8 @@ function createNativeLoopRuntime(options = {}) {
       const due = dueAt(job);
       if (due > now())
         delay = Math.min(delay, due - now());
+      else if (job.immediate === false && !(job.lastRunAt > 0))
+        delay = Math.min(delay, 1);
       if (job.maxRuntimeMs > 0)
         delay = Math.min(delay, Math.max(1, Date.parse(job.createdAt) + job.maxRuntimeMs - now()));
     }
@@ -1738,10 +1974,23 @@ ${await policy.buildPrompt(scope.directory, job)}`, delivery: "queue", metadata:
   async function command(scope, event) {
     const state = await read(scope);
     const target = String(event.arguments || "").trim() || "all";
-    if (event.name === "loop") {
-      const parsed = parseLoopArgs(event.arguments || "");
+    if (event.name === "loop" || OPENCODE_LOOP_V2_PRESET_NAMES.includes(event.name)) {
+      const defaults = event.name === "loop" ? {} : presetDefaults(event.name);
+      const normalized = normalizeLoopScheduleArgs(event.arguments || "", defaults);
+      if (!normalized.ok)
+        return result({ accepted: false, error: normalized.error });
+      if (normalized.allowGoalOverlap)
+        return result({ accepted: false, error: "Native Goal session reservation cannot be overridden; use another session." });
+      const parsed = parseLoopArgs(normalized.args, normalized.defaults);
       if (!parsed.ok)
         return result({ accepted: false, error: parsed.error });
+      parsed.job.scheduleMode = normalized.scheduleMode;
+      parsed.job.scheduleSyntax = normalized.scheduleSyntax;
+      if (normalized.scheduleSyntax === "after") {
+        parsed.job.immediate = false;
+        parsed.job.maxRuns = 1;
+      }
+      applyTestfixPreset(parsed.job, defaults);
       const blockers = blocked(parsed.job);
       if (blockers.length)
         return result({ accepted: false, reason: "unsupported", blockers, error: blockers.join(" ") });
@@ -2314,118 +2563,6 @@ function createSessionRuntimeManager({
   });
 }
 
-// src/source/opencode2/commands.js
-var OPENCODE_LOOP_V2_COMMANDS = Object.freeze({
-  loop: Object.freeze({
-    description: "Start an OpenCode auto-continue loop. Usage: /loop 5m <task>",
-    template: "OpenCode Loop local command handled. Reply exactly: OK."
-  }),
-  "loop-pause": Object.freeze({
-    description: "Pause OpenCode Loop jobs.",
-    template: "OpenCode Loop pause command handled locally. Reply exactly: OK."
-  }),
-  "loop-resume": Object.freeze({
-    description: "Resume OpenCode Loop jobs.",
-    template: "OpenCode Loop resume command handled locally. Reply exactly: OK."
-  }),
-  "loop-stop": Object.freeze({
-    description: "Stop OpenCode Loop jobs.",
-    template: "OpenCode Loop stop command handled locally. Reply exactly: OK."
-  }),
-  "loop-remove": Object.freeze({
-    description: "Remove OpenCode Loop jobs.",
-    template: "OpenCode Loop remove command handled locally. Reply exactly: OK."
-  }),
-  "loop-clear": Object.freeze({
-    description: "Clear all OpenCode Loop jobs.",
-    template: "OpenCode Loop clear command handled locally. Reply exactly: OK."
-  }),
-  "loop-status": Object.freeze({
-    description: "Show OpenCode Loop status for the current session.",
-    template: "OpenCode Loop status command handled locally. Reply exactly: OK."
-  }),
-  "loop-now": Object.freeze({
-    description: "Run matching OpenCode Loop jobs on the next idle boundary.",
-    template: "OpenCode Loop run-now command handled locally. Reply exactly: OK."
-  }),
-  "loop-export": Object.freeze({
-    description: "Export OpenCode Loop state for the current session.",
-    template: "OpenCode Loop export command handled locally. Reply exactly: OK."
-  }),
-  "loop-help": Object.freeze({
-    description: "Show the experimental OpenCode 2 Loop command help.",
-    template: "OpenCode Loop help command handled locally. Reply exactly: OK."
-  }),
-  "loop-doctor": Object.freeze({
-    description: "Show experimental OpenCode 2 Loop diagnostics.",
-    template: "OpenCode Loop doctor command handled locally. Reply exactly: OK."
-  }),
-  "loop-logs": Object.freeze({
-    description: "Show recent experimental OpenCode 2 Loop runtime events.",
-    template: "OpenCode Loop logs command handled locally. Reply exactly: OK."
-  })
-});
-function commandArguments(input) {
-  const prompt = input?.prompt;
-  if (typeof prompt?.text === "string")
-    return prompt.text.trim();
-  if (typeof input?.arguments === "string")
-    return input.arguments.trim();
-  return "";
-}
-function registerOpenCode2LoopCommands(draft, options = {}) {
-  if (!draft || typeof draft !== "object") {
-    throw new Error("OpenCode 2 command transform draft is unavailable");
-  }
-  if (typeof draft.add === "function") {
-    const execute = options.execute;
-    if (typeof execute !== "function") {
-      throw new Error("OpenCode 2 command draft.add requires a local Loop command executor");
-    }
-    for (const [name, definition] of Object.entries(OPENCODE_LOOP_V2_COMMANDS)) {
-      draft.add({
-        name,
-        description: definition.description,
-        execute: async (input) => await execute({
-          name,
-          sessionID: input?.sessionID,
-          arguments: commandArguments(input),
-          delivery: input?.delivery
-        })
-      });
-    }
-    return;
-  }
-  if (typeof draft.update === "function") {
-    for (const [name, definition] of Object.entries(OPENCODE_LOOP_V2_COMMANDS)) {
-      draft.update(name, (command) => {
-        command.template = definition.template;
-        command.description = definition.description;
-      });
-    }
-    return;
-  }
-  throw new Error("OpenCode 2 command transform exposes neither add() nor update()");
-}
-function parseOpenCode2LoopCommandText(value) {
-  if (typeof value !== "string")
-    return;
-  for (const [name, definition] of Object.entries(OPENCODE_LOOP_V2_COMMANDS)) {
-    const template = definition.template;
-    if (value === template)
-      return Object.freeze({ name, arguments: "" });
-    if (!value.startsWith(`${template}
-
-`))
-      continue;
-    return Object.freeze({
-      name,
-      arguments: value.slice(template.length + 2).trim()
-    });
-  }
-  return;
-}
-
 // src/source/opencode2/events.js
 function record2(value) {
   return value && typeof value === "object" ? value : undefined;
@@ -2721,6 +2858,64 @@ function createOpenCode2EventBridge({
 // src/source/opencode2/native-plugin.js
 init_process();
 init_state();
+
+// src/source/core/progress.js
+import { promises as fs4 } from "fs";
+import path7 from "path";
+var DEFAULT_PROGRESS_MD = `# Progress
+
+## Current Goal
+Describe the current project goal here.
+
+## Agent Rules
+- Do not ask questions unless truly blocked.
+- Make reasonable assumptions and continue.
+- Work on unfinished TODOs in order.
+- Mark completed TODOs with [x].
+- Add new bugs, ideas, and follow-up work as TODOs.
+- Run tests, lint, or build when available.
+- Do not run destructive commands, force pushes, production deploys, or database resets.
+
+## Active TODO
+- [ ] Review the project structure and pick the next safe improvement.
+
+## Completed
+- [x] Created progress.md.
+
+## Backlog Ideas
+- [ ] Add more project-specific tasks here.
+
+## Blocked
+- None.
+`;
+function inside(root, candidate) {
+  const relative = path7.relative(root, candidate);
+  return relative !== ".." && !relative.startsWith(`..${path7.sep}`) && !path7.isAbsolute(relative);
+}
+async function initializeProgressFile(directory, argumentsText = "") {
+  const root = await fs4.realpath(directory);
+  const target = String(argumentsText || "").trim() || "progress.md";
+  const file = path7.resolve(root, target);
+  const relative = path7.relative(root, file);
+  if (!relative || !inside(root, file))
+    throw new Error("Progress file must be inside the project");
+  if ([".git", ".opencode"].includes(relative.split(path7.sep)[0].toLowerCase())) {
+    throw new Error("Progress file cannot replace a control-plane path");
+  }
+  const parent = await fs4.realpath(path7.dirname(file));
+  if (!inside(root, parent))
+    throw new Error("Progress file must remain inside the project; symlink escape refused");
+  try {
+    await fs4.writeFile(file, DEFAULT_PROGRESS_MD, { encoding: "utf8", flag: "wx" });
+    return { created: true, file: relative };
+  } catch (error) {
+    if (error?.code === "EEXIST")
+      return { created: false, file: relative };
+    throw error;
+  }
+}
+
+// src/source/opencode2/native-plugin.js
 var HELP = `OpenCode Loop: native OpenCode 2 runtime
 /loop 0s <task> --max-runs 3
 /loop 5m <task> --verify "npm test" --pause-on-verify-fail
@@ -2729,6 +2924,8 @@ var HELP = `OpenCode Loop: native OpenCode 2 runtime
 /loop 0s <task> --compact-every 3
 /loop 5m --shell npm test
 /loop 15m --compact /compact
+Presets: /loop-dev, /loop-testfix, /loop-progress, /loop-safe-dev, /loop-ask, /loop-prompt, /loop-command, /loop-cmd, /loop-shell, /loop-compact.
+/loop-init [progress.md] creates a missing project-local progress file without overwriting existing data.
 Controls: /loop-now, /loop-pause, /loop-resume, /loop-stop, /loop-remove, /loop-clear, /loop-status, /loop-export.
 Preflight, postrun, notifications, stop files, completion markers, runtime/failure/run limits, branches and checkpoints are supported.
 Scheduled shell commands run as bounded local child processes when the plugin context has no session.shell.
@@ -2820,8 +3017,13 @@ var OpenCodeLoopNativePlugin = Object.freeze({
     async function execute({ name, sessionID, arguments: argumentsText }) {
       if (closed)
         throw new Error("Native Loop is disposed");
+      if (name === "loop-init") {
+        const output = await initializeProgressFile(directory, argumentsText);
+        await prompt({ sessionID, text: output.created ? `Created ${output.file}.` : `${output.file} already exists; preserved unchanged.`, resume: false });
+        return { handled: true, accepted: true, ...output };
+      }
       if (["loop-help", "loop-doctor", "loop-logs"].includes(name)) {
-        const text = name === "loop-logs" ? (await readSmallTextFile(path7.join(stateDir(directory), "loop.log"), 2000000)).split(`
+        const text = name === "loop-logs" ? (await readSmallTextFile(path8.join(stateDir(directory), "loop.log"), 2000000)).split(`
 `).slice(-60).join(`
 `) || "No Loop log entries." : name === "loop-doctor" ? `Native OpenCode Loop
 Host: ${ctx.app?.version || "unknown"}
@@ -2838,7 +3040,8 @@ Use /loop-status for paused/admitted job state.` : HELP;
       const result = await runtime.onEvent(event);
       if (result?.accepted === false)
         throw new Error(result.error || result.blockers?.join(" ") || "Loop command rejected");
-      if (result?.accepted && ["loop", "loop-now", "loop-resume"].includes(name) && !(name === "loop" && result.job?.immediate === false))
+      const shouldWake = result?.job ? result.job.immediate !== false : ["loop-now", "loop-resume"].includes(name);
+      if (result?.accepted && shouldWake)
         await runtime.wake(event);
       return result;
     }
@@ -2853,11 +3056,12 @@ Use /loop-status for paused/admitted job state.` : HELP;
         registerOpenCode2LoopCommands(draft, { execute });
         if (typeof draft.add !== "function")
           return;
-        for (const [name, flag] of [["loop-shell", "--shell"], ["loop-command", "--command"], ["loop-compact", "--compact"]]) {
-          draft.add({ name, description: `Native Loop ${flag.slice(2)} schedule`, execute: (input) => {
-            const [duration, rest] = splitFirst(input.prompt?.text || input.arguments || "");
-            return execute({ name: "loop", sessionID: input.sessionID, arguments: `${duration || "0s"} ${flag} ${rest || (flag === "--compact" ? "/compact" : "")}` });
-          } });
+        for (const name of [...OPENCODE_LOOP_V2_PRESET_NAMES, "loop-init"]) {
+          draft.add({
+            name,
+            description: name === "loop-init" ? "Create a missing project-local progress file." : `Native Loop ${name.slice(5)} preset`,
+            execute: (input) => execute({ name, sessionID: input.sessionID, arguments: commandArguments(input) })
+          });
         }
       }));
       await bridge.attach(() => ctx.event.subscribe({ signal: lifecycleAbort.signal }));
@@ -2904,8 +3108,8 @@ function inspectOpenCode2Context(ctx) {
 
 // src/source/opencode2/diagnostics.js
 init_state();
-import { promises as fs4 } from "fs";
-import path8 from "path";
+import { promises as fs5 } from "fs";
+import path9 from "path";
 var OPENCODE_LOOP_V2_HELP_TEXT = [
   "OpenCode Loop V2 experimental help:",
   "/loop 0s --max-runs 2 <prompt>                  autonomous prompt loop",
@@ -2934,7 +3138,7 @@ function createOpenCode2DiagnosticsRuntime(options = {}) {
   if (typeof options.prompt !== "function")
     throw new TypeError("V2 diagnostics runtime requires prompt()");
   const readState2 = typeof options.readState === "function" ? options.readState : readState;
-  const readFile = typeof options.readFile === "function" ? options.readFile : (...args) => fs4.readFile(...args);
+  const readFile = typeof options.readFile === "function" ? options.readFile : (...args) => fs5.readFile(...args);
   const runtimeVersion = options.runtimeVersion || process.version;
   const runtimePlatform = options.runtimePlatform || process.platform;
   async function exportState(event) {
@@ -2985,7 +3189,7 @@ ${JSON.stringify(state, null, 2)}
       return { handled: false, reason: "missing-scope" };
     let text = "No OpenCode 2 Loop log found.";
     try {
-      const raw = await readFile(path8.join(stateDir(scope.directory), "loop.log"), "utf8");
+      const raw = await readFile(path9.join(stateDir(scope.directory), "loop.log"), "utf8");
       const lines = String(raw || "").trim().split(/\r?\n/).filter((line) => line.includes('"v2":true')).slice(-80);
       if (lines.length)
         text = lines.join(`

@@ -11,7 +11,8 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const LOOP_OBJECTIVE = "real OpenCode 2 loop canary"
 const EXPECTED_TURNS = 2
-const EXPECTED_COMMANDS = ["loop", "loop-pause", "loop-resume", "loop-stop", "loop-remove", "loop-clear"]
+const NATIVE_PRESETS = ["loop-dev", "loop-testfix", "loop-compact", "loop-progress", "loop-safe-dev", "loop-command", "loop-cmd", "loop-prompt", "loop-ask", "loop-shell"]
+const EXPECTED_COMMANDS = ["loop", "loop-pause", "loop-resume", "loop-stop", "loop-remove", "loop-clear", ...(process.env.OPENCODE2_NATIVE_REQUIRED === "1" ? [...NATIVE_PRESETS, "loop-init"] : [])]
 const SERVER_USERNAME = "opencode"
 const SERVER_PASSWORD = "opencode-loop-v2-canary"
 const OPENCODE_BINARY = process.env.OPENCODE2_BINARY || "opencode2"
@@ -477,6 +478,44 @@ async function main() {
       }, "native shell terminal correlation", diagnostics, 20_000)
       assert.equal(await readFile(path.join(workspace, "native-preflight.txt"), "utf8"), "PP")
       await sendControl("loop-clear")
+      const beforePresets = provider.stats.loopRequests
+      await sendControl("loop-init")
+      assert.match(await readFile(path.join(workspace, "progress.md"), "utf8"), /^# Progress\n/)
+      await writeFile(path.join(workspace, "progress.md"), "user-owned progress\n")
+      await sendControl("loop-init")
+      assert.equal(await readFile(path.join(workspace, "progress.md"), "utf8"), "user-owned progress\n")
+      for (const name of NATIVE_PRESETS.filter(name => name !== "loop-compact")) {
+        const action = ["loop-command", "loop-cmd"].includes(name) ? "/review project"
+          : name === "loop-shell" ? "npm test"
+          : ["loop-prompt", "loop-ask"].includes(name) ? "did you run tests?" : ""
+        await sendControl(name, `every 1h --dry-run --name ${name} ${action}`.trim())
+        const saved = await jobNamed(name)
+        assert.ok(saved, `${name} must create a native job`)
+        assert.equal(saved.intervalMs, 3600000, `${name}: explicit every 1h must survive native registration` )
+        assert.equal(saved.immediate, false)
+        assert.equal(saved.runCount, 0)
+        assert.equal(saved.dryRun, true)
+      }
+
+      await sendControl("loop", "after 1h --now --max-runs 9 --dry-run --name native-once continue once")
+      const onceJob = await jobNamed("native-once")
+      assert.equal(onceJob.intervalMs, 3600000)
+      assert.equal(onceJob.maxRuns, 1, "after remains one-shot even with a conflicting max-runs flag")
+      assert.equal(onceJob.immediate, false, "after never dispatches immediately")
+      assert.equal(onceJob.action, "continue once")
+      await sendControl("loop-testfix", "every 1h --dry-run --name custom-testfix npm run check")
+      const testfix = await jobNamed("custom-testfix")
+      assert.equal(testfix.verifyCommand, "npm run check")
+      assert.match(testfix.action, /Test command hint: npm run check$/)
+      await sendControl("loop", "continue the project --dry-run --name native-shorthand")
+      const shorthand = await jobNamed("native-shorthand")
+      assert.equal(shorthand.intervalMs, 0)
+      assert.equal(shorthand.action, "continue the project")
+      assert.equal(shorthand.pauseReason, "dry-run")
+
+      assert.equal(provider.stats.loopRequests, beforePresets, "deferred presets and progress initialization cannot trigger model work")
+      await sendControl("loop-clear")
+
     }
 
     console.log(JSON.stringify({

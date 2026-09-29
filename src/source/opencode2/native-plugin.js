@@ -2,10 +2,10 @@ import path from "node:path"
 import { createNativeShellHost } from "./native-shell.js"
 import { createNativeLoopRuntime } from "./native-runtime.js"
 import { createOpenCode2EventBridge } from "./event-bridge.js"
-import { registerOpenCode2LoopCommands } from "./commands.js"
+import { registerOpenCode2LoopCommands, OPENCODE_LOOP_V2_PRESET_NAMES, commandArguments } from "./commands.js"
 import { readSmallTextFile, appendLoopLog } from "../core/process.js"
 import { stateDir } from "../core/state.js"
-import { splitFirst } from "../core/args.js"
+import { initializeProgressFile } from "../core/progress.js"
 
 const HELP = `OpenCode Loop: native OpenCode 2 runtime
 /loop 0s <task> --max-runs 3
@@ -15,6 +15,8 @@ const HELP = `OpenCode Loop: native OpenCode 2 runtime
 /loop 0s <task> --compact-every 3
 /loop 5m --shell npm test
 /loop 15m --compact /compact
+Presets: /loop-dev, /loop-testfix, /loop-progress, /loop-safe-dev, /loop-ask, /loop-prompt, /loop-command, /loop-cmd, /loop-shell, /loop-compact.
+/loop-init [progress.md] creates a missing project-local progress file without overwriting existing data.
 Controls: /loop-now, /loop-pause, /loop-resume, /loop-stop, /loop-remove, /loop-clear, /loop-status, /loop-export.
 Preflight, postrun, notifications, stop files, completion markers, runtime/failure/run limits, branches and checkpoints are supported.
 Scheduled shell commands run as bounded local child processes when the plugin context has no session.shell.
@@ -85,6 +87,11 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
     }
     async function execute({ name, sessionID, arguments: argumentsText }) {
       if (closed) throw new Error("Native Loop is disposed")
+      if (name === "loop-init") {
+        const output = await initializeProgressFile(directory, argumentsText)
+        await prompt({ sessionID, text: output.created ? `Created ${output.file}.` : `${output.file} already exists; preserved unchanged.`, resume: false })
+        return { handled: true, accepted: true, ...output }
+      }
       if (["loop-help", "loop-doctor", "loop-logs"].includes(name)) {
         const text = name === "loop-logs"
           ? (await readSmallTextFile(path.join(stateDir(directory), "loop.log"), 2_000_000)).split("\n").slice(-60).join("\n") || "No Loop log entries."
@@ -97,7 +104,8 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
       const event = { kind: "command", action: "executed", directory, sessionID, name, arguments: argumentsText }
       const result = await runtime.onEvent(event)
       if (result?.accepted === false) throw new Error(result.error || result.blockers?.join(" ") || "Loop command rejected")
-      if (result?.accepted && ["loop", "loop-now", "loop-resume"].includes(name) && !(name === "loop" && result.job?.immediate === false)) await runtime.wake(event)
+      const shouldWake = result?.job ? result.job.immediate !== false : ["loop-now", "loop-resume"].includes(name)
+      if (result?.accepted && shouldWake) await runtime.wake(event)
       return result
     }
     try {
@@ -109,11 +117,12 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
       registrations.push(await ctx.command.transform((draft) => {
         registerOpenCode2LoopCommands(draft, { execute })
         if (typeof draft.add !== "function") return
-        for (const [name, flag] of [["loop-shell", "--shell"], ["loop-command", "--command"], ["loop-compact", "--compact"]]) {
-          draft.add({ name, description: `Native Loop ${flag.slice(2)} schedule`, execute: (input) => {
-            const [duration, rest] = splitFirst(input.prompt?.text || input.arguments || "")
-            return execute({ name: "loop", sessionID: input.sessionID, arguments: `${duration || "0s"} ${flag} ${rest || (flag === "--compact" ? "/compact" : "")}` })
-          } })
+        for (const name of [...OPENCODE_LOOP_V2_PRESET_NAMES, "loop-init"]) {
+          draft.add({
+            name,
+            description: name === "loop-init" ? "Create a missing project-local progress file." : `Native Loop ${name.slice(5)} preset`,
+            execute: (input) => execute({ name, sessionID: input.sessionID, arguments: commandArguments(input) }),
+          })
         }
       }))
       await bridge.attach(() => ctx.event.subscribe({ signal: lifecycleAbort.signal }))

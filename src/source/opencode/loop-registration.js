@@ -1,5 +1,5 @@
 import { parseLoopArgs as defaultParseLoopArgs } from "../core/args.js"
-import { actionKind, jobLabel, isGoalJob } from "../core/jobs.js"
+import { actionKind, jobLabel, isGoalJob, applyTestfixPreset } from "../core/jobs.js"
 import { normalizeLoopScheduleArgs as defaultNormalizeLoopScheduleArgs } from "../core/schedule-syntax.js"
 import { readState as defaultReadState, writeState as defaultWriteState } from "../core/state.js"
 import { appendLoopLog as defaultAppendLoopLog } from "../core/process.js"
@@ -62,17 +62,7 @@ export function createLoopRegistration(options = {}) {
     const executionContext = getSessionExecutionContext(sessionID) || { agent: "build" }
     parsed.job.agent = defaults.agent || executionContext.agent || "build"
     parsed.job.model = normalizedModelRef(defaults.model) || executionContext.model
-    if (defaults.testfixPreset) {
-      const defaultCommand = String(defaults.verifyCommand || "npm test")
-      const parsedAction = String(parsed.job.action || "").trim()
-      const usedDefaultAction = parsedAction === String(defaults.action || "").trim()
-      if (!usedDefaultAction && parsed.job.verifyCommand === defaults.verifyCommand) {
-        parsed.job.verifyCommand = parsedAction
-        parsed.job.action = `Run the project tests. Fix failures. Re-run the tests. Test command hint: ${parsedAction}`
-      } else if (usedDefaultAction && parsed.job.verifyCommand !== defaults.verifyCommand) {
-        parsed.job.action = `Run the project tests. Fix failures. Re-run the tests. Test command hint: ${parsed.job.verifyCommand || defaultCommand}`
-      }
-    }
+    applyTestfixPreset(parsed.job, defaults)
     if (parsed.job.watchPaths.length) parsed.job.watchSnapshot = await snapshotPaths(directory, parsed.job.watchPaths)
     if (!parsed.job.activeRecoveryMs) {
       parsed.job.activeRecoveryMs = isGoalJob(parsed.job)

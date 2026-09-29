@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs"
 import path from "node:path"
+import { DEFAULT_PROGRESS_MD } from "../core/progress.js"
 import { now as defaultNow } from "../core/args.js"
 import { jobLabel, matchJob, isGoalJob, goalStatusText } from "../core/jobs.js"
 import { stateDir, pathExists as defaultPathExists, readState as defaultReadState, writeState as defaultWriteState, removeState as defaultRemoveState } from "../core/state.js"
@@ -8,33 +9,6 @@ import { dedicatedGoalSummary, findDedicatedGoalForSession as defaultFindDedicat
 import { describeJobScheduling, listPersistedLoopSessions as defaultListPersistedLoopSessions } from "../runtime/loop-diagnostics.js"
 
 const SERVICE = "opencode-loop"
-const DEFAULT_PROGRESS_MD = `# Progress
-
-## Current Goal
-Describe the current project goal here.
-
-## Agent Rules
-- Do not ask questions unless truly blocked.
-- Make reasonable assumptions and continue.
-- Work on unfinished TODOs in order.
-- Mark completed TODOs with [x].
-- Add new bugs, ideas, and follow-up work as TODOs.
-- Run tests, lint, or build when available.
-- Do not run destructive commands, force pushes, production deploys, or database resets.
-
-## Active TODO
-- [ ] Review the project structure and pick the next safe improvement.
-
-## Completed
-- [x] Created progress.md.
-
-## Backlog Ideas
-- [ ] Add more project-specific tasks here.
-
-## Blocked
-- None.
-`
-
 function requireFunction(value, name) {
   if (typeof value !== "function") throw new TypeError(`createLoopCommandHandlers requires ${name}`)
   return value

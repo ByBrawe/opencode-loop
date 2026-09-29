@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto"
 import { nativeGoalReservesSession } from "./native-companion.js"
 import { parseLoopArgs, splitFirst } from "../core/args.js"
-import { actionKind, matchJob } from "../core/jobs.js"
+import { actionKind, matchJob, presetDefaults, applyTestfixPreset } from "../core/jobs.js"
+import { normalizeLoopScheduleArgs } from "../core/schedule-syntax.js"
+import { OPENCODE_LOOP_V2_PRESET_NAMES } from "./commands.js"
 import { readState, writeState, removeState } from "../core/state.js"
 import { appendLoopLog } from "../core/process.js"
 import { formatOpenCode2LoopStatus } from "./status.js"
@@ -73,6 +75,9 @@ export function createNativeLoopRuntime(options = {}) {
       if (job.watchPaths?.length || job.stopFile || job.until) delay = Math.min(delay, 1000)
       const due = dueAt(job)
       if (due > now()) delay = Math.min(delay, due - now())
+      // A zero-delay deferred preset still needs a first idle-safe wake after
+      // its local command returns; it must not wait for an unrelated model turn.
+      else if (job.immediate === false && !(job.lastRunAt > 0)) delay = Math.min(delay, 1)
       if (job.maxRuntimeMs > 0) delay = Math.min(delay, Math.max(1, Date.parse(job.createdAt) + job.maxRuntimeMs - now()))
     }
     if (!Number.isFinite(delay)) return
@@ -280,9 +285,20 @@ export function createNativeLoopRuntime(options = {}) {
   async function command(scope, event) {
     const state = await read(scope)
     const target = String(event.arguments || "").trim() || "all"
-    if (event.name === "loop") {
-      const parsed = parseLoopArgs(event.arguments || "")
+    if (event.name === "loop" || OPENCODE_LOOP_V2_PRESET_NAMES.includes(event.name)) {
+      const defaults = event.name === "loop" ? {} : presetDefaults(event.name)
+      const normalized = normalizeLoopScheduleArgs(event.arguments || "", defaults)
+      if (!normalized.ok) return result({ accepted: false, error: normalized.error })
+      if (normalized.allowGoalOverlap) return result({ accepted: false, error: "Native Goal session reservation cannot be overridden; use another session." })
+      const parsed = parseLoopArgs(normalized.args, normalized.defaults)
       if (!parsed.ok) return result({ accepted: false, error: parsed.error })
+      parsed.job.scheduleMode = normalized.scheduleMode
+      parsed.job.scheduleSyntax = normalized.scheduleSyntax
+      if (normalized.scheduleSyntax === "after") {
+        parsed.job.immediate = false
+        parsed.job.maxRuns = 1
+      }
+      applyTestfixPreset(parsed.job, defaults)
       const blockers = blocked(parsed.job)
       if (blockers.length) return result({ accepted: false, reason: "unsupported", blockers, error: blockers.join(" ") })
       const job = parsed.job
