@@ -1,6 +1,6 @@
 # OpenCode Loop
 
-## Native OpenCode 2 (0.6.1)
+## Native OpenCode 2 (0.6.2)
 
 The npm and local-file V2 entrypoints now use the official `@opencode/plugin` `Plugin.define()` contract. The local installer writes a discovered plugin package directory with the generated runtime as a supporting module, while explicit `--legacy-v1` remains a separate compatibility path.
 
@@ -17,7 +17,7 @@ Prompt/command timers, watch and stop conditions, verification, preflight/postru
 
 OpenCode Loop adds `/loop`, scheduled prompt/command/shell jobs, compact scheduling, verification/checkpoints, and the `opencode-loopd` background daemon.
 
-> **Current stable release: `0.6.1`.**
+> **Current stable release: `0.6.2`.**
 
 ## Install or update
 
