@@ -38,9 +38,9 @@ edit(native, '          if (event.action === "cancelled") return pauseActive(sco
 // Only a terminal for delivered work can retire its durable ownership marker.
 edit(native, '        return pauseActive(scope, event.reason || `${event.kind}-${event.action}`)', `        const run = scope.active\n        const paused = await pauseActive(scope, event.reason || \`\${event.kind}-\${event.action}\`)\n        if (run && (run.delivered || ["compact", "cadence", "shell"].includes(run.kind))) {\n          const state = await read(scope)\n          const job = (state.jobs || []).find((entry) => entry.id === run.jobID)\n          if (job?.v2Run?.id === run.id) { delete job.v2Run; await save(scope, state) }\n          if (scope.active === run) delete scope.active\n        }\n        return paused`)
 const pkg = JSON.parse(readFileSync("package.json", "utf8"))
-pkg.version = "0.6.0"
-pkg.main = "src/server.js"
-pkg.exports = { ".": "./src/server.js", "./server": "./src/server.js", "./v2": "./src/native.js", "./v1": "./src/index.js" }
+pkg.version = "0.6.1"
+pkg.main = "src/plugin.js"
+pkg.exports = { ".": "./src/plugin.js", "./server": "./src/plugin.js", "./v2": "./src/v2.js", "./v1": "./src/index.js" }
 if (!pkg.scripts["build:plugin"].includes("src/source/native.js")) pkg.scripts["build:plugin"] += " && bun build src/source/native.js --outfile=src/native.js --target=bun --format=esm"
 for (const file of ["src/source/native.js", "src/source/opencode2/native-plugin.js", "src/source/opencode2/native-runtime.js", "src/source/opencode2/native-policy.js", "src/native.js"]) {
   if (!pkg.scripts.check.includes(`node --check ${file}`)) pkg.scripts.check += ` && node --check ${file}`

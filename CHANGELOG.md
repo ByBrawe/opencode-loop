@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.1 - 2026-09-29
+
+- Expose the root/server and `./v2` npm entrypoints through the official `@opencode/plugin` `Plugin.define({ id, setup })` contract while keeping V1 `server()` as a separate compatibility implementation.
+- Ship `@opencode/plugin@^2.0.18` as a production dependency and lock its non-optional runtime peer closure for reproducible clean installs.
+- Make native local-file installs use the same real V2 entrypoint: `plugins/opencode-loop/index.js` is the `Plugin.define()` wrapper and `native.js` is only its supporting generated runtime.
+- Preserve configured package options while migrating `plugin` to `plugins`; remove old single-file local copies during native upgrades and uninstall.
+- Extend Windows production-tarball smoke time only at the harness boundary so the larger V2 dependency graph can install without weakening runtime assertions.
+- Pair trusted publication with OpenCode Goal 1.3.40 from its exact immutable source and re-run the installed npm pair on OpenCode 2.0.18.
+
 ## 0.6.0 - 2026-09-29
 
 - Fix #164: persisted core user-message events cannot abort compaction; trusted admission hooks alone may steer legacy turns.

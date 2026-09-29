@@ -82,7 +82,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/packed" "$RUNNER_TEMP/consumer"
           npm pack --pack-destination "$RUNNER_TEMP/packed"
           (cd companion-goal && npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/packed")
-          (cd "$RUNNER_TEMP/consumer" && npm init -y >/dev/null && npm install --omit=dev --omit=peer --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP/packed/bybrawe-opencode-loop-0.6.0.tgz" "$RUNNER_TEMP/packed/bybrawe-opencode-goal-1.3.39.tgz")
+          (cd "$RUNNER_TEMP/consumer" && npm init -y >/dev/null && npm install --omit=dev --omit=peer --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP/packed/bybrawe-opencode-loop-0.6.1.tgz" "$RUNNER_TEMP/packed/bybrawe-opencode-goal-1.3.40.tgz")
           npm install --prefix "$RUNNER_TEMP/native-host" --package-lock=false @opencode/cli@2.0.18
       - name: Real OpenCode with both installed packages, command presets and daemon
         shell: bash
@@ -149,13 +149,13 @@ jobs:
             test "$attempt" != 60
             sleep 10
           done
-          test "$(npm view @bybrawe/opencode-loop@latest version --registry=https://registry.npmjs.org)" = '0.6.0'
+          test "$(npm view @bybrawe/opencode-loop@latest version --registry=https://registry.npmjs.org)" = '0.6.1'
       - name: Clean published consumer and actual host
         shell: bash
         run: |
           VERIFY_DIR="$(mktemp -d)"
           trap 'rm -rf "$VERIFY_DIR"' EXIT
-          (cd "$VERIFY_DIR" && npm init -y >/dev/null && npm install --omit=dev --omit=peer --ignore-scripts --no-audit --no-fund @bybrawe/opencode-loop@0.6.0 @bybrawe/opencode-goal@1.3.39)
+          (cd "$VERIFY_DIR" && npm init -y >/dev/null && npm install --omit=dev --omit=peer --ignore-scripts --no-audit --no-fund @bybrawe/opencode-loop@0.6.1 @bybrawe/opencode-goal@1.3.40)
           npm install --prefix "$VERIFY_DIR/host" --package-lock=false @opencode/cli@2.0.18
           export OPENCODE2_BINARY="$VERIFY_DIR/host/node_modules/.bin/opencode2"
           export OPENCODE_GOAL_INSTALLER="$VERIFY_DIR/node_modules/@bybrawe/opencode-goal/dist/install.js"
@@ -164,7 +164,7 @@ jobs:
           node "$VERIFY_DIR/node_modules/@bybrawe/opencode-loop/scripts/native-install-pair-test.mjs"
           node "$VERIFY_DIR/node_modules/@bybrawe/opencode-loop/scripts/opencode2-loop-canary.mjs"
           node "$VERIFY_DIR/node_modules/@bybrawe/opencode-loop/scripts/native-cli-host-canary.mjs"
-          echo 'PUBLISHED_NATIVE_PAIR_PASS Loop 0.6.0 + Goal 1.3.39 on OpenCode 2.0.18'
+          echo 'PUBLISHED_NATIVE_PAIR_PASS Loop 0.6.1 + Goal 1.3.40 on OpenCode 2.0.18'
 
   github-release:
     name: Create tag and GitHub release
@@ -189,7 +189,7 @@ jobs:
           import assert from 'node:assert/strict'
           const base = 'https://api.github.com/repos/' + process.env.GITHUB_REPOSITORY
           const headers = { Authorization: `Bearer ${process.env.GH_TOKEN}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' }
-          const response = await fetch(base + '/git/ref/tags/v0.6.0', { headers })
+          const response = await fetch(base + '/git/ref/tags/v0.6.1', { headers })
           if (response.ok) {
             let object = (await response.json()).object
             if (object.type === 'tag') {
@@ -200,11 +200,11 @@ jobs:
             assert.equal(object.sha, process.env.GITHUB_SHA, 'Existing release tag belongs to another source')
           } else {
             assert.equal(response.status, 404)
-            const created = await fetch(base + '/git/refs', { method: 'POST', headers, body: JSON.stringify({ ref: 'refs/tags/v0.6.0', sha: process.env.GITHUB_SHA }) })
+            const created = await fetch(base + '/git/refs', { method: 'POST', headers, body: JSON.stringify({ ref: 'refs/tags/v0.6.1', sha: process.env.GITHUB_SHA }) })
             assert.equal(created.status, 201)
           }
           JS
-          if ! gh release view v0.6.0 >/dev/null 2>&1; then
+          if ! gh release view v0.6.1 >/dev/null 2>&1; then
             git archive --format=zip --output=opencode-loop.zip "$COMMIT_SHA"
-            gh release create v0.6.0 opencode-loop.zip --title v0.6.0 --notes-file examples/OPENCODE2-0.6.0.md --verify-tag
+            gh release create v0.6.1 opencode-loop.zip --title v0.6.1 --notes-file examples/OPENCODE2-0.6.1.md --verify-tag
           fi

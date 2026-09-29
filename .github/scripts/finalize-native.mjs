@@ -68,7 +68,7 @@ const pkg = JSON.parse(readFileSync("package.json", "utf8"))
 for (const test of ["native-shell-test", "native-coexistence-test"]) {
   if (!pkg.scripts.test.includes(`scripts/${test}.mjs`)) pkg.scripts.test = `node scripts/${test}.mjs && ` + pkg.scripts.test
 }
-pkg.scripts.prepack = 'node --check src/index.js && node --check src/server.js && node --check src/native.js'
+pkg.scripts.prepack = 'node --check src/plugin.js && node --check src/v2.js && node --check src/index.js && node --check src/server.js && node --check src/native.js'
 writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n")
 const notice = `## Native OpenCode 2 (0.6.0)
 

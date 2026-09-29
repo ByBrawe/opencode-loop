@@ -41,15 +41,15 @@ const publisher = workflow.slice(workflow.indexOf("  publish:\n"), workflow.inde
 assert.doesNotMatch(publisher, /contents:\s*write/, "OIDC publisher must not gain repository mutation privileges")
 
 const sha = "a".repeat(40)
-const request = { name: "@bybrawe/opencode-loop", version: "0.6.0", predecessor: "0.5.38", goal: { version: "1.3.39", sha: "b".repeat(40) } }
+const request = { name: "@bybrawe/opencode-loop", version: "0.6.1", predecessor: "0.6.0", goal: { version: "1.3.40", sha: "b".repeat(40) } }
 const pkg = { name: request.name, version: request.version }
 const env = { GITHUB_REPOSITORY: "ByBrawe/opencode-loop", GITHUB_REF: "refs/heads/main", GITHUB_SHA: sha }
 assert.strictEqual(validateRelease(request, pkg, env), request)
 for (const change of [{ GITHUB_REPOSITORY: "someone/fork" }, { GITHUB_REF: "refs/heads/release" }, { GITHUB_SHA: "main" }]) assert.throws(() => validateRelease(request, pkg, { ...env, ...change }))
 assert.throws(() => validateRelease({ ...request, version: "9.0.0" }, pkg, env))
-assert.throws(() => validateRelease(request, { ...pkg, version: "0.5.38" }, env))
-assert.equal(releaseDecision(404, null, request, sha, "0.5.38"), true)
-for (const status of [401, 403, 429, 500, 503]) assert.throws(() => releaseDecision(status, null, request, sha, "0.5.38"))
+assert.throws(() => validateRelease(request, { ...pkg, version: "0.6.0" }, env))
+assert.equal(releaseDecision(404, null, request, sha, "0.6.0"), true)
+for (const status of [401, 403, 429, 500, 503]) assert.throws(() => releaseDecision(status, null, request, sha, "0.6.0"))
 assert.throws(() => releaseDecision(404, null, request, sha, "0.7.0"))
 const manifest = { ...pkg, gitHead: sha }
 assert.equal(releaseDecision(200, manifest, request, sha), false)
