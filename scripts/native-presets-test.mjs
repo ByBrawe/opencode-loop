@@ -9,9 +9,9 @@ import { presetDefaults } from "../src/source/core/jobs.js"
 import { normalizeLoopScheduleArgs } from "../src/source/core/schedule-syntax.js"
 import { readState } from "../src/source/core/state.js"
 
-const PRESETS = ["loop-dev", "loop-testfix", "loop-compact", "loop-progress", "loop-safe-dev", "loop-command", "loop-cmd", "loop-prompt", "loop-ask", "loop-shell"]
+const PRESETS = ["loop-dev", "loop-testfix", "loop-progress", "loop-safe-dev", "loop-command", "loop-cmd", "loop-prompt", "loop-ask", "loop-shell"]
 const SESSION = "ses_native_presets"
-async function fixture({ compact = true } = {}) {
+async function fixture() {
   const temp = await mkdtemp(path.join(os.tmpdir(), "loop-native-presets-"))
   const directory = path.join(temp, "project with spaces")
   await mkdir(directory)
@@ -27,7 +27,6 @@ async function fixture({ compact = true } = {}) {
         command: async () => { throw new Error("a deferred/dry-run preset must not execute a slash command") },
         wait: async () => {},
         shell: async request => { shellCalls.push(request); return { id: request.id, status: "exited", exit: 0 } },
-        ...(compact ? { compact: async () => { throw new Error("a deferred/dry-run preset must not compact") } } : {}),
       },
       command: { transform: async edit => edit({ add(definition) {
         assert.equal(commands.has(definition.name), false, `duplicate command ${definition.name}`)
@@ -54,7 +53,7 @@ for (const name of PRESETS) {
       const action = ["loop-command", "loop-cmd"].includes(name) ? "/review project"
         : name === "loop-shell" ? "npm test"
         : ["loop-prompt", "loop-ask"].includes(name) ? "did you run tests and tsc --noEmit?" : ""
-      const text = name === "loop-compact" ? "--dry-run" : `every 1h --dry-run --max-runs 2 ${action}`.trim()
+      const text = `every 1h --dry-run --max-runs 2 ${action}`.trim()
       const normalized = normalizeLoopScheduleArgs(text, presetDefaults(name))
       assert.equal(normalized.ok, true, normalized.error)
       const expected = parseLoopArgs(normalized.args, normalized.defaults)
@@ -64,7 +63,7 @@ for (const name of PRESETS) {
       const state = await host.state()
       assert.equal(state.jobs.length, 1)
       for (const field of fields) assert.deepEqual(state.jobs[0][field], expected.job[field], `${name}: ${field}`)
-      assert.equal(state.jobs[0].intervalMs, name === "loop-compact" ? 12000000 : 3600000, "explicit duration cannot remain part of the task text")
+      assert.equal(state.jobs[0].intervalMs, 3600000, "explicit duration cannot remain part of the task text")
       assert.equal(state.jobs[0].immediate, false)
       assert.equal(state.jobs[0].scheduleMode, normalized.scheduleMode)
       assert.equal(state.jobs[0].scheduleSyntax, normalized.scheduleSyntax)
@@ -98,21 +97,27 @@ test("an immediate native development preset enters the existing dry-run safety 
   } finally { await host.dispose() }
 })
 
-test("zero-delay deferred shell preset is scheduled without an unrelated model turn", async () => {
+test("zero-delay deferred shell preset uses Loop-managed local execution without an unrelated model turn", async () => {
   const host = await fixture()
   try {
-    await host.execute("loop-shell", "0s echo safe --max-runs 1")
-    const deadline = Date.now() + 3000
-    while (Date.now() < deadline && (await host.state()).jobs[0]?.v2Run) await new Promise(resolve => setTimeout(resolve, 10))
+    const marker = path.join(host.directory, "shell-ran.txt")
+    const script = `${JSON.stringify(process.execPath)} -e "require('fs').writeFileSync('shell-ran.txt','ok')"`
+    await host.execute("loop-shell", `0s ${script} --max-runs 1`)
+    const deadline = Date.now() + 5000
     while (Date.now() < deadline && (await host.state()).jobs[0]?.runCount !== 1) await new Promise(resolve => setTimeout(resolve, 10))
+    while (Date.now() < deadline) {
+      try { if ((await readFile(marker, "utf8")) === "ok") break } catch {}
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
     assert.equal((await host.state()).jobs[0].runCount, 1)
-    assert.equal(host.shellCalls.length, 1)
+    assert.equal(await readFile(marker, "utf8"), "ok")
+    assert.equal(host.shellCalls.length, 0, "V2 must not call undocumented session.shell")
     assert.deepEqual(host.prompts, [])
   } finally { await host.dispose() }
 })
 
-test("unavailable native compaction rejects its preset before job persistence", async () => {
-  const host = await fixture({ compact: false })
+test("native compaction rejects its preset before job persistence because V2 exposes no manual compaction action", async () => {
+  const host = await fixture()
   try {
     await assert.rejects(host.execute("loop-compact", "--dry-run"), /native compaction capability/)
     assert.deepEqual((await host.state()).jobs, [])
