@@ -101,8 +101,9 @@ test("zero-delay deferred shell preset uses Loop-managed local execution without
   const host = await fixture()
   try {
     const marker = path.join(host.directory, "shell-ran.txt")
-    const script = `${JSON.stringify(process.execPath)} -e "require('fs').writeFileSync('shell-ran.txt','ok')"`
-    await host.execute("loop-shell", `0s ${script} --max-runs 1`)
+    await writeFile(path.join(host.directory, "shell-test.cjs"), 'require("fs").writeFileSync("shell-ran.txt", "ok")')
+    const command = `"${process.execPath}" shell-test.cjs`
+    await host.execute("loop-shell", `0s ${command} --max-runs 1`)
     const deadline = Date.now() + 5000
     while (Date.now() < deadline && (await host.state()).jobs[0]?.runCount !== 1) await new Promise(resolve => setTimeout(resolve, 10))
     while (Date.now() < deadline) {
