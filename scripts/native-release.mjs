@@ -12,7 +12,7 @@ export function validateRelease(request, pkg, env) {
   assert.equal(pkg.name, request.name)
   assert.equal(pkg.version, request.version)
   assert.equal(request.predecessor, "0.6.0")
-  assert.equal(request.goal?.version, "1.3.40")
+  assert.equal(request.goal?.version, "1.3.41")
   assert.match(request.goal?.sha ?? "", /^[a-f0-9]{40}$/)
   return request
 }
