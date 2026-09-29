@@ -19,7 +19,7 @@ try {
   const packed = JSON.parse(run(process.execPath, [npmCLI, "pack", root, "--json", "--ignore-scripts"], temp))
   assert.equal(packed.length, 1)
   const files = new Set(packed[0].files.map((entry) => entry.path))
-  for (const entry of ["src/server.js", "src/native.js", "src/v1.js", "src/index.js"]) assert.ok(files.has(entry), `missing ${entry}`)
+  for (const entry of ["src/plugin.js", "src/v2.js", "src/server.js", "src/native.js", "src/v1.js", "src/index.js"]) assert.ok(files.has(entry), `missing ${entry}`)
   const consumer = path.join(temp, "consumer with spaces")
   await mkdir(consumer)
   await writeFile(path.join(consumer, "package.json"), JSON.stringify({ private: true, type: "module" }))
