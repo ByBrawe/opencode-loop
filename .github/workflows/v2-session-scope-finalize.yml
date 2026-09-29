@@ -1,0 +1,73 @@
+name: Verify native session scoping
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/v2-session-scope-finalize.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: v2-session-scope-pass
+  cancel-in-progress: false
+jobs:
+  verify:
+    if: github.repository == 'ByBrawe/opencode-loop' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: '1.4.2'
+      - name: Verify isolated candidate and commit only after real native host success
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          ruby <<'RUBY'
+          require 'yaml'
+          token = ENV.delete('GH_TOKEN')
+          original = '.github/workflows/v2-session-scope-pass.yml'
+          current = '.github/workflows/v2-session-scope-finalize.yml'
+          workspace = '.github/workflows/v2-implementation-workspace.yml'
+          steps = YAML.safe_load(File.read(original), aliases: true).fetch('jobs').fetch('verify').fetch('steps')
+          steps.each do |step|
+            next unless step['run']
+            name = step['name'] || step['run'].lines.first.strip
+            script = step['run']
+            if name.start_with?('Bind commands, hooks')
+              raise 'reviewed syntax boundary missing' unless script.include?('}))`)')
+              script = script.sub('}))`)', '})`)')
+            end
+            commit = name.start_with?('Commit only verified')
+            if commit
+              script = script.sub("git rm #{original}", "git rm #{original} #{current} #{workspace}")
+              script = script.sub('git add src scripts/native-session-location-test.mjs', 'git add src scripts/native-presets-test.mjs scripts/native-session-location-test.mjs')
+            end
+            puts "::group::#{name}"
+            raise "Failed: #{name}" unless system(commit ? { 'GH_TOKEN'=>token } : { 'GH_TOKEN'=>nil, 'GITHUB_TOKEN'=>nil }, 'bash', '-e', '-o', 'pipefail', '-c', script)
+            puts '::endgroup::'
+            if name.start_with?('Bind commands, hooks')
+              file = 'scripts/native-presets-test.mjs'
+              source = File.read(file)
+              old = "      session: {\n        hook: async () => {},"
+              replacement = "      session: {\n        get: async ({ sessionID }) => sessionID === SESSION ? { id: SESSION, location: { directory } } : null,\n        hook: async () => {},"
+              raise 'native preset fixture boundary changed' unless source.include?(old)
+              File.write(file, source.sub(old, replacement))
+            end
+            if name.start_with?('Build and verify')
+              puts '::group::Actual native OpenCode 2.0.18 lifecycle'
+              host = File.join(ENV.fetch('RUNNER_TEMP'), 'loop-scoped-native-host')
+              raise 'host install failed' unless system('npm', 'install', '--prefix', host, '--package-lock=false', '--no-audit', '--no-fund', '@opencode/cli@2.0.18')
+              raise 'real native lifecycle failed' unless system({ 'OPENCODE2_BINARY'=>File.join(host, 'node_modules/.bin/opencode2'), 'OPENCODE2_CURRENT_COMMAND_FIELDS'=>'1', 'OPENCODE2_NATIVE_REQUIRED'=>'1' }, 'node', 'scripts/opencode2-loop-canary.mjs')
+              puts '::endgroup::'
+            end
+          end
+          RUBY
