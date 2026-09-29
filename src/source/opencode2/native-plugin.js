@@ -1,4 +1,5 @@
 import path from "node:path"
+import { createNativeSessionLocationGuard } from "./session-location.js"
 import { createNativeShellHost } from "./native-shell.js"
 import { createNativeLoopRuntime } from "./native-runtime.js"
 import { createOpenCode2EventBridge } from "./event-bridge.js"
@@ -42,6 +43,10 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
     }
     const directory = String(ctx.location?.directory || ctx.options?.directory || "").trim()
     if (!directory) throw new Error("Native OpenCode Loop requires a project directory")
+    const ownsSession = createNativeSessionLocationGuard({
+      directory, workspaceID: ctx.location?.workspaceID,
+      getSession: (input) => ctx.session.get(input),
+    })
     const registrations = []
     const lifecycleAbort = new AbortController()
     const prompt = (request) => ctx.session.prompt({ ...request, delivery: request.delivery || "queue", metadata: { ...request.metadata, opencode_loop_v2: true } })
@@ -52,6 +57,7 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
     })
     const runtime = createNativeLoopRuntime({
       directory,
+      scopeAllowed: (scope) => ownsSession(scope.sessionID),
       prompt,
       command: typeof ctx.session.command === "function" ? (request) => ctx.session.command(request) : undefined,
       wait: typeof ctx.session.wait === "function" ? (request) => ctx.session.wait(request) : undefined,
@@ -62,7 +68,10 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
       cancel: typeof ctx.session.inbox?.cancel === "function" ? async (request) => { await ctx.session.inbox.cancel(request); return false } : undefined,
       onError: (error) => { void appendLoopLog(directory, "v2-native-error", { message: String(error?.message || error) }).catch(() => {}) },
     })
-    const bridge = createOpenCode2EventBridge({ directory, allowInboxCommands: false, onEvent: (event) => runtime.onEvent(event), onError: (error) => { void appendLoopLog(directory, "v2-native-event-error", { message: String(error?.message || error) }).catch(() => {}) } })
+    const bridge = createOpenCode2EventBridge({ directory, allowInboxCommands: false, onEvent: async (event) => {
+      if (event.sessionID && !(event.kind === "session" && event.action === "deleted") && !await ownsSession(event.sessionID)) return
+      return runtime.onEvent(event)
+    }, onError: (error) => { void appendLoopLog(directory, "v2-native-event-error", { message: String(error?.message || error) }).catch(() => {}) } })
     let closed = false
     let disposeTask
     function dispose() {
@@ -87,6 +96,8 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
     }
     async function execute({ name, sessionID, arguments: argumentsText }) {
       if (closed) throw new Error("Native Loop is disposed")
+      if (!await ownsSession(sessionID)) throw new Error("Native Loop cannot resolve this session in the plugin location; use its own project/worktree.")
+      if (closed) throw new Error("Native Loop is disposed")
       if (name === "loop-init") {
         const output = await initializeProgressFile(directory, argumentsText)
         await prompt({ sessionID, text: output.created ? `Created ${output.file}.` : `${output.file} already exists; preserved unchanged.`, resume: false })
@@ -109,11 +120,15 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
       return result
     }
     try {
-      registrations.push(await ctx.session.hook("prompt", (event) => {
-        if (event.metadata?.opencode_loop_v2 === true) return
+      registrations.push(await ctx.session.hook("prompt", async (event) => {
+        if (closed || event.metadata?.opencode_loop_v2 === true || !await ownsSession(event.sessionID)) return
+        if (closed) return
         return runtime.onEvent({ kind: "foreground", directory, sessionID: event.sessionID })
       }))
-      registrations.push(await ctx.session.hook("compaction", (event) => runtime.onEvent({ kind: "compaction", action: "started", directory, sessionID: event.sessionID })))
+      registrations.push(await ctx.session.hook("compaction", async (event) => {
+      if (closed || !await ownsSession(event.sessionID)) return
+      if (!closed) return runtime.onEvent({ kind: "compaction", action: "started", directory, sessionID: event.sessionID })
+    }))
       registrations.push(await ctx.command.transform((draft) => {
         registerOpenCode2LoopCommands(draft, { execute })
         if (typeof draft.add !== "function") return

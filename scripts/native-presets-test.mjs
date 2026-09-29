@@ -21,6 +21,7 @@ async function fixture({ compact = true } = {}) {
     dispose = await plugin.setup({
       location: { directory }, options: {}, app: { version: "2.0.18" },
       session: {
+        get: async ({ sessionID }) => sessionID === SESSION ? { id: SESSION, location: { directory } } : null,
         hook: async () => {},
         prompt: async request => { prompts.push(request); return { id: request.id || "msg_ack" } },
         command: async () => { throw new Error("a deferred/dry-run preset must not execute a slash command") },

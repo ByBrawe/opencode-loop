@@ -36,7 +36,15 @@ export function createNativeLoopRuntime(options = {}) {
   const save = (scope, state) => writeState(scope.directory, scope.sessionID, state)
   const report = (error) => { try { options.onError?.(error) } catch {} }
   function enqueue(scope, task) {
-    const pending = scope.queue.catch(() => {}).then(() => current(scope) ? task() : result({ reason: "disposed" }))
+    const pending = scope.queue.catch(() => {}).then(async () => {
+      if (!current(scope)) return result({ reason: "disposed" })
+      if (typeof options.scopeAllowed === "function" && !await options.scopeAllowed(scope)) {
+        scope.epoch++
+        clear(scope, "timer"); clear(scope, "deadline"); clear(scope, "companionTimer")
+        return result({ accepted: false, reason: "session-location-mismatch", error: "Native session location cannot be verified for this project/worktree." })
+      }
+      return current(scope) ? task() : result({ reason: "disposed" })
+    })
     scope.queue = pending.catch(report)
     return pending
   }

@@ -548,18 +548,18 @@ var init_jobs = __esm(() => {
 // src/source/core/state.js
 import { promises as fs } from "fs";
 import os from "os";
-import path2 from "path";
+import path3 from "path";
 function stateDir(directory) {
-  return path2.join(directory, STATE_DIR);
+  return path3.join(directory, STATE_DIR);
 }
 function statePath(directory, sessionID) {
-  return path2.join(stateDir(directory), `${safeID(sessionID)}.json`);
+  return path3.join(stateDir(directory), `${safeID(sessionID)}.json`);
 }
 async function ensureDir(directory) {
   await fs.mkdir(directory, { recursive: true });
 }
 function stateLockKey(directory, sessionID) {
-  return `${path2.resolve(directory)}:${safeID(sessionID)}`;
+  return `${path3.resolve(directory)}:${safeID(sessionID)}`;
 }
 async function withStateWriteLock(directory, sessionID, fn) {
   const key = stateLockKey(directory, sessionID);
@@ -621,7 +621,7 @@ async function delay(ms) {
 async function writeFileAtomically(target, contents, options = {}) {
   const encoding = options.encoding || "utf8";
   const attempts = Math.max(1, Number(options.attempts) || 5);
-  const temp = path2.join(os.tmpdir(), `opencode-loop-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`);
+  const temp = path3.join(os.tmpdir(), `opencode-loop-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`);
   await fs.writeFile(temp, contents, encoding);
   try {
     let lastError;
@@ -758,12 +758,12 @@ var init_state = __esm(() => {
 
 // src/source/core/process.js
 import { promises as fs2 } from "fs";
-import path3 from "path";
+import path4 from "path";
 import { spawn as spawn2 } from "child_process";
 async function appendLoopLog(directory, line, extra = {}) {
   try {
     await ensureDir(stateDir(directory));
-    await fs2.appendFile(path3.join(stateDir(directory), "loop.log"), JSON.stringify({ time: new Date().toISOString(), line, ...extra }) + `
+    await fs2.appendFile(path4.join(stateDir(directory), "loop.log"), JSON.stringify({ time: new Date().toISOString(), line, ...extra }) + `
 `);
   } catch {}
 }
@@ -835,18 +835,18 @@ var init_goal_report = __esm(() => {
   init_state();
 });
 // src/source/runtime/goal-prompt.js
-import path4 from "path";
+import path5 from "path";
 async function buildGoalPrompt(directory, job) {
   const sections = [];
   sections.push(`Working directory:
-${path4.resolve(directory)}
+${path5.resolve(directory)}
 Keep every file operation inside this directory. Prefer workspace-relative paths such as "src/index.js"; never turn a relative path into a root path such as "/src/index.js".`);
   const objective = String(job.action || "").trim();
   if (objective)
     sections.push(`Goal objective:
 ${objective}`);
   if (job.goalFile) {
-    const text = await readSmallTextFile(path4.resolve(directory, job.goalFile), 120000);
+    const text = await readSmallTextFile(path5.resolve(directory, job.goalFile), 120000);
     if (text.trim())
       sections.push(`Goal file ${job.goalFile}:
 ${text.trim()}`);
@@ -854,7 +854,7 @@ ${text.trim()}`);
       sections.push(`Goal file ${job.goalFile} was requested but could not be read. Continue from the inline goal objective.`);
   }
   if (job.promptFile) {
-    const text = await readSmallTextFile(path4.resolve(directory, job.promptFile), 120000);
+    const text = await readSmallTextFile(path5.resolve(directory, job.promptFile), 120000);
     if (text.trim())
       sections.push(`Extra goal instructions from ${job.promptFile}:
 ${text.trim()}`);
@@ -887,7 +887,7 @@ ${job.noProgressCount || 0}/${job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS}
 ` + job.goalProgress.slice(-5).map((item) => `- ${item.time}: ${item.summary}`).join(`
 `));
   for (const file of job.includeFiles || []) {
-    const text = await readSmallTextFile(path4.resolve(directory, file), 80000);
+    const text = await readSmallTextFile(path5.resolve(directory, file), 80000);
     if (text.trim())
       sections.push(`Context from ${file}:
 ${text.trim().slice(0, 20000)}`);
@@ -933,7 +933,7 @@ var init_goal_runtime = __esm(() => {
 
 // src/source/runtime/job-workspace.js
 import { promises as fs3 } from "fs";
-import path5 from "path";
+import path6 from "path";
 function requireFunction(value, name) {
   if (typeof value !== "function")
     throw new TypeError(`createJobWorkspaceRuntime requires ${name}`);
@@ -966,7 +966,7 @@ function createJobWorkspaceRuntime(options = {}) {
       return await buildGoalPrompt2(directory, job);
     const sections = [];
     if (job.promptFile) {
-      const text = await readSmallTextFile2(path5.resolve(directory, job.promptFile));
+      const text = await readSmallTextFile2(path6.resolve(directory, job.promptFile));
       if (text.trim())
         sections.push(`Instructions from ${job.promptFile}:
 ${text.trim()}`);
@@ -976,7 +976,7 @@ ${text.trim()}`);
     if (job.action)
       sections.push(decoratePrompt(job));
     for (const file of job.includeFiles || []) {
-      const text = await readSmallTextFile2(path5.resolve(directory, file), 80000);
+      const text = await readSmallTextFile2(path6.resolve(directory, file), 80000);
       if (text.trim())
         sections.push(`Context from ${file}:
 ${text.trim().slice(0, 20000)}`);
@@ -1009,7 +1009,7 @@ ${text.trim().slice(0, 20000)}`);
     const snapshot = {};
     for (const file of files || []) {
       try {
-        const stat = await fs3.stat(path5.resolve(directory, file));
+        const stat = await fs3.stat(path6.resolve(directory, file));
         snapshot[file] = `${stat.mtimeMs}:${stat.size}`;
       } catch {
         snapshot[file] = "missing";
@@ -1042,11 +1042,11 @@ ${text.trim().slice(0, 20000)}`);
       return false;
     const controlRoots = new Set([
       stateDir(directory),
-      ...["goals", "goal-locks", "goal-handoff-locks", "goal-sequences"].map((name) => path5.join(directory, ".opencode", name))
-    ].map((root) => path5.resolve(root).toLowerCase()));
-    const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path5.join(".opencode", "opencode-loop", "until.txt")];
+      ...["goals", "goal-locks", "goal-handoff-locks", "goal-sequences"].map((name) => path6.join(directory, ".opencode", name))
+    ].map((root) => path6.resolve(root).toLowerCase()));
+    const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path6.join(".opencode", "opencode-loop", "until.txt")];
     for (const file of files)
-      if (await fileContains(path5.resolve(directory, file), job.until))
+      if (await fileContains(path6.resolve(directory, file), job.until))
         return true;
     let scanned = 0;
     async function walk(current) {
@@ -1063,8 +1063,8 @@ ${text.trim().slice(0, 20000)}`);
           return false;
         if ([".git", "node_modules", "dist", "build", ".next", "coverage"].includes(entry.name))
           continue;
-        const full = path5.join(current, entry.name);
-        if (controlRoots.has(path5.resolve(full).toLowerCase()))
+        const full = path6.join(current, entry.name);
+        if (controlRoots.has(path6.resolve(full).toLowerCase()))
           continue;
         if (entry.isDirectory()) {
           if (await walk(full))
@@ -1089,13 +1089,13 @@ ${text.trim().slice(0, 20000)}`);
     if (!status.stdout.trim())
       return;
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const checkpointDir = path5.join(stateDir(directory), "checkpoints", safeID(sessionID));
+    const checkpointDir = path6.join(stateDir(directory), "checkpoints", safeID(sessionID));
     await ensureDir(checkpointDir);
     const diff = await runProcess2("git", ["diff", "--binary"], directory, 120000);
     const staged = await runProcess2("git", ["diff", "--cached", "--binary"], directory, 120000);
     const prefix = `${timestamp}-${safeID(job.name || job.id)}`;
-    await fs3.writeFile(path5.join(checkpointDir, `${prefix}.status.txt`), status.stdout + status.stderr);
-    await fs3.writeFile(path5.join(checkpointDir, `${prefix}.patch`), `${diff.stdout}
+    await fs3.writeFile(path6.join(checkpointDir, `${prefix}.status.txt`), status.stdout + status.stderr);
+    await fs3.writeFile(path6.join(checkpointDir, `${prefix}.patch`), `${diff.stdout}
 ${staged.stdout}`);
     if (job.gitCheckpoint) {
       await runProcess2("git", ["add", "-A"], directory, 120000);
@@ -1121,7 +1121,27 @@ var init_job_workspace = __esm(() => {
 });
 
 // src/source/opencode2/native-plugin.js
-import path8 from "path";
+import path9 from "path";
+
+// src/source/opencode2/session-location.js
+import path from "path";
+function createNativeSessionLocationGuard({ directory, workspaceID, getSession }) {
+  const expected = path.resolve(directory);
+  return async (sessionID) => {
+    if (typeof sessionID !== "string" || !sessionID || typeof getSession !== "function")
+      return false;
+    try {
+      const session = await getSession({ sessionID });
+      if (session?.id !== sessionID || typeof session.location?.directory !== "string" || !path.isAbsolute(session.location.directory))
+        return false;
+      if (path.relative(expected, path.resolve(session.location.directory)) !== "")
+        return false;
+      return (session.location.workspaceID ?? "") === (workspaceID ?? "");
+    } catch {
+      return false;
+    }
+  };
+}
 
 // src/source/opencode2/native-shell.js
 import { spawn } from "child_process";
@@ -1261,15 +1281,15 @@ import { randomUUID as randomUUID2 } from "crypto";
 // src/source/opencode2/native-companion.js
 import { createHash } from "crypto";
 import { lstat, readFile } from "fs/promises";
-import path from "path";
+import path2 from "path";
 async function nativeGoalReservesSession(directory, sessionID) {
   const shard = createHash("sha256").update(sessionID).digest("hex").slice(0, 32);
-  const root = path.resolve(directory);
+  const root = path2.resolve(directory);
   const parts = [".opencode", "goals", `${shard}.json`];
   let file = root;
   try {
     for (const part of parts) {
-      file = path.join(file, part);
+      file = path2.join(file, part);
       const info = await lstat(file);
       if (info.isSymbolicLink())
         return true;
@@ -1534,7 +1554,7 @@ ${lines.join(`
 init_process();
 init_job_workspace();
 import { stat } from "fs/promises";
-import path6 from "path";
+import path7 from "path";
 function createNativeJobPolicy(options = {}) {
   const now = options.now || Date.now;
   const run = options.runShellCommand || runShellCommand;
@@ -1568,7 +1588,7 @@ function createNativeJobPolicy(options = {}) {
     }
     if (job.stopFile) {
       try {
-        await stat(path6.resolve(scope.directory, job.stopFile));
+        await stat(path7.resolve(scope.directory, job.stopFile));
         job.enabled = false;
         return pause(job, "stop-file");
       } catch (error) {
@@ -1684,7 +1704,18 @@ function createNativeLoopRuntime(options = {}) {
     } catch {}
   };
   function enqueue(scope, task) {
-    const pending = scope.queue.catch(() => {}).then(() => current(scope) ? task() : result({ reason: "disposed" }));
+    const pending = scope.queue.catch(() => {}).then(async () => {
+      if (!current(scope))
+        return result({ reason: "disposed" });
+      if (typeof options.scopeAllowed === "function" && !await options.scopeAllowed(scope)) {
+        scope.epoch++;
+        clear(scope, "timer");
+        clear(scope, "deadline");
+        clear(scope, "companionTimer");
+        return result({ accepted: false, reason: "session-location-mismatch", error: "Native session location cannot be verified for this project/worktree." });
+      }
+      return current(scope) ? task() : result({ reason: "disposed" });
+    });
     scope.queue = pending.catch(report);
     return pending;
   }
@@ -2865,7 +2896,7 @@ init_state();
 
 // src/source/core/progress.js
 import { promises as fs4 } from "fs";
-import path7 from "path";
+import path8 from "path";
 var DEFAULT_PROGRESS_MD = `# Progress
 
 ## Current Goal
@@ -2893,20 +2924,20 @@ Describe the current project goal here.
 - None.
 `;
 function inside(root, candidate) {
-  const relative = path7.relative(root, candidate);
-  return relative !== ".." && !relative.startsWith(`..${path7.sep}`) && !path7.isAbsolute(relative);
+  const relative = path8.relative(root, candidate);
+  return relative !== ".." && !relative.startsWith(`..${path8.sep}`) && !path8.isAbsolute(relative);
 }
 async function initializeProgressFile(directory, argumentsText = "") {
   const root = await fs4.realpath(directory);
   const target = String(argumentsText || "").trim() || "progress.md";
-  const file = path7.resolve(root, target);
-  const relative = path7.relative(root, file);
+  const file = path8.resolve(root, target);
+  const relative = path8.relative(root, file);
   if (!relative || !inside(root, file))
     throw new Error("Progress file must be inside the project");
-  if ([".git", ".opencode"].includes(relative.split(path7.sep)[0].toLowerCase())) {
+  if ([".git", ".opencode"].includes(relative.split(path8.sep)[0].toLowerCase())) {
     throw new Error("Progress file cannot replace a control-plane path");
   }
-  const parent = await fs4.realpath(path7.dirname(file));
+  const parent = await fs4.realpath(path8.dirname(file));
   if (!inside(root, parent))
     throw new Error("Progress file must remain inside the project; symlink escape refused");
   try {
@@ -2958,6 +2989,11 @@ var OpenCodeLoopNativePlugin = Object.freeze({
     const directory = String(ctx.location?.directory || ctx.options?.directory || "").trim();
     if (!directory)
       throw new Error("Native OpenCode Loop requires a project directory");
+    const ownsSession = createNativeSessionLocationGuard({
+      directory,
+      workspaceID: ctx.location?.workspaceID,
+      getSession: (input) => ctx.session.get(input)
+    });
     const registrations = [];
     const lifecycleAbort = new AbortController;
     const prompt = (request) => ctx.session.prompt({ ...request, delivery: request.delivery || "queue", metadata: { ...request.metadata, opencode_loop_v2: true } });
@@ -2970,6 +3006,7 @@ var OpenCodeLoopNativePlugin = Object.freeze({
     });
     const runtime = createNativeLoopRuntime({
       directory,
+      scopeAllowed: (scope) => ownsSession(scope.sessionID),
       prompt,
       command: typeof ctx.session.command === "function" ? (request) => ctx.session.command(request) : undefined,
       wait: typeof ctx.session.wait === "function" ? (request) => ctx.session.wait(request) : undefined,
@@ -2983,7 +3020,11 @@ var OpenCodeLoopNativePlugin = Object.freeze({
         appendLoopLog(directory, "v2-native-error", { message: String(error?.message || error) }).catch(() => {});
       }
     });
-    const bridge = createOpenCode2EventBridge({ directory, allowInboxCommands: false, onEvent: (event) => runtime.onEvent(event), onError: (error) => {
+    const bridge = createOpenCode2EventBridge({ directory, allowInboxCommands: false, onEvent: async (event) => {
+      if (event.sessionID && !(event.kind === "session" && event.action === "deleted") && !await ownsSession(event.sessionID))
+        return;
+      return runtime.onEvent(event);
+    }, onError: (error) => {
       appendLoopLog(directory, "v2-native-event-error", { message: String(error?.message || error) }).catch(() => {});
     } });
     let closed = false;
@@ -3021,13 +3062,17 @@ var OpenCodeLoopNativePlugin = Object.freeze({
     async function execute({ name, sessionID, arguments: argumentsText }) {
       if (closed)
         throw new Error("Native Loop is disposed");
+      if (!await ownsSession(sessionID))
+        throw new Error("Native Loop cannot resolve this session in the plugin location; use its own project/worktree.");
+      if (closed)
+        throw new Error("Native Loop is disposed");
       if (name === "loop-init") {
         const output = await initializeProgressFile(directory, argumentsText);
         await prompt({ sessionID, text: output.created ? `Created ${output.file}.` : `${output.file} already exists; preserved unchanged.`, resume: false });
         return { handled: true, accepted: true, ...output };
       }
       if (["loop-help", "loop-doctor", "loop-logs"].includes(name)) {
-        const text = name === "loop-logs" ? (await readSmallTextFile(path8.join(stateDir(directory), "loop.log"), 2000000)).split(`
+        const text = name === "loop-logs" ? (await readSmallTextFile(path9.join(stateDir(directory), "loop.log"), 2000000)).split(`
 `).slice(-60).join(`
 `) || "No Loop log entries." : name === "loop-doctor" ? `Native OpenCode Loop
 Host: ${ctx.app?.version || "unknown"}
@@ -3050,12 +3095,19 @@ Use /loop-status for paused/admitted job state.` : HELP;
       return result;
     }
     try {
-      registrations.push(await ctx.session.hook("prompt", (event) => {
-        if (event.metadata?.opencode_loop_v2 === true)
+      registrations.push(await ctx.session.hook("prompt", async (event) => {
+        if (closed || event.metadata?.opencode_loop_v2 === true || !await ownsSession(event.sessionID))
+          return;
+        if (closed)
           return;
         return runtime.onEvent({ kind: "foreground", directory, sessionID: event.sessionID });
       }));
-      registrations.push(await ctx.session.hook("compaction", (event) => runtime.onEvent({ kind: "compaction", action: "started", directory, sessionID: event.sessionID })));
+      registrations.push(await ctx.session.hook("compaction", async (event) => {
+        if (closed || !await ownsSession(event.sessionID))
+          return;
+        if (!closed)
+          return runtime.onEvent({ kind: "compaction", action: "started", directory, sessionID: event.sessionID });
+      }));
       registrations.push(await ctx.command.transform((draft) => {
         registerOpenCode2LoopCommands(draft, { execute });
         if (typeof draft.add !== "function")
@@ -3113,7 +3165,7 @@ function inspectOpenCode2Context(ctx) {
 // src/source/opencode2/diagnostics.js
 init_state();
 import { promises as fs5 } from "fs";
-import path9 from "path";
+import path10 from "path";
 var OPENCODE_LOOP_V2_HELP_TEXT = [
   "OpenCode Loop V2 experimental help:",
   "/loop 0s --max-runs 2 <prompt>                  autonomous prompt loop",
@@ -3193,7 +3245,7 @@ ${JSON.stringify(state, null, 2)}
       return { handled: false, reason: "missing-scope" };
     let text = "No OpenCode 2 Loop log found.";
     try {
-      const raw = await readFile(path9.join(stateDir(scope.directory), "loop.log"), "utf8");
+      const raw = await readFile(path10.join(stateDir(scope.directory), "loop.log"), "utf8");
       const lines = String(raw || "").trim().split(/\r?\n/).filter((line) => line.includes('"v2":true')).slice(-80);
       if (lines.length)
         text = lines.join(`
