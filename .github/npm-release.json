@@ -1,11 +1,11 @@
 {
   "name": "@bybrawe/opencode-loop",
-  "version": "0.6.0",
-  "predecessor": "0.5.38",
+  "version": "0.6.1",
+  "predecessor": "0.6.0",
   "goal": {
-    "version": "1.3.39",
-    "sha": "0803422eb86b4d1cdc4ea1ec8d0fbb4acca5f0ed"
+    "version": "1.3.40",
+    "sha": "ac77b8d125037b15f729b4c80d47566381a5aa49"
   },
   "requestedAt": "2026-09-29",
-  "reason": "User-authorized native OpenCode 2 npm release from main; exact Goal candidate includes portable LF/CRLF release-gate regressions. Preserve all installed-package and joint-host gates."
+  "reason": "User-authorized OpenCode 2 native release from main; pair Loop 0.6.1 with the immutable final Goal 1.3.40 candidate that carries official root/API entry separation and Windows canonical-path safety. Preserve exact-source, installed-package, and joint-host gates."
 }
