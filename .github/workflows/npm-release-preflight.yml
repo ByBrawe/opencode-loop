@@ -1,0 +1,42 @@
+name: npm release preflight
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/npm-release-preflight.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Read registry and current main checks without publishing
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          async function get(url) {
+            const response = await fetch(url, { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': 'opencode-native-release-preflight' } })
+            if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`)
+            return response.json()
+          }
+          for (const [repository, candidate] of [['opencode-goal', '1.3.38'], ['opencode-loop', '0.6.0']]) {
+            const pkg = '@bybrawe/' + repository
+            const registry = await get('https://registry.npmjs.org/' + encodeURIComponent(pkg))
+            const latest = registry['dist-tags'].latest
+            const detail = (version) => {
+              const value = registry.versions[version]
+              return value ? { version: value.version, gitHead: value.gitHead, bin: value.bin, integrity: value.dist?.integrity, publishedAt: registry.time?.[version] } : null
+            }
+            console.log('REGISTRY ' + JSON.stringify({ package: pkg, tags: registry['dist-tags'], latest: detail(latest), candidate: detail(candidate) }))
+            const api = 'https://api.github.com/repos/ByBrawe/' + repository
+            const head = await get(api + '/branches/main')
+            const sha = head.commit.sha
+            const runs = await get(api + '/actions/runs?per_page=100&head_sha=' + sha)
+            console.log('MAIN ' + JSON.stringify({ repository, sha, runs: runs.workflow_runs.map(({ id, name, path, status, conclusion }) => ({ id, name, path, status, conclusion })) }))
+          }
+          JS
