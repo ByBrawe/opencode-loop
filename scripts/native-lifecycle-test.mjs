@@ -19,6 +19,7 @@ async function fixture({ failDispose = false, failSubscribe = false } = {}) {
   const ctx = {
     location: { directory }, options: {},
     session: {
+      get: async ({ sessionID }) => ({ id: sessionID, location: { directory } }),
       prompt: async () => { throw new Error("cleanup must not prompt or abort a native session") },
       hook: async name => registration(name),
     },
