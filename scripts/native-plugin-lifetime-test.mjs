@@ -17,6 +17,7 @@ function fixture(directory, { failCleanup = false } = {}) {
   const ctx = {
     location: { directory }, options: {}, app: { version: "2.0.18" },
     session: {
+      get: async ({ sessionID }) => ({ id: sessionID, location: { directory } }),
       prompt: async () => { throw new Error("cleanup must not dispatch a prompt") },
       hook: async (name) => registration(name),
     },
@@ -46,6 +47,18 @@ async function bounded(promise) {
     ])
   } finally { clearTimeout(timer) }
 }
+
+test("native Loop fails setup when the public session.get location capability is unavailable", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "loop-v2-no-session-get-"))
+  const host = fixture(directory)
+  delete host.ctx.session.get
+  try {
+    await assert.rejects(plugin.setup(host.ctx), /requires session\.get/)
+  } finally {
+    host.end()
+    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+  }
+})
 
 test("native Loop aborts an idle subscription before awaiting iterator return", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "loop-v2-lifetime-"))
