@@ -34,7 +34,7 @@ compaction remains host-owned.
 ## Paired Goal release
 
 Publication is pinned to OpenCode Goal 1.3.42 from immutable source
-`7a952fc4c3ae51baad8e633db27ecf84cbdc1559` and refuses to continue until that
+`1dd58abf1e7c08594c2085883e28acea3dbe0418` and refuses to continue until that
 exact package is visible on npm.
 
 ## Verification
