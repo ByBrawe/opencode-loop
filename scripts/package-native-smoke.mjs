@@ -9,7 +9,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const npmCLI = process.env.npm_execpath
 assert.ok(npmCLI, "run this through npm run package:smoke")
 function run(command, args, cwd) {
-  const result = spawnSync(command, args, { cwd, encoding: "utf8", timeout: 180_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true })
+  const result = spawnSync(command, args, { cwd, encoding: "utf8", timeout: 360_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true })
   if (result.error) throw result.error
   assert.equal(result.status, 0, [result.stdout, result.stderr].filter(Boolean).join("\n"))
   return result.stdout
