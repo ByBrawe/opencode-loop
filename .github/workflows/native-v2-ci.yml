@@ -74,7 +74,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: ByBrawe/opencode-goal
-          ref: f94449761ca521ad8a0848b91b1b496da5515c23
+          ref: 25232138c3d7ce5821028753d8b31b9031243f6e
           path: companion-goal
           persist-credentials: false
       - name: Build exact Goal companion
@@ -99,3 +99,11 @@ jobs:
         env:
           OPENCODE2_BINARY: /tmp/native-host/node_modules/.bin/opencode2
         run: node scripts/native-cli-host-canary.mjs
+      - name: Three-session Goal handoff preserves full native context
+        working-directory: companion-goal
+        shell: bash
+        env:
+          OPENCODE2_BINARY: /tmp/native-host/node_modules/.bin/opencode2
+        run: |
+          node scripts/opencode2-unit-handoff-canary.mjs > "$RUNNER_TEMP/handoff.log" 2>&1 || { tail -100 "$RUNNER_TEMP/handoff.log"; exit 1; }
+          head -48 "$RUNNER_TEMP/handoff.log"
