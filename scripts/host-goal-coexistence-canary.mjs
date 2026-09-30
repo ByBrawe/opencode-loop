@@ -10,6 +10,9 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const isWindows = process.platform === "win32"
+const SERVER_READY_TIMEOUT_MS = isWindows ? 60_000 : 30_000
+const API_BOOTSTRAP_TIMEOUT_MS = isWindows ? 90_000 : 30_000
+const PREWARM_TIMEOUT_MS = isWindows ? 120_000 : 60_000
 const GOAL_OBJECTIVE = "prove dedicated Goal owns continuation over Loop"
 const GOAL_PROMPT_MARKER = "Continue working toward the active OpenCode goal."
 const LOOP_PROMPT_MARKER = "AUTONOMOUS OPENCODE LOOP ITERATION"
@@ -301,28 +304,41 @@ async function main() {
   }
 
   try {
-    const prewarm = await runOpenCode(["debug", "config"], { cwd: workspace, env, timeoutMs: 60_000 })
+    const prewarm = await runOpenCode(["debug", "config"], { cwd: workspace, env, timeoutMs: PREWARM_TIMEOUT_MS })
     assert.match(prewarm.stdout, /\{[\s\S]*\}/, `OpenCode config prewarm returned no JSON\n${prewarm.stdout}\n${prewarm.stderr}`)
 
     const port = await reservePort()
     server = spawnOpenCode(["serve", "--hostname", "127.0.0.1", "--port", String(port)], { cwd: workspace, env })
     server.stdout?.on("data", (chunk) => { serverLog = appendLog(serverLog, chunk) })
     server.stderr?.on("data", (chunk) => { serverLog = appendLog(serverLog, chunk) })
-    await waitForTcp(port, server, () => serverLog)
+    await waitForTcp(port, server, () => serverLog, SERVER_READY_TIMEOUT_MS)
 
     const baseURL = `http://127.0.0.1:${port}`
     const directoryQuery = `directory=${encodeURIComponent(workspace)}`
     const api = async (pathname, init = {}) => {
       const separator = pathname.includes("?") ? "&" : "?"
-      const response = await fetch(`${baseURL}${pathname}${separator}${directoryQuery}`, {
-        ...init,
-        headers: { "content-type": "application/json", ...(init.headers ?? {}) },
-        signal: init.signal ?? AbortSignal.timeout(30_000),
-      })
-      const text = await response.text()
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${text}`)
-      if (!text) return null
-      try { return JSON.parse(text) } catch { return text }
+      const url = `${baseURL}${pathname}${separator}${directoryQuery}`
+      const ownTimeout = !init.signal
+      const timeoutMs = API_BOOTSTRAP_TIMEOUT_MS
+      try {
+        const response = await fetch(url, {
+          ...init,
+          headers: { "content-type": "application/json", ...(init.headers ?? {}) },
+          signal: init.signal ?? AbortSignal.timeout(timeoutMs),
+        })
+        const text = await response.text()
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${text}`)
+        if (!text) return null
+        try { return JSON.parse(text) } catch { return text }
+      } catch (error) {
+        const method = init.method ?? "GET"
+        const boundary = ownTimeout ? ` after ${timeoutMs}ms bootstrap timeout` : " with caller-owned signal"
+        throw new Error(
+          `OpenCode API ${method} ${pathname} failed${boundary}: ${error?.name ?? "Error"}: ${error?.message ?? error}\n`
+          + `provider=${JSON.stringify(provider.stats)}\nserver log:\n${serverLog}`,
+          { cause: error },
+        )
+      }
     }
 
     const sessionsPayload = await api("/session", { method: "GET" })
