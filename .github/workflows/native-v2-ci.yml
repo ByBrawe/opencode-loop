@@ -59,6 +59,44 @@ jobs:
           console.log('Canonical native entry loads independently of V1 SDK imports')
           JS
 
+  latest-native-pair:
+    name: Latest OpenCode 2 with Loop main and Goal latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.4.2'
+      - run: npm ci
+      - run: npm run build:plugin
+      - name: Install moving OpenCode 2 and Goal targets
+        shell: bash
+        run: |
+          host="$RUNNER_TEMP/opencode2-latest"
+          npm install --prefix "$host" --package-lock=false @opencode/cli@latest @bybrawe/opencode-goal@latest
+          bin="$host/node_modules/.bin/opencode2"
+          if [ ! -x "$bin" ]; then bin="$host/node_modules/.bin/opencode"; fi
+          test -x "$bin"
+          goal_entry="$host/node_modules/@bybrawe/opencode-goal/dist/server.js"
+          test -f "$goal_entry"
+          goal_url="$(node --input-type=module -e 'import { pathToFileURL } from "node:url"; console.log(pathToFileURL(process.argv[1]).href)' "$goal_entry")"
+          echo "OPENCODE2_BINARY=$bin" >> "$GITHUB_ENV"
+          echo "OPENCODE_GOAL_V2_PLUGIN_URL=$goal_url" >> "$GITHUB_ENV"
+          node -e 'console.log("OpenCode CLI", require(process.argv[1]).version)' "$host/node_modules/@opencode/cli/package.json"
+          node -e 'console.log("Goal", require(process.argv[1]).version)' "$host/node_modules/@bybrawe/opencode-goal/package.json"
+          "$bin" --version
+      - name: Real latest V2 host with both native plugins
+        env:
+          OPENCODE2_CURRENT_COMMAND_FIELDS: '1'
+          OPENCODE2_NATIVE_REQUIRED: '1'
+        run: node scripts/opencode2-loop-canary.mjs
+
   real-native-pair:
     name: OpenCode 2.0.18 with Loop and Goal
     runs-on: ubuntu-latest
