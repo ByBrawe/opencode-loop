@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "43 5 * * *"
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/host-goal-coexistence-canary.mjs"
+      - ".github/workflows/goal-coexistence-latest.yml"
 
 permissions:
   contents: read
@@ -38,7 +43,7 @@ jobs:
 
       - run: npm ci
 
-      - name: Install moving compatibility targets
+      - name: Install moving OpenCode 1 compatibility targets
         run: npm install --no-save --package-lock=false opencode-ai@latest @bybrawe/opencode-goal@latest
 
       - name: Show tested versions
@@ -50,7 +55,7 @@ jobs:
       - name: Check coexistence canary syntax
         run: node --check scripts/host-goal-coexistence-canary.mjs
 
-      - name: Require one autonomous owner with latest Goal
+      - name: Require one autonomous owner on legacy compatibility host
         run: node scripts/host-goal-coexistence-canary.mjs
         env:
           OPENCODE_PRINT_LOGS: "1"
