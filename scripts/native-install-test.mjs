@@ -28,22 +28,33 @@ try {
   run(fresh)
   const native = await readFile(path.join(root, "src/native.js"), "utf8")
   const v2 = await readFile(path.join(root, "src/v2.js"), "utf8")
-  assert.equal(await readFile(path.join(fresh, "plugins/opencode-loop/index.js"), "utf8"), v2)
-  assert.equal(await readFile(path.join(fresh, "plugins/opencode-loop/native.js"), "utf8"), native)
+  const readConfig = async (directory) => JSON.parse(await readFile(path.join(directory, "opencode.json"), "utf8"))
+  assert.deepEqual((await readConfig(fresh)).plugins, [spec])
   assert.match(v2, /from\s+["']@opencode\/plugin["']/)
   assert.match(v2, /Plugin\.define\s*\(/)
   assert.doesNotMatch(native, /(?:from\s*|import\s*\()["']@opencode-ai\/plugin/)
+  assert.equal(await exists(path.join(fresh, "plugins/opencode-loop")), false)
   assert.equal(await exists(path.join(fresh, "plugins/opencode-loop.ts")), false)
   assert.equal(await exists(path.join(fresh, "package.json")), false)
   assert.equal(await exists(path.join(fresh, "commands/loop.md")), false)
   assert.equal(await exists(path.join(fresh, "agents/opencode-loop-local.md")), false)
+  const freshBefore = await readFile(path.join(fresh, "opencode.json"), "utf8")
   run(fresh)
+  assert.equal(await readFile(path.join(fresh, "opencode.json"), "utf8"), freshBefore)
+  cases++
+
+  const brokenLoose = await config("broken-loose")
+  await mkdir(path.join(brokenLoose, "plugins/opencode-loop"), { recursive: true })
+  await writeFile(path.join(brokenLoose, "plugins/opencode-loop/index.js"), 'import { Plugin } from "@opencode/plugin"\nexport default Plugin.define({ id: "broken", setup() {} })\n')
+  await writeFile(path.join(brokenLoose, "plugins/opencode-loop/native.js"), "export default {}\n")
+  run(brokenLoose)
+  assert.deepEqual((await readConfig(brokenLoose)).plugins, [spec])
+  assert.equal(await exists(path.join(brokenLoose, "plugins/opencode-loop")), false, "native update must remove the old loose V2 copy that cannot resolve package dependencies")
   cases++
 
   const options = { package: "@bybrawe/opencode-loop@0.5.38", options: { quiet: true, nested: { value: "preserved" } }, enabled: true }
   const obj = await config("object", { plugins: ["other-plugin", options] })
   run(obj)
-  const readConfig = async (directory) => JSON.parse(await readFile(path.join(directory, "opencode.json"), "utf8"))
   assert.deepEqual((await readConfig(obj)).plugins, ["other-plugin", { ...options, package: spec }])
   const before = await readFile(path.join(obj, "opencode.json"), "utf8")
   run(obj)
@@ -88,8 +99,8 @@ try {
   run(upgrade)
   assert.equal(await exists(path.join(upgrade, "commands/loop.md")), false)
   assert.equal(await readFile(path.join(upgrade, "commands/loop-help.md"), "utf8"), "This is a custom user command; keep it.")
-  assert.equal(await readFile(path.join(upgrade, "plugins/opencode-loop/index.js"), "utf8"), v2)
-  assert.equal(await readFile(path.join(upgrade, "plugins/opencode-loop/native.js"), "utf8"), native)
+  assert.deepEqual((await readConfig(upgrade)).plugins, [spec])
+  assert.equal(await exists(path.join(upgrade, "plugins/opencode-loop")), false)
   assert.equal(await exists(path.join(upgrade, "plugins/opencode-loop.ts")), false)
   cases++
 
