@@ -1,11 +1,11 @@
 {
   "name": "@bybrawe/opencode-loop",
-  "version": "0.6.2",
-  "predecessor": "0.6.1",
+  "version": "0.6.3",
+  "predecessor": "0.6.2",
   "goal": {
     "version": "1.3.42",
     "sha": "1dd58abf1e7c08594c2085883e28acea3dbe0418"
   },
-  "requestedAt": "2026-09-30",
-  "reason": "User-authorized final OpenCode 2 migration-conformance release from main; pair Loop 0.6.2 with corrected immutable Goal 1.3.42. Enforce public location/options boundaries, exact-source production packages, Windows-safe release readiness, and joint-host gates."
+  "requestedAt": "2026-10-02",
+  "reason": "User-authorized OpenCode 2 installer dependency-resolution fix from main. Publish Loop 0.6.3 to replace the broken 0.6.1/0.6.2 loose V2 install layout with exact package registration, preserve immutable Goal 1.3.42 pairing, and require Windows/Linux, package, exact-main, and native host gates before npm publication."
 }
