@@ -1,7 +1,8 @@
 # Native OpenCode 2 installation and CLI migration
 
-This describes source/main changes, not a new npm release. The joint migration
-plan in OPENCODE2-MIGRATION.md still has runtime, parity and release audit work.
+This documents the native OpenCode 2 installation contract. Loop 0.6.3 uses
+package registration for the default V2 install so runtime dependencies resolve
+from the published package instead of from a loose global plugin copy.
 
 ## Recommended OpenCode 2 installation
 
@@ -60,6 +61,24 @@ accidentally select a V1 Goal bridge because an old binary appears first on PATH
 Loop's `--without-loop-goals` cleanup removes packaged/recognized bridge files,
 not arbitrary user-authored files with the same names. Loop uninstall leaves the
 Goal companion and project Goal state intact.
+
+## Native Loop package installation
+
+The default V2 installer pins `@bybrawe/opencode-loop@<exact-version>` in the
+global plural `plugins` configuration. It does not copy
+`~/.config/opencode/plugins/opencode-loop/index.js` for normal V2 installs.
+
+This matters because the V2 entrypoint imports `@opencode/plugin`. Published
+plugins declare that package as a production dependency, so OpenCode resolves the
+entrypoint and SDK from the same installed package. A loose local plugin instead
+needs its external dependencies installed in the OpenCode config dependency
+project; 0.6.1/0.6.2 did not materialize that dependency and could fail with
+`Cannot find package '@opencode/plugin'`.
+
+Updating with 0.6.3 migrates that older loose layout automatically: the exact
+package registration is added and known `plugins/opencode-loop`,
+`opencode-loop.ts`, and `opencode-loop.js` copies are removed. User project
+Loop state remains untouched.
 
 ## Native Loop daemon
 
