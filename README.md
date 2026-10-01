@@ -21,28 +21,44 @@ OpenCode Loop adds `/loop`, scheduled prompt/command/shell jobs, compact schedul
 
 ## Install or update
 
-Recommended:
+### Recommended OpenCode 2 setup
+
+Install the dedicated Goal plugin first:
 
 ```bash
-npx -y @bybrawe/opencode-loop@latest
+npx -y @bybrawe/opencode-goal@latest
 ```
 
-Run the same command again to update. Then **fully restart OpenCode** and verify:
+Then install Loop by itself and disable Loop's older experimental Goal command files:
+
+```bash
+npx -y @bybrawe/opencode-loop@latest --loop-only --without-loop-goals
+```
+
+This is the recommended split for OpenCode 2:
+
+- **OpenCode Goal** owns `/goal`, durable outcome-driven work, evidence, verification, recovery, and semantic completion.
+- **OpenCode Loop** owns `/loop`, scheduling, repeated prompts/commands/shell work, and `opencode-loopd`.
+- `--loop-only` prevents the Loop installer from installing/updating the Goal companion.
+- `--without-loop-goals` removes only Loop's older experimental `/loop-goal*` command files; it does not remove the dedicated OpenCode Goal plugin.
+
+Run the same two commands again to update both packages. Then **fully restart OpenCode** and verify:
 
 ```text
+/goal status
 /loop-help
 /loop-doctor
 ```
 
-Install/update Loop and the dedicated Goals companion together:
+Convenience alternative: let the Loop installer also install/update the dedicated Goal companion:
 
 ```bash
 npx -y @bybrawe/opencode-loop@latest --with-goals --without-loop-goals
 ```
 
-`--without-loop-goals` removes only Loop's older experimental `/loop-goal*` command files. It keeps normal `/loop`, command/shell scheduling, daemon support, and the separate `/goal` plugin.
+For new OpenCode 2 installations, the explicit two-command setup above is preferred because ownership is clear and each package can be updated independently.
 
-Install only Loop and skip companion network work:
+Install only Loop without touching Goal:
 
 ```bash
 npx -y @bybrawe/opencode-loop@latest --loop-only
