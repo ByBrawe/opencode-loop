@@ -75,7 +75,7 @@ jobs:
         shell: bash
         run: |
           test "$(git -C companion-goal rev-parse HEAD)" = "$(node -p "require('./.github/npm-release.json').goal.sha")"
-          (cd companion-goal && npm install && npm run build)
+          (cd companion-goal && npm install --no-save --legacy-peer-deps @opencode/plugin@2.0.18 && test "$(node -p "require('./node_modules/@opencode/plugin/package.json').version")" = '2.0.18' && npm run build)
       - name: Install actual production tarballs and exact native host
         shell: bash
         run: |
