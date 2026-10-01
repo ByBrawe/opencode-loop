@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.3 - 2026-10-02
+
+- Fix native OpenCode 2 fresh installs on Windows/Linux by registering the exact published Loop package in plural `plugins` instead of copying a loose global `plugins/opencode-loop` directory.
+- Let OpenCode resolve `@opencode/plugin` from Loop's published production dependency graph, eliminating the reproduced `Cannot find package '@opencode/plugin'` startup failure from the 0.6.1/0.6.2 loose-install layout.
+- Automatically migrate known loose V2 Loop copies on update while preserving project Loop state, unrelated plugin registrations, JSONC comments and configured package options.
+- Add installer regressions for fresh package registration, idempotence and migration of a broken loose V2 copy.
+- Keep the dedicated OpenCode Goal 1.3.42 companion unchanged and retain explicit `--legacy-v1` as the isolated compatibility path.
+
 ## 0.6.2 - 2026-09-30
 
 - Conform the native OpenCode 2 runtime to the migration-guide location/options boundary: project scope comes only from `ctx.location.directory`; plugin `ctx.options` can no longer masquerade as project location.
