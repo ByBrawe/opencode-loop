@@ -6,6 +6,7 @@ import { validateRelease, releaseDecision, assertPublishedSource, waitForPublish
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const workflow = await readFile(path.join(repoRoot, ".github/workflows/publish-npm.yml"), "utf8")
+const nativeV2Workflow = await readFile(path.join(repoRoot, ".github/workflows/native-v2-ci.yml"), "utf8")
 assert.match(workflow, /ref:\s*\$\{\{ github\.sha \}\}/, "checkout must use the immutable trigger SHA")
 assert.doesNotMatch(workflow, /ref:\s*main\b/, "publication cannot checkout moving main")
 assert.match(workflow, /git merge-base --is-ancestor "\$GITHUB_SHA" origin\/main/)
@@ -29,6 +30,7 @@ assert.match(workflow, /node_modules\/@bybrawe\/opencode-loop\/scripts\/opencode
 assert.match(workflow, /node_modules\/@bybrawe\/opencode-goal\/dist\/server.js/)
 assert.match(workflow, /ref: \$\{\{ steps.release.outputs.goal_sha \}\}/)
 assert.match(workflow, /npm install --no-save --legacy-peer-deps @opencode\/plugin@2\.0\.18/, "immutable Goal companion must build against its pinned OpenCode 2.0.18 plugin contract")
+assert.match(nativeV2Workflow, /npm install --no-save --legacy-peer-deps @opencode\/plugin@2\.0\.18/, "Native V2 CI must pin the immutable Goal companion to the same OpenCode 2.0.18 plugin contract")
 assert.doesNotMatch(workflow, /secrets\.NPM_TOKEN/)
 
 const publishIndex = workflow.indexOf("npm publish --access public")
