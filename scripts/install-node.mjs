@@ -22,7 +22,7 @@ const installerArgs = rawInstallerArgs.filter((arg) => arg !== "--legacy-v1")
 const uninstallRequested = installerArgs.length === 1 && ["--uninstall", "uninstall", "--remove"].includes(installerArgs[0] || "")
 
 if (installerArgs.includes("--help") || installerArgs.includes("-h")) {
-  console.log(`OpenCode Loop installer/updater\n\nUsage:\n  opencode-loop\n  npx -y @bybrawe/opencode-loop@latest\n  npx -y @bybrawe/opencode-loop@latest --uninstall\n\nInstall/update defaults to native OpenCode 2: no V1 SDK or legacy command files are needed for a local install. Existing npm registrations are pinned to the exact version and migrated to plugins while retaining object options. Use --legacy-v1 to install the compatibility loader and legacy command files explicitly.\nUninstall removes Loop package registrations plus known local plugin/command/agent files while preserving project Loop state.\n\nSet OPENCODE_CONFIG_DIR to target a non-default OpenCode config directory.`)
+  console.log(`OpenCode Loop installer/updater\n\nUsage:\n  opencode-loop\n  npx -y @bybrawe/opencode-loop@latest\n  npx -y @bybrawe/opencode-loop@latest --uninstall\n\nInstall/update defaults to native OpenCode 2: the exact package version is registered in the plural plugins config so OpenCode resolves the package and its V2 runtime dependencies together. No loose local V2 plugin copy, V1 SDK, or legacy command files are needed. Existing npm registrations are pinned to the exact version and migrated to plugins while retaining object options. Use --legacy-v1 to install the compatibility loader and legacy command files explicitly.\nUninstall removes Loop package registrations plus known local plugin/command/agent files while preserving project Loop state.\n\nSet OPENCODE_CONFIG_DIR to target a non-default OpenCode config directory.`)
   process.exit(0)
 }
 
@@ -277,9 +277,13 @@ async function configurePackagePlugin() {
           }
         } else {
           const pinned = pinRegistration(own)
-          if (Array.isArray(parsed.plugin) && parsed.plugin.some(isPackageSpec)) updated = rewriteExistingPluginArray(updated, parsed.plugin.filter((entry) => !isPackageSpec(entry)), "plugin")
+          if (Array.isArray(parsed.plugin) && parsed.plugin.some(isPackageSpec)) {
+            updated = rewriteExistingPluginArray(updated, parsed.plugin.filter((entry) => !isPackageSpec(entry)), "plugin")
+          }
           const next = [...(parsed.plugins || []).filter((entry) => !isPackageSpec(entry)), pinned]
-          updated = parsed.plugins === undefined ? appendPluginProperty(updated, next, "plugins") : rewriteExistingPluginArray(updated, next, "plugins")
+          updated = parsed.plugins === undefined
+            ? appendPluginProperty(updated, next, "plugins")
+            : rewriteExistingPluginArray(updated, next, "plugins")
         }
       }
       parseJsonc(updated)
@@ -288,8 +292,35 @@ async function configurePackagePlugin() {
       if (error?.code !== "ENOENT") throw new Error(`Could not inspect ${target}: ${error.message}`)
     }
   }
+
+  // Native V2 installs are package registrations, not loose discovered copies.
+  // The published package owns @opencode/plugin as a production dependency, so
+  // OpenCode resolves the entrypoint and SDK from the same package install.
+  // This also migrates broken 0.6.1/0.6.2 loose installs on the next update.
+  if (!configured && !legacyV1) {
+    if (plans.length) {
+      const plan = plans[0]
+      const parsed = parseJsonc(plan.updated)
+      const entries = parsed.plugins || []
+      if (!Array.isArray(entries)) throw new Error("OpenCode config 'plugins' must be an array")
+      plan.updated = parsed.plugins === undefined
+        ? appendPluginProperty(plan.updated, [...entries, packageSpec], "plugins")
+        : rewriteExistingPluginArray(plan.updated, [...entries, packageSpec], "plugins")
+      parseJsonc(plan.updated)
+    } else {
+      const target = join(config, "opencode.json")
+      const updated = JSON.stringify({
+        $schema: "https://opencode.ai/config.json",
+        plugins: [packageSpec],
+      }, null, 2) + "\n"
+      plans.push({ target, source: "", updated })
+    }
+    configured = true
+  }
+
   // Validate every candidate before writing any config. Malformed later files
-  // must not leave the earlier file migrated and the plugin half-installed.
+  // must not leave an earlier file migrated and the plugin half-installed.
+  for (const plan of plans) parseJsonc(plan.updated)
   for (const plan of plans) if (plan.source !== plan.updated) await writeFile(plan.target, plan.updated, "utf8")
   return { configured, updatedFiles: plans.filter((plan) => plan.source !== plan.updated).map((plan) => plan.target) }
 }
@@ -367,14 +398,7 @@ async function installOrUpdate() {
     await copyFile(join(root, "src", "index.js"), join(pluginDir, "opencode-loop.ts"))
     await rm(join(pluginDir, "opencode-loop.js"), { force: true })
   } else {
-    // V2 local plugins use the same Plugin.define entrypoint as the npm package.
-    // Keep the generated native runtime beside it as a supporting module instead
-    // of auto-discovering that implementation object as a second plugin.
-    await rm(join(pluginDir, "opencode-loop.ts"), { force: true })
-    await rm(join(pluginDir, "opencode-loop.js"), { force: true })
-    await mkdir(nativePluginDir, { recursive: true })
-    await copyFile(join(root, "src", "v2.js"), join(nativePluginDir, "index.js"))
-    await copyFile(join(root, "src", "native.js"), join(nativePluginDir, "native.js"))
+    throw new Error("Native OpenCode 2 package registration was not created")
   }
   if (legacyV1) {
     await mkdir(commandDir, { recursive: true })
@@ -388,11 +412,11 @@ async function installOrUpdate() {
   if (packageConfig.configured) {
     const pinResult = packageConfig.updatedFiles.length ? `pinned the config entry to ${packageSpec}` : `the config entry is already pinned to ${packageSpec}`
     console.log(`OpenCode Loop is already configured as a package in ${config}; ${pinResult} and removed the duplicate local plugin copy.`)
-  } else console.log(`Installed OpenCode Loop plugin to ${legacyV1 ? join(pluginDir, "opencode-loop.ts") : nativePluginDir}`)
+  } else console.log(`Installed OpenCode Loop compatibility plugin to ${join(pluginDir, "opencode-loop.ts")}`)
   if (legacyV1) {
     console.log(`Installed ${packageName} commands to ${commandDir}`)
     console.log(`Installed ${packageName} local command agent to ${agentDir}`)
-  } else console.log("Native OpenCode 2 commands are registered by the plugin; no legacy command files or V1 SDK are needed for a local install.")
+  } else console.log("Native OpenCode 2 is registered as an exact package plugin; OpenCode resolves @opencode/plugin from the package dependency graph. No loose local plugin copy, legacy command files, or V1 SDK are needed.")
   console.log("Restart OpenCode, then run: /loop-help")
 }
 
