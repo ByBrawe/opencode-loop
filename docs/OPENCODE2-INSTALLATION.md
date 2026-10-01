@@ -3,6 +3,27 @@
 This describes source/main changes, not a new npm release. The joint migration
 plan in OPENCODE2-MIGRATION.md still has runtime, parity and release audit work.
 
+## Recommended OpenCode 2 installation
+
+For new OpenCode 2 setups, install the dedicated Goal package separately and keep Loop focused on Loop responsibilities:
+
+```bash
+npx -y @bybrawe/opencode-goal@latest
+npx -y @bybrawe/opencode-loop@latest --loop-only --without-loop-goals
+```
+
+This is the preferred setup because `@bybrawe/opencode-goal` owns `/goal` and durable goal state directly, while Loop owns scheduling, repeated work and background execution. `--loop-only` prevents Loop from installing/updating the Goal companion, and `--without-loop-goals` disables Loop's older experimental `/loop-goal*` command layer without removing the dedicated Goal plugin.
+
+After both commands complete, fully restart OpenCode and verify:
+
+```text
+/goal status
+/loop-help
+/loop-doctor
+```
+
+The combined `--with-goals --without-loop-goals` installer path remains available as a convenience/compatibility option, but the explicit two-package installation above is recommended for new V2 installations.
+
 ## Goal installer
 
 Installation defaults to the native `plugins` configuration and the plugin's
