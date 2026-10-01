@@ -128,7 +128,7 @@ jobs:
           persist-credentials: false
       - name: Build exact Goal companion
         working-directory: companion-goal
-        run: npm install && npm run build
+        run: npm install --no-save --legacy-peer-deps @opencode/plugin@2.0.18 && test "$(node -p \"require('./node_modules/@opencode/plugin/package.json').version\")" = '2.0.18' && npm run build
       - name: Verify native joint installer without network package resolution
         env:
           OPENCODE_GOAL_INSTALLER: ${{ github.workspace }}/companion-goal/dist/install.js
