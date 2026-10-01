@@ -28,6 +28,7 @@ assert.match(workflow, /native-release\.mjs verify/)
 assert.match(workflow, /node_modules\/@bybrawe\/opencode-loop\/scripts\/opencode2-loop-canary.mjs/)
 assert.match(workflow, /node_modules\/@bybrawe\/opencode-goal\/dist\/server.js/)
 assert.match(workflow, /ref: \$\{\{ steps.release.outputs.goal_sha \}\}/)
+assert.match(workflow, /npm install --no-save --legacy-peer-deps @opencode\/plugin@2\.0\.18/, "immutable Goal companion must build against its pinned OpenCode 2.0.18 plugin contract")
 assert.doesNotMatch(workflow, /secrets\.NPM_TOKEN/)
 
 const publishIndex = workflow.indexOf("npm publish --access public")
