@@ -206,6 +206,53 @@ function findRootProperty(source, propertyName) {
   }
 }
 
+function removeRootProperty(source, propertyName) {
+  let index = skipTrivia(source, 0)
+  if (source[index] !== "{") throw new Error("OpenCode config must contain one root object")
+  index++
+  let previousComma
+
+  while (true) {
+    index = skipTrivia(source, index)
+    if (source[index] === "}") return source
+
+    const keyStart = index
+    const key = readJsonString(source, keyStart)
+    index = skipTrivia(source, key.end)
+    if (source[index] !== ":") throw new Error(`expected ':' after config property ${key.value}`)
+    const valueStart = skipTrivia(source, index + 1)
+    const valueEnd = skipJsonValue(source, valueStart)
+    const afterValue = skipTrivia(source, valueEnd)
+    const hadComma = source[afterValue] === ","
+
+    if (key.value === propertyName) {
+      if (hadComma) return `${source.slice(0, keyStart)}${source.slice(afterValue + 1)}`
+      if (previousComma !== undefined) return `${source.slice(0, previousComma)}${source.slice(valueEnd)}`
+      return `${source.slice(0, keyStart)}${source.slice(valueEnd)}`
+    }
+
+    if (hadComma) {
+      previousComma = afterValue
+      index = afterValue + 1
+      continue
+    }
+    if (source[afterValue] === "}") return source
+    throw new Error(`expected ',' or '}' after config property ${key.value}`)
+  }
+}
+
+function migrateLegacyPluginEntry(value) {
+  // Mirrors OpenCode 2.0.21 config normalization: strings stay strings and
+  // legacy [package, options] tuples become native { package, options } entries.
+  if (typeof value === "string") return value
+  if (Array.isArray(value)) {
+    if (value.length !== 2 || typeof value[0] !== "string" || !value[1] || typeof value[1] !== "object" || Array.isArray(value[1])) return undefined
+    return { package: value[0], options: value[1] }
+  }
+  if (value && typeof value === "object" && !Array.isArray(value) && typeof value.package === "string") return value
+  return undefined
+}
+
 function formatPluginArray(values, indent, eol) {
   if (!values.length) return "[]"
   const childIndent = `${indent}  `
@@ -263,11 +310,13 @@ async function configurePackagePlugin() {
       for (const key of ["plugin", "plugins"]) {
         if (parsed[key] !== undefined && !Array.isArray(parsed[key])) throw new Error(`OpenCode config '${key}' must be an array`)
       }
+
       let updated = source
       const own = [...(parsed.plugins || []), ...(parsed.plugin || [])].filter(isPackageSpec)
-      if (own.length) {
-        configured = true
-        if (legacyV1) {
+      if (own.length) configured = true
+
+      if (legacyV1) {
+        if (own.length) {
           for (const key of ["plugin", "plugins"]) {
             const entries = parsed[key] || []
             const matching = entries.filter(isPackageSpec)
@@ -275,17 +324,40 @@ async function configurePackagePlugin() {
             const pinned = pinRegistration(matching)
             updated = rewriteExistingPluginArray(updated, [...entries.filter((entry) => !isPackageSpec(entry)), pinned], key)
           }
-        } else {
-          const pinned = pinRegistration(own)
-          if (Array.isArray(parsed.plugin) && parsed.plugin.some(isPackageSpec)) {
-            updated = rewriteExistingPluginArray(updated, parsed.plugin.filter((entry) => !isPackageSpec(entry)), "plugin")
-          }
-          const next = [...(parsed.plugins || []).filter((entry) => !isPackageSpec(entry)), pinned]
-          updated = parsed.plugins === undefined
+        }
+      } else {
+        // Persist OpenCode 2.0.21's compatibility normalization so users do not
+        // accumulate parallel plugin/plugins blocks. Valid legacy entries move
+        // to native plugins in the same order; invalid values stay untouched.
+        const legacyEntries = parsed.plugin || []
+        const migratedLegacy = []
+        const retainedLegacy = []
+        for (const entry of legacyEntries.filter((entry) => !isPackageSpec(entry))) {
+          const migrated = migrateLegacyPluginEntry(entry)
+          if (migrated === undefined) retainedLegacy.push(entry)
+          else migratedLegacy.push(migrated)
+        }
+        if (legacyEntries.length) {
+          updated = retainedLegacy.length
+            ? rewriteExistingPluginArray(updated, retainedLegacy, "plugin")
+            : removeRootProperty(updated, "plugin")
+        }
+
+        const current = parseJsonc(updated)
+        const nativeEntries = current.plugins || []
+        if (!Array.isArray(nativeEntries)) throw new Error("OpenCode config 'plugins' must be an array")
+        const next = [
+          ...migratedLegacy,
+          ...nativeEntries.filter((entry) => !isPackageSpec(entry)),
+          ...(own.length ? [pinRegistration(own)] : []),
+        ]
+        if (migratedLegacy.length || own.length) {
+          updated = current.plugins === undefined
             ? appendPluginProperty(updated, next, "plugins")
             : rewriteExistingPluginArray(updated, next, "plugins")
         }
       }
+
       parseJsonc(updated)
       plans.push({ target, source, updated })
     } catch (error) {
