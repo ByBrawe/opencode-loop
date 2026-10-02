@@ -24,7 +24,7 @@ jobs:
             if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`)
             return response.json()
           }
-          for (const [repository, candidate] of [['opencode-goal', '1.3.43'], ['opencode-loop', '0.6.4']]) {
+          for (const [repository, candidate] of [['opencode-goal', '1.3.44'], ['opencode-loop', '0.6.5']]) {
             const pkg = '@bybrawe/' + repository
             const registry = await get('https://registry.npmjs.org/' + encodeURIComponent(pkg))
             const latest = registry['dist-tags'].latest

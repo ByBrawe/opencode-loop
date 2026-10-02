@@ -29,7 +29,7 @@ assert.match(workflow, /native-release\.mjs verify/)
 assert.match(workflow, /node_modules\/@bybrawe\/opencode-loop\/scripts\/opencode2-loop-canary.mjs/)
 assert.match(workflow, /node_modules\/@bybrawe\/opencode-goal\/dist\/server.js/)
 assert.match(workflow, /ref: \$\{\{ steps.release.outputs.goal_sha \}\}/)
-assert.match(workflow, /npm install --no-save --legacy-peer-deps @opencode\/plugin@2\.0\.18/, "immutable Goal companion must build against its pinned OpenCode 2.0.18 plugin contract")
+assert.match(workflow, /npm install --no-save --legacy-peer-deps @opencode\/plugin@2\.0\.22/, "immutable Goal companion must build against its pinned OpenCode 2.0.22 plugin contract")
 assert.match(nativeV2Workflow, /npm install --no-save --legacy-peer-deps @opencode\/plugin@2\.0\.18/, "Native V2 CI must pin the immutable Goal companion to the same OpenCode 2.0.18 plugin contract")
 assert.doesNotMatch(workflow, /secrets\.NPM_TOKEN/)
 
@@ -44,14 +44,14 @@ const publisher = workflow.slice(workflow.indexOf("  publish:\n"), workflow.inde
 assert.doesNotMatch(publisher, /contents:\s*write/, "OIDC publisher must not gain repository mutation privileges")
 
 const sha = "a".repeat(40)
-const request = { name: "@bybrawe/opencode-loop", version: "0.6.4", predecessor: "0.6.3", goal: { version: "1.3.43", sha: "b".repeat(40) } }
+const request = { name: "@bybrawe/opencode-loop", version: "0.6.5", predecessor: "0.6.4", goal: { version: "1.3.44", sha: "b".repeat(40) } }
 const pkg = { name: request.name, version: request.version }
 const env = { GITHUB_REPOSITORY: "ByBrawe/opencode-loop", GITHUB_REF: "refs/heads/main", GITHUB_SHA: sha }
 assert.strictEqual(validateRelease(request, pkg, env), request)
 for (const change of [{ GITHUB_REPOSITORY: "someone/fork" }, { GITHUB_REF: "refs/heads/release" }, { GITHUB_SHA: "main" }]) assert.throws(() => validateRelease(request, pkg, { ...env, ...change }))
 assert.throws(() => validateRelease({ ...request, version: "9.0.0" }, pkg, env))
-assert.throws(() => validateRelease(request, { ...pkg, version: "0.6.3" }, env))
-assert.equal(releaseDecision(404, null, request, sha, "0.6.3"), true)
+assert.throws(() => validateRelease(request, { ...pkg, version: "0.6.4" }, env))
+assert.equal(releaseDecision(404, null, request, sha, "0.6.4"), true)
 for (const status of [401, 403, 429, 500, 503]) assert.throws(() => releaseDecision(status, null, request, sha, "0.6.0"))
 assert.throws(() => releaseDecision(404, null, request, sha, "0.7.0"))
 const manifest = { ...pkg, gitHead: sha }

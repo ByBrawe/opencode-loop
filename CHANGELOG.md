@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.5 - 2026-10-02
+
+- Audit the native OpenCode 2 package contract against `@opencode/plugin@2.0.22` and pin the production SDK/runtime dependency to exact 2.0.22.
+- Preserve the exact OpenCode 2.0.18 native pair as a backwards-compatibility gate while also requiring the moving latest-host pair; the real latest gate passes on OpenCode 2.0.22.
+- Keep Ubuntu and Windows native bundle, regression, package-smoke, real-adapter, V1 peer-compatibility, and Loop+Goal coexistence gates green with the 2.0.22 dependency graph.
+- Pair the release with Goal 1.3.44, which carries the same SDK audit plus persisted execution-ownership recovery and current OpenTUI peer alignment.
+
 ## 0.6.4 - 2026-10-02
 
 - Persist OpenCode 2 native plugin configuration as one canonical plural `plugins` list instead of leaving valid legacy `plugin` entries in a parallel top-level block.
