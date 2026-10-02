@@ -348,12 +348,14 @@ async function testActionRoutingAndSafety() {
   try {
     await h.command("loop-shell", "0s --safe Remove-Item -Recurse ./important")
     await h.command("loop-now", "shell")
-    await delay(25)
+    const state = await waitForValue(async () => {
+      const candidate = await h.readState()
+      return candidate.jobs[0]?.paused === true && candidate.jobs[0]?.lastFailureReason === "safe_shell_blocked" ? candidate : undefined
+    }, 2_000)
     assert.equal(h.records.shells.length, 0)
-    const state = await h.readState()
-    assert.equal(state.jobs[0].paused, true, "a blocked synchronous action must pause instead of retrying forever")
-    assert.equal(state.jobs[0].failureCount, 1)
-    assert.equal(state.jobs[0].lastFailureReason, "safe_shell_blocked")
+    assert.equal(state?.jobs[0]?.paused, true, "a blocked synchronous action must pause instead of retrying forever")
+    assert.equal(state?.jobs[0]?.failureCount, 1)
+    assert.equal(state?.jobs[0]?.lastFailureReason, "safe_shell_blocked")
 
     await h.command("loop-clear")
     await h.command("loop-shell", "0s --safe rm -r -f ./important")
