@@ -24,7 +24,10 @@ try {
   assert.deepEqual(JSON.parse(await readFile(file, "utf8")).plugin, [other, [spec, options]])
   result = run()
   assert.equal(result.status, 0, result.stderr)
-  assert.deepEqual(JSON.parse(await readFile(file, "utf8")), { plugin: [other], plugins: [{ package: spec, options }] })
+  assert.deepEqual(JSON.parse(await readFile(file, "utf8")), { plugins: [
+    { package: "other-plugin", options: { enabled: false } },
+    { package: spec, options },
+  ] })
   const migrated = await readFile(file, "utf8")
   assert.equal(run().status, 0)
   assert.equal(await readFile(file, "utf8"), migrated)
