@@ -64,7 +64,30 @@ try {
 
   const both = await config("both", { plugin: ["legacy-unrelated", "@bybrawe/opencode-loop@old"], plugins: [options, "native-unrelated"] })
   run(both)
-  assert.deepEqual(await readConfig(both), { plugin: ["legacy-unrelated"], plugins: ["native-unrelated", { ...options, package: spec }] })
+  assert.deepEqual(await readConfig(both), { plugins: ["legacy-unrelated", "native-unrelated", { ...options, package: spec }] })
+  cases++
+
+  const userLegacy = await config("user-legacy", {
+    $schema: "https://opencode.ai/config.json",
+    plugin: [
+      "opencode-antigravity-auth@beta",
+      "@tarquinen/opencode-dcp@latest",
+      "opencode-power-pack@git+https://github.com/waybarrios/opencode-power-pack.git",
+    ],
+    provider: { google: { models: { demo: { name: "Demo" } } } },
+    model: "",
+  })
+  run(userLegacy)
+  const canonicalUser = await readConfig(userLegacy)
+  assert.equal("plugin" in canonicalUser, false)
+  assert.deepEqual(canonicalUser.plugins, [
+    "opencode-antigravity-auth@beta",
+    "@tarquinen/opencode-dcp@latest",
+    "opencode-power-pack@git+https://github.com/waybarrios/opencode-power-pack.git",
+    spec,
+  ])
+  assert.deepEqual(canonicalUser.provider, { google: { models: { demo: { name: "Demo" } } } })
+  assert.equal(canonicalUser.model, "")
   cases++
 
   const jsonc = await config("jsonc", '{\r\n  // keep-before\r\n  "theme": "url://example",\r\n  "plugin": ["@bybrawe/opencode-loop@old"] // keep-after\r\n}\r\n')
