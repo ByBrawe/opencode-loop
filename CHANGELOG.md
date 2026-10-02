@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.4 - 2026-10-02
+
+- Persist OpenCode 2 native plugin configuration as one canonical plural `plugins` list instead of leaving valid legacy `plugin` entries in a parallel top-level block.
+- Mirror OpenCode 2.0.21 normalization semantics: strings remain strings and valid legacy `[package, options]` tuples become native `{ package, options }` entries in order ahead of existing native registrations.
+- Preserve malformed/unrecognized legacy entries and unrelated provider/model configuration instead of deleting or rewriting user-owned settings.
+- Pin `@opencode/plugin` to exact 2.0.18 so package resolution and CI/release builds cannot drift to a newer SDK with a different peer graph.
+- Replace a 25 ms blocked-shell test race with deterministic state waiting and update Goal+Loop installer regressions for the canonical single-list configuration.
+- Remove the redundant post-publish `npm view` cache check; the retrying direct registry verifier already proves exact version, gitHead and latest tag.
+
 ## 0.6.3 - 2026-10-02
 
 - Fix native OpenCode 2 fresh installs on Windows/Linux by registering the exact published Loop package in plural `plugins` instead of copying a loose global `plugins/opencode-loop` directory.

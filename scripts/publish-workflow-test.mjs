@@ -24,7 +24,7 @@ assert.match(workflow, /windows-latest/)
 assert.match(workflow, /Decide whether npm publish is needed/)
 assert.match(workflow, /steps\.npm-state\.outputs\.publish == 'true'/)
 assert.match(workflow, /for attempt in \{1\.\.60\}/)
-assert.match(workflow, /--registry=https:\/\/registry\.npmjs\.org/)
+assert.doesNotMatch(workflow, /npm view @bybrawe\/opencode-loop@latest/, "direct registry verification already checks latest; do not add a stale npm-view cache gate")
 assert.match(workflow, /native-release\.mjs verify/)
 assert.match(workflow, /node_modules\/@bybrawe\/opencode-loop\/scripts\/opencode2-loop-canary.mjs/)
 assert.match(workflow, /node_modules\/@bybrawe\/opencode-goal\/dist\/server.js/)
@@ -44,14 +44,14 @@ const publisher = workflow.slice(workflow.indexOf("  publish:\n"), workflow.inde
 assert.doesNotMatch(publisher, /contents:\s*write/, "OIDC publisher must not gain repository mutation privileges")
 
 const sha = "a".repeat(40)
-const request = { name: "@bybrawe/opencode-loop", version: "0.6.3", predecessor: "0.6.2", goal: { version: "1.3.42", sha: "b".repeat(40) } }
+const request = { name: "@bybrawe/opencode-loop", version: "0.6.4", predecessor: "0.6.3", goal: { version: "1.3.43", sha: "b".repeat(40) } }
 const pkg = { name: request.name, version: request.version }
 const env = { GITHUB_REPOSITORY: "ByBrawe/opencode-loop", GITHUB_REF: "refs/heads/main", GITHUB_SHA: sha }
 assert.strictEqual(validateRelease(request, pkg, env), request)
 for (const change of [{ GITHUB_REPOSITORY: "someone/fork" }, { GITHUB_REF: "refs/heads/release" }, { GITHUB_SHA: "main" }]) assert.throws(() => validateRelease(request, pkg, { ...env, ...change }))
 assert.throws(() => validateRelease({ ...request, version: "9.0.0" }, pkg, env))
-assert.throws(() => validateRelease(request, { ...pkg, version: "0.6.2" }, env))
-assert.equal(releaseDecision(404, null, request, sha, "0.6.2"), true)
+assert.throws(() => validateRelease(request, { ...pkg, version: "0.6.3" }, env))
+assert.equal(releaseDecision(404, null, request, sha, "0.6.3"), true)
 for (const status of [401, 403, 429, 500, 503]) assert.throws(() => releaseDecision(status, null, request, sha, "0.6.0"))
 assert.throws(() => releaseDecision(404, null, request, sha, "0.7.0"))
 const manifest = { ...pkg, gitHead: sha }

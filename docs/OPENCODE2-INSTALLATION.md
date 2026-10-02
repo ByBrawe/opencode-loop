@@ -1,6 +1,6 @@
 # Native OpenCode 2 installation and CLI migration
 
-This documents the native OpenCode 2 installation contract. Loop 0.6.3 uses
+This documents the native OpenCode 2 installation contract. Loop 0.6.4 uses
 package registration for the default V2 install so runtime dependencies resolve
 from the published package instead of from a loose global plugin copy.
 
@@ -75,7 +75,7 @@ needs its external dependencies installed in the OpenCode config dependency
 project; 0.6.1/0.6.2 did not materialize that dependency and could fail with
 `Cannot find package '@opencode/plugin'`.
 
-Updating with 0.6.3 migrates that older loose layout automatically: the exact
+Updating with 0.6.4 migrates that older loose layout automatically and canonicalizes valid legacy `plugin` registrations into the native plural `plugins` list: the exact
 package registration is added and known `plugins/opencode-loop`,
 `opencode-loop.ts`, and `opencode-loop.js` copies are removed. User project
 Loop state remains untouched.

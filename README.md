@@ -1,10 +1,10 @@
 # OpenCode Loop
 
-## Native OpenCode 2 (0.6.3)
+## Native OpenCode 2 (0.6.4)
 
 The npm and V2 entrypoints use the official `@opencode/plugin` `Plugin.define()` contract. The installer now registers the exact `@bybrawe/opencode-loop` package in OpenCode's plural `plugins` configuration instead of copying a loose global plugin directory. OpenCode therefore resolves `@opencode/plugin` from Loop's own production dependency graph; explicit `--legacy-v1` remains a separate compatibility path.
 
-The installer defaults to the native V2 package plugin. It needs no loose local V2 copy, V1 SDK, or legacy command files. Existing npm registrations migrate from `plugin` to `plugins` without dropping object options, and 0.6.1/0.6.2 loose `plugins/opencode-loop` installs are removed on update. Use `--legacy-v1` explicitly for the compatibility installation.
+The installer defaults to the native V2 package plugin. It needs no loose local V2 copy, V1 SDK, or legacy command files. Valid legacy `plugin` registrations are now persisted into the single native `plugins` list using OpenCode 2.0.21's own normalization semantics, so native installs no longer leave parallel `plugin` and `plugins` blocks. Object options and entry order are preserved, malformed legacy values are left untouched, and unrelated provider/model settings are not rewritten. Existing 0.6.1/0.6.2 loose `plugins/opencode-loop` installs are still removed on update. Use `--legacy-v1` explicitly for the compatibility installation.
 
 V2 prompt admission and durable inbox/execution/compaction events own scheduling. Core-generated user-role messages never authorize a session abort. An unfinished dedicated Goal reserves its session, including paused and handed-off states; Loop does not wake or replace that Goal. Soft iteration timeouts do not abort a native model/tool/compaction turn.
 
@@ -17,7 +17,7 @@ Prompt/command timers, watch and stop conditions, verification, preflight/postru
 
 OpenCode Loop adds `/loop`, scheduled prompt/command/shell jobs, compact scheduling, verification/checkpoints, and the `opencode-loopd` background daemon.
 
-> **Current stable release: `0.6.3`.**
+> **Current stable release: `0.6.4`.**
 
 ## Install or update
 
@@ -42,7 +42,7 @@ This is the recommended split for OpenCode 2:
 - `--loop-only` prevents the Loop installer from installing/updating the Goal companion.
 - `--without-loop-goals` removes only Loop's older experimental `/loop-goal*` command files; it does not remove the dedicated OpenCode Goal plugin.
 
-Run the same two commands again to update both packages. Loop 0.6.3 also migrates the earlier 0.6.1/0.6.2 loose global V2 install that could fail with `Cannot find package '@opencode/plugin'`; the update removes that loose copy and pins the published package in `plugins` instead. Then **fully restart OpenCode** and verify:
+Run the same two commands again to update both packages. Loop 0.6.4 also canonicalizes valid legacy `plugin` entries into the native `plugins` list; earlier 0.6.1/0.6.2 loose global V2 installs are removed and replaced by the pinned published package. Then **fully restart OpenCode** and verify:
 
 ```text
 /goal status
