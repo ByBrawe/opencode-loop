@@ -382,7 +382,7 @@ Recommended choices are to finish/pause the Goal or use a separate session. Adva
 
 That escape hatch can create competing autonomous turns; use it only when that is intentional.
 
-Loop's older experimental `/loop-goal*` commands remain available for compatibility unless installed with `--without-loop-goals`. For new strongly verified Goal work, prefer:
+Loop's older experimental `/loop-goal*` commands are omitted by default. They remain available only as an explicit compatibility opt-in with `--with-loop-goals`. For new strongly verified Goal work, use the separate [OpenCode Goal](https://github.com/ByBrawe/opencode-goal) plugin:
 
 ```bash
 npx -y @bybrawe/opencode-goal@latest
