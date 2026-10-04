@@ -156,8 +156,6 @@ replaceFunction(file, "async function installOrUpdate()", "if (uninstallRequeste
 for (const testFile of ["scripts/install-test.mjs", "scripts/goal-companion-test.mjs"]) edit(testFile, '[installer, ...cliArgs]', '[installer, "--legacy-v1", ...cliArgs]')
 const companion = "scripts/install-with-goals.mjs"
 edit(companion, 'const uninstallRequested = loopArgs.length === 1 && ["--uninstall", "uninstall", "--remove"].includes(loopArgs[0] || "")', 'const commandArgs = loopArgs.filter((arg) => arg !== "--legacy-v1")\nconst uninstallRequested = commandArgs.length === 1 && ["--uninstall", "uninstall", "--remove"].includes(commandArgs[0] || "")')
-edit(companion, 'function isGoalPluginSpec(value) {\n  if (typeof value !== "string") return false', 'function isGoalPluginSpec(value) {\n  if (value && typeof value === "object") value = value.package\n  if (typeof value !== "string") return false')
-edit(companion, 'if (Array.isArray(parsed.plugin) && parsed.plugin.some(isGoalPluginSpec)) return true', 'if ([parsed.plugin, parsed.plugins].some((entries) => Array.isArray(entries) && entries.some(isGoalPluginSpec))) return true')
 const pkg = JSON.parse(readFileSync("package.json", "utf8"))
 if (!pkg.scripts.test.includes("scripts/native-install-test.mjs")) pkg.scripts.test = "node scripts/native-install-test.mjs && " + pkg.scripts.test
 writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n")
