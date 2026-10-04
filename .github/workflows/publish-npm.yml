@@ -82,7 +82,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/packed" "$RUNNER_TEMP/consumer"
           npm pack --pack-destination "$RUNNER_TEMP/packed"
           (cd companion-goal && npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/packed")
-          (cd "$RUNNER_TEMP/consumer" && npm init -y >/dev/null && npm install --omit=dev --omit=peer --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP/packed/bybrawe-opencode-loop-0.6.5.tgz" "$RUNNER_TEMP/packed/bybrawe-opencode-goal-1.3.44.tgz")
+          (cd "$RUNNER_TEMP/consumer" && npm init -y >/dev/null && npm install --omit=dev --omit=peer --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP/packed/bybrawe-opencode-loop-0.6.6.tgz" "$RUNNER_TEMP/packed/bybrawe-opencode-goal-1.3.47.tgz")
           npm install --prefix "$RUNNER_TEMP/native-host" --package-lock=false @opencode/cli@2.0.18
       - name: Real OpenCode with both installed packages, command presets and daemon
         shell: bash
@@ -154,7 +154,7 @@ jobs:
         run: |
           VERIFY_DIR="$(mktemp -d)"
           trap 'rm -rf "$VERIFY_DIR"' EXIT
-          (cd "$VERIFY_DIR" && npm init -y >/dev/null && npm install --omit=dev --omit=peer --ignore-scripts --no-audit --no-fund @bybrawe/opencode-loop@0.6.5 @bybrawe/opencode-goal@1.3.44)
+          (cd "$VERIFY_DIR" && npm init -y >/dev/null && npm install --omit=dev --omit=peer --ignore-scripts --no-audit --no-fund @bybrawe/opencode-loop@0.6.6 @bybrawe/opencode-goal@1.3.47)
           npm install --prefix "$VERIFY_DIR/host" --package-lock=false @opencode/cli@2.0.18
           export OPENCODE2_BINARY="$VERIFY_DIR/host/node_modules/.bin/opencode2"
           export OPENCODE_GOAL_INSTALLER="$VERIFY_DIR/node_modules/@bybrawe/opencode-goal/dist/install.js"
