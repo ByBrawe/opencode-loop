@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.6 - 2026-10-04
 
 - Make a normal Loop install/update strictly Loop-only: it no longer installs, detects, refreshes, migrates, or modifies the dedicated `@bybrawe/opencode-goal` package.
 - Omit Loop's legacy experimental `/loop-goal*` commands by default; retain them only behind explicit `--with-loop-goals` compatibility opt-in.
