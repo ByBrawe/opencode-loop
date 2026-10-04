@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Make a normal Loop install/update strictly Loop-only: it no longer installs, detects, refreshes, migrates, or modifies the dedicated `@bybrawe/opencode-goal` package.
+- Omit Loop's legacy experimental `/loop-goal*` commands by default; retain them only behind explicit `--with-loop-goals` compatibility opt-in.
+- Keep `--with-goals` as the explicit combined-install opt-in, while recommending the independently installable OpenCode Goal plugin for durable verified goals.
+- Link Loop and Goal documentation directly so the two packages remain complementary without hidden installer coupling.
+
 ## 0.6.5 - 2026-10-02
 
 - Audit the native OpenCode 2 package contract against `@opencode/plugin@2.0.22` and pin the production SDK/runtime dependency to exact 2.0.22.
