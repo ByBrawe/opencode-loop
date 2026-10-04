@@ -1,6 +1,6 @@
 # Native OpenCode 2 installation and CLI migration
 
-This documents the native OpenCode 2 installation contract. Loop 0.6.5 uses
+This documents the native OpenCode 2 installation contract. Loop 0.6.6 uses
 package registration for the default V2 install so runtime dependencies resolve
 from the published package instead of from a loose global plugin copy.
 
