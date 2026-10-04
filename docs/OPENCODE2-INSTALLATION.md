@@ -6,24 +6,57 @@ from the published package instead of from a loose global plugin copy.
 
 ## Recommended OpenCode 2 installation
 
-For new OpenCode 2 setups, install the dedicated Goal package separately and keep Loop focused on Loop responsibilities:
+For new OpenCode 2 setups, install Loop by itself:
+
+```bash
+npx -y @bybrawe/opencode-loop@latest
+```
+
+This is the default contract. Loop installation and updates do not install, detect,
+refresh, migrate, or modify the dedicated `@bybrawe/opencode-goal` package. Loop's
+older experimental `/loop-goal*` command files are also omitted by default.
+
+For durable outcome-driven work, install the dedicated Goal plugin independently:
 
 ```bash
 npx -y @bybrawe/opencode-goal@latest
-npx -y @bybrawe/opencode-loop@latest --loop-only --without-loop-goals
 ```
 
-This is the preferred setup because `@bybrawe/opencode-goal` owns `/goal` and durable goal state directly, while Loop owns scheduling, repeated work and background execution. `--loop-only` prevents Loop from installing/updating the Goal companion, and `--without-loop-goals` disables Loop's older experimental `/loop-goal*` command layer without removing the dedicated Goal plugin.
+The packages remain complementary but independently installable:
 
-After both commands complete, fully restart OpenCode and verify:
+- **OpenCode Loop** owns `/loop`, scheduling, repeated prompts/commands/shell work,
+  and `opencode-loopd`.
+- **OpenCode Goal** owns `/goal`, durable objective state, evidence, verification,
+  restart recovery, and semantic completion.
+
+To explicitly install/update both from the Loop installer, opt in:
+
+```bash
+npx -y @bybrawe/opencode-loop@latest --with-goals
+```
+
+To explicitly restore Loop's legacy experimental Goal command surface:
+
+```bash
+npx -y @bybrawe/opencode-loop@latest --with-loop-goals
+```
+
+That legacy surface is retained only for compatibility and is not recommended for
+new setups. `--loop-only` is an explicit alias for the default Loop-only behavior;
+`--without-loop-goals` is an explicit alias for the default clean command surface.
+
+After installation, fully restart OpenCode and verify Loop with:
 
 ```text
-/goal status
 /loop-help
 /loop-doctor
 ```
 
-The combined `--with-goals --without-loop-goals` installer path remains available as a convenience/compatibility option, but the explicit two-package installation above is recommended for new V2 installations.
+If Goal is installed too, also verify:
+
+```text
+/goal status
+```
 
 ## Goal installer
 
@@ -51,16 +84,21 @@ both installers; an explicit V1 update preserves the tuple. Malformed owned
 tuples and conflicting duplicate options fail before writes. Unrelated
 plugin registrations are not converted.
 
-## Combined installation
+## Optional combined installation
 
-Loop supplies its chosen dialect to the Goal companion, including when an older
-Goal package is still the published latest version. A native Loop install cannot
-accidentally select a V1 Goal bridge because an old binary appears first on PATH.
+Combined installation is strictly opt-in. With `--with-goals`, Loop supplies its
+chosen dialect to the Goal companion, including when an older Goal package is still
+the published latest version. A native Loop install cannot accidentally select a
+V1 Goal bridge because an old binary appears first on PATH.
 `--legacy-v1 --with-goals` selects V1 for both installers.
 
-Loop's `--without-loop-goals` cleanup removes packaged/recognized bridge files,
-not arbitrary user-authored files with the same names. Loop uninstall leaves the
-Goal companion and project Goal state intact.
+Without `--with-goals`, the Loop installer performs no Goal companion network work
+and does not update an already-installed Goal package.
+
+Loop omits packaged/recognized legacy `/loop-goal*` bridge files by default.
+`--with-loop-goals` explicitly restores them for compatibility; cleanup never
+removes arbitrary user-authored files with the same names. Loop uninstall leaves
+the dedicated Goal plugin and project Goal state intact.
 
 ## Native Loop package installation
 
