@@ -1,7 +1,7 @@
 {
   "name": "@bybrawe/opencode-loop",
   "version": "0.6.5",
-  "description": "Claude Code/Codex style /loop and experimental goal mode for OpenCode: heartbeat scheduler, idle-safe loops, scheduled commands, compact scheduling, verification, checkpoints, and persistent coding goals.",
+  "description": "Idle-safe /loop scheduling and background automation for OpenCode, with optional legacy Loop Goal compatibility and a separately installable OpenCode Goal companion.",
   "type": "module",
   "main": "src/plugin.js",
   "exports": {
