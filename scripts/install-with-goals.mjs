@@ -16,8 +16,9 @@ const managedGoalCommandMarker = "<!-- managed-by:@bybrawe/opencode-goal -->"
 const rawArgs = process.argv.slice(2)
 const withGoals = rawArgs.includes("--with-goals")
 const loopOnly = rawArgs.includes("--loop-only")
+const withLoopGoals = rawArgs.includes("--with-loop-goals")
 const withoutLoopGoals = rawArgs.includes("--without-loop-goals")
-const loopArgs = rawArgs.filter((arg) => !["--with-goals", "--loop-only", "--without-loop-goals"].includes(arg))
+const loopArgs = rawArgs.filter((arg) => !["--with-goals", "--loop-only", "--with-loop-goals", "--without-loop-goals"].includes(arg))
 const commandArgs = loopArgs.filter((arg) => arg !== "--legacy-v1")
 const uninstallRequested = commandArgs.length === 1 && ["--uninstall", "uninstall", "--remove"].includes(commandArgs[0] || "")
 const helpRequested = loopArgs.some((arg) => ["--help", "-h"].includes(arg))
@@ -178,12 +179,17 @@ function statusCode(result) {
 }
 
 function printCompanionHelp() {
-  console.log(`\nOpenCode Goals companion options:\n  --with-goals          Install/update @bybrawe/opencode-goal@latest even when it is not already installed.\n  --loop-only           Skip all OpenCode Goals companion detection and network update work.\n  --without-loop-goals  Omit/remove Loop's packaged experimental /loop-goal* command files for this install/update.\n\nNormal Loop install/update refreshes an already-managed OpenCode Goals installation on a best-effort basis. Loop uninstall never removes Goals.`)
+  console.log(`\nOpenCode Goal options:\n  --with-goals          Explicitly install/update @bybrawe/opencode-goal@latest after Loop.\n  --loop-only           Explicit alias for the default: install/update Loop only and never touch Goal.\n  --with-loop-goals     Also install Loop's legacy experimental /loop-goal* command files (not recommended).\n  --without-loop-goals  Compatibility alias for the default: omit/remove legacy /loop-goal* commands.\n\nDefault install/update touches only OpenCode Loop. For durable outcome-driven work, install OpenCode Goal separately with: npx -y @bybrawe/opencode-goal@latest. Loop uninstall never removes Goal.`)
 }
 
 async function main() {
   if (withGoals && loopOnly) {
     console.error("Use either --with-goals or --loop-only, not both.")
+    process.exitCode = 2
+    return
+  }
+  if (withLoopGoals && withoutLoopGoals) {
+    console.error("Use either --with-loop-goals or --without-loop-goals, not both.")
     process.exitCode = 2
     return
   }
@@ -206,18 +212,17 @@ async function main() {
   }
   if (uninstallRequested) return
 
-  if (withoutLoopGoals) {
+  if (!withLoopGoals) {
     const removed = await removeLoopGoalCommands()
-    console.log(`Omitted ${removed} packaged experimental /loop-goal* command file(s) (--without-loop-goals).`)
+    const reason = withoutLoopGoals ? "--without-loop-goals" : "default Loop-only command surface"
+    console.log(`Omitted ${removed} packaged experimental /loop-goal* command file(s) (${reason}).`)
   }
 
-  if (loopOnly) {
-    console.log("Skipped OpenCode Goals companion update (--loop-only).")
+  if (!withGoals) {
+    if (loopOnly) console.log("Installed/updated OpenCode Loop only (--loop-only).")
+    else console.log("Installed/updated OpenCode Loop only. OpenCode Goal is optional and recommended for durable goals: npx -y @bybrawe/opencode-goal@latest")
     return
   }
-
-  const alreadyInstalled = await goalsAlreadyInstalled()
-  if (!alreadyInstalled && !withGoals) return
 
   const goalResult = runGoalInstaller()
   const goalCode = statusCode(goalResult)
