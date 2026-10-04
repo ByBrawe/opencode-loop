@@ -23,27 +23,23 @@ OpenCode Loop adds `/loop`, scheduled prompt/command/shell jobs, compact schedul
 
 ### Recommended OpenCode 2 setup
 
-Install **Loop by itself**:
+Install **both packages separately**:
 
 ```bash
 npx -y @bybrawe/opencode-loop@latest
-```
-
-That is now the default contract. A normal Loop install/update:
-
-- installs or updates **OpenCode Loop only**;
-- does **not** install, detect, refresh, migrate, or otherwise modify `@bybrawe/opencode-goal`;
-- omits/removes Loop's older experimental `/loop-goal*` command files by default.
-
-For durable outcome-driven work, **OpenCode Goal is recommended but optional**. Install it independently:
-
-```bash
 npx -y @bybrawe/opencode-goal@latest
 ```
 
+This is the recommended setup. The two installers stay independent:
+
+- the Loop command installs or updates **OpenCode Loop only**;
+- the Goal command installs or updates the dedicated **OpenCode Goal** plugin;
+- Loop does **not** install, detect, refresh, migrate, or otherwise modify `@bybrawe/opencode-goal` during a normal install/update;
+- Loop omits/removes its older experimental `/loop-goal*` command files by default.
+
 OpenCode Goal owns `/goal`, durable objective state, evidence, verification, restart recovery, and semantic completion. See [OpenCode Goal](https://github.com/ByBrawe/opencode-goal).
 
-If you explicitly want Loop to install/update the dedicated Goal companion in the same command, opt in with:
+A combined `--with-goals` path remains only as a compatibility/convenience option; the recommended setup is the two separate commands above:
 
 ```bash
 npx -y @bybrawe/opencode-loop@latest --with-goals
