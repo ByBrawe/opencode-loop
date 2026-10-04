@@ -6,21 +6,17 @@ from the published package instead of from a loose global plugin copy.
 
 ## Recommended OpenCode 2 installation
 
-For new OpenCode 2 setups, install Loop by itself:
+For new OpenCode 2 setups, install both packages independently:
 
 ```bash
 npx -y @bybrawe/opencode-loop@latest
-```
-
-This is the default contract. Loop installation and updates do not install, detect,
-refresh, migrate, or modify the dedicated `@bybrawe/opencode-goal` package. Loop's
-older experimental `/loop-goal*` command files are also omitted by default.
-
-For durable outcome-driven work, install the dedicated Goal plugin independently:
-
-```bash
 npx -y @bybrawe/opencode-goal@latest
 ```
+
+This is the recommended setup. Loop installation and updates do not install, detect,
+refresh, migrate, or modify the dedicated `@bybrawe/opencode-goal` package; Goal
+is installed and updated by its own installer. Loop's older experimental
+`/loop-goal*` command files are omitted by default.
 
 The packages remain complementary but independently installable:
 
@@ -29,7 +25,7 @@ The packages remain complementary but independently installable:
 - **OpenCode Goal** owns `/goal`, durable objective state, evidence, verification,
   restart recovery, and semantic completion.
 
-To explicitly install/update both from the Loop installer, opt in:
+For compatibility/convenience only, Loop can still explicitly install/update both with:
 
 ```bash
 npx -y @bybrawe/opencode-loop@latest --with-goals
