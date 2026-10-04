@@ -1,11 +1,11 @@
 {
   "name": "@bybrawe/opencode-loop",
-  "version": "0.6.5",
-  "predecessor": "0.6.4",
+  "version": "0.6.6",
+  "predecessor": "0.6.5",
   "goal": {
-    "version": "1.3.44",
-    "sha": "5f6676c78472cf8c0018afc42d5e19edc2e87dea"
+    "version": "1.3.47",
+    "sha": "cc1f5ea450d672c5b936f3b36e02d8c42af9e858"
   },
-  "requestedAt": "2026-10-03",
-  "reason": "User-authorized OpenCode 2.0.22 patch release from main. Publish Loop 0.6.5 after immutable Goal 1.3.44. Pin the native SDK/runtime dependency to @opencode/plugin 2.0.22, preserve exact OpenCode 2.0.18 backwards-host coverage, and require Ubuntu/Windows native regressions, package smoke, real adapter, latest-host Loop+Goal coexistence, and trusted-publish verification before publication."
+  "requestedAt": "2026-10-04",
+  "reason": "User-authorized installer contract patch from main. Publish Loop 0.6.6 with Loop-only installation as the default: do not install, detect, refresh, migrate, or modify the dedicated OpenCode Goal package unless --with-goals is explicitly requested; omit legacy /loop-goal* commands unless --with-loop-goals is explicitly requested; recommend the independently installable Goal 1.3.47 companion and preserve cross-plugin coexistence gates."
 }
