@@ -4,8 +4,8 @@
   "predecessor": "0.6.5",
   "goal": {
     "version": "1.3.47",
-    "sha": "cc1f5ea450d672c5b936f3b36e02d8c42af9e858"
+    "sha": "0f44b5df1188a03204a6dc8d790e76e32b4da810"
   },
   "requestedAt": "2026-10-04",
-  "reason": "User-authorized installer contract patch from main. Publish Loop 0.6.6 with Loop-only installation as the default: do not install, detect, refresh, migrate, or modify the dedicated OpenCode Goal package unless --with-goals is explicitly requested; omit legacy /loop-goal* commands unless --with-loop-goals is explicitly requested; recommend the independently installable Goal 1.3.47 companion and preserve cross-plugin coexistence gates. Final release workflow is aligned to v0.6.6 tags/artifacts and the 0.6.6 release notes."
+  "reason": "User-authorized installer contract patch from main. Publish Loop 0.6.6 with Loop-only installation as the default: do not install, detect, refresh, migrate, or modify the dedicated OpenCode Goal package unless --with-goals is explicitly requested; omit legacy /loop-goal* commands unless --with-loop-goals is explicitly requested; recommend the independently installable Goal 1.3.47 companion and preserve cross-plugin coexistence gates. Final release workflow is aligned to v0.6.6 tags/artifacts and the 0.6.6 release notes. Goal 1.3.47 is pinned to its retriggered current-main release candidate."
 }
