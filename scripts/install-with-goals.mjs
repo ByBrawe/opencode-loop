@@ -79,7 +79,7 @@ function statusCode(result) {
 }
 
 function printCompanionHelp() {
-  console.log(`\nOpenCode Goal options:\n  --with-goals          Explicitly install/update @bybrawe/opencode-goal@latest after Loop.\n  --loop-only           Explicit alias for the default: install/update Loop only and never touch Goal.\n  --with-loop-goals     Also install Loop's legacy experimental /loop-goal* command files (not recommended).\n  --without-loop-goals  Compatibility alias for the default: omit/remove legacy /loop-goal* commands.\n\nDefault install/update touches only OpenCode Loop. For durable outcome-driven work, install OpenCode Goal separately with: npx -y @bybrawe/opencode-goal@latest. Loop uninstall never removes Goal.`)
+  console.log(`\nOpenCode Goal options:\n  --with-goals          Explicitly install/update @bybrawe/opencode-goal@latest after Loop.\n  --loop-only           Explicit alias for the default: install/update Loop only and never touch Goal.\n  --with-loop-goals     Also install Loop's legacy experimental /loop-goal* command files (not recommended).\n  --without-loop-goals  Compatibility alias for the default: omit/remove legacy /loop-goal* commands.\n\nDefault install/update touches only OpenCode Loop. Recommended setup: install OpenCode Goal separately with: npx -y @bybrawe/opencode-goal@latest. Loop uninstall never removes Goal.`)
 }
 
 async function main() {
@@ -120,7 +120,7 @@ async function main() {
 
   if (!withGoals) {
     if (loopOnly) console.log("Installed/updated OpenCode Loop only (--loop-only).")
-    else console.log("Installed/updated OpenCode Loop only. OpenCode Goal is optional and recommended for durable goals: npx -y @bybrawe/opencode-goal@latest")
+    else console.log("Installed/updated OpenCode Loop only. Recommended companion install (separate command): npx -y @bybrawe/opencode-goal@latest")
     return
   }
 
