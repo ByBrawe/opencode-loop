@@ -1325,7 +1325,7 @@ var init_job_workspace = __esm(() => {
 });
 
 // src/source/opencode2/native-plugin.js
-import path9 from "path";
+import path10 from "path";
 
 // src/source/opencode2/session-location.js
 import path from "path";
@@ -3107,13 +3107,289 @@ function createOpenCode2EventBridge({
   });
 }
 
+// src/source/opencode2/status-rpc.js
+init_state();
+import path8 from "path";
+
+// src/source/status-rpc.js
+var RESERVED_ERROR_PREFIX = "rpc.";
+function assertNoReservedErrors(definition) {
+  for (const method of Object.values(definition.methods)) {
+    for (const name of Object.keys(method?.errors ?? {})) {
+      if (name.startsWith(RESERVED_ERROR_PREFIX)) {
+        throw new Error(`RPC error names starting with "${RESERVED_ERROR_PREFIX}" are reserved: ${name}`);
+      }
+    }
+  }
+}
+var LoopStatusRpc = Object.freeze({
+  id: "bybrawe-opencode-loop-status",
+  methods: Object.freeze({
+    read: Object.freeze({
+      input: Object.freeze({
+        type: "object",
+        additionalProperties: false,
+        properties: Object.freeze({ sessionID: Object.freeze({ type: "string", minLength: 1, maxLength: 256 }) }),
+        required: Object.freeze(["sessionID"])
+      }),
+      output: Object.freeze({
+        type: "object",
+        additionalProperties: false,
+        properties: Object.freeze({
+          schemaVersion: Object.freeze({ type: "integer", const: 1 }),
+          sessionID: Object.freeze({ type: "string" }),
+          directory: Object.freeze({ type: "string" }),
+          text: Object.freeze({ type: "string", maxLength: 4096 })
+        }),
+        required: Object.freeze(["schemaVersion", "sessionID", "directory", "text"])
+      })
+    })
+  }),
+  events: Object.freeze({})
+});
+assertNoReservedErrors(LoopStatusRpc);
+
+// src/source/tui/format.js
+init_jobs();
+
+// src/source/runtime/schedule-policy.js
+init_jobs();
+var TERMINAL_GOAL_STATUSES = new Set(["completed", "blocked", "cleared"]);
+function inferredScheduleMode(job) {
+  const explicit = String(job?.scheduleMode || "").toLowerCase();
+  if (["idle", "interval", "once", "watch"].includes(explicit))
+    return explicit;
+  if (job?.watchPaths?.length)
+    return "watch";
+  if (Number(job?.maxRuns || 0) === 1 && job?.immediate === false && Number(job?.intervalMs || 0) > 0)
+    return "once";
+  return Number(job?.intervalMs || 0) === 0 ? "idle" : "interval";
+}
+function jobRunnable(job) {
+  if (!job)
+    return false;
+  if (isGoalJob(job) && TERMINAL_GOAL_STATUSES.has(job.goalStatus))
+    return false;
+  if (!job.enabled || job.paused)
+    return false;
+  if (Number(job.maxRuns || 0) > 0 && Number(job.runCount || 0) >= Number(job.maxRuns || 0))
+    return false;
+  return true;
+}
+function jobDueAt(job, current = Date.now()) {
+  if (!jobRunnable(job))
+    return Infinity;
+  if (Number(job.runNowRequestedAt || 0) > 0)
+    return current;
+  const created = Date.parse(job.createdAt || "");
+  if (Number(job.maxRuntimeMs || 0) > 0 && Number.isFinite(created) && current - created >= Number(job.maxRuntimeMs || 0))
+    return current;
+  if (job.watchPaths?.length)
+    return job.watchTriggered === true ? current : Infinity;
+  const intervalMs = Number(job.intervalMs || 0);
+  if (intervalMs === 0)
+    return current;
+  const lastRunAt = Number(job.lastRunAt || 0);
+  if (!lastRunAt) {
+    if (job.immediate === false)
+      return (Number.isFinite(created) ? created : current) + intervalMs;
+    return current;
+  }
+  return lastRunAt + intervalMs;
+}
+function scheduleDescription(job) {
+  const mode = inferredScheduleMode(job);
+  const intervalMs = Number(job?.intervalMs || 0);
+  if (mode === "idle")
+    return "every idle";
+  if (mode === "watch")
+    return `on watch: ${(job.watchPaths || []).join(", ")}`;
+  if (mode === "once")
+    return intervalMs > 0 ? `once after ${durationToText(intervalMs)}` : "once on next idle";
+  if (job?.immediate === false)
+    return `every ${durationToText(intervalMs)}, first after ${durationToText(intervalMs)}`;
+  return `every ${durationToText(intervalMs)}, starts on next idle`;
+}
+
+// src/source/tui/format.js
+var MAX_JOBS = 6;
+var MAX_NAME = 18;
+var OVERDUE_AFTER_MS = 30000;
+function truncate(value, max) {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  return text.length <= max ? text : `${text.slice(0, Math.max(1, max - 1))}\u2026`;
+}
+function count(value) {
+  return Number.isFinite(Number(value)) && Number(value) > 0 ? Math.round(Number(value)) : 0;
+}
+function compactNumber(value) {
+  const n = Math.max(0, Number(value) || 0);
+  if (n < 1000)
+    return String(Math.round(n));
+  if (n < 1e6)
+    return `${(n / 1000).toFixed(n < 1e4 ? 1 : 0)}K`;
+  if (n < 1e9)
+    return `${(n / 1e6).toFixed(n < 1e7 ? 2 : 1)}M`;
+  return `${(n / 1e9).toFixed(2)}B`;
+}
+function jobName(job) {
+  const name = String(job?.name || "").trim();
+  return name || job?.id || "job";
+}
+function failureReason(job) {
+  const reason = String(job?.lastFailureReason || "").trim();
+  return reason || "";
+}
+function humanDuration(ms) {
+  const value = Math.max(0, Math.round(Number(ms) || 0));
+  if (value < 1000)
+    return `${value}ms`;
+  const seconds = Math.floor(value / 1000);
+  if (seconds < 60)
+    return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60)
+    return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48)
+    return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+function describeScheduleState(job, current) {
+  if (job?.enabled === false)
+    return "stopped";
+  if (job?.paused)
+    return "paused";
+  if (Number(job?.runNowRequestedAt || 0) > 0)
+    return "due now; waiting for idle";
+  const mode = inferredScheduleMode(job);
+  const runnable = jobRunnable(job);
+  if (!runnable)
+    return "not runnable";
+  const dueAt = jobDueAt(job, current);
+  if (!Number.isFinite(dueAt))
+    return mode === "watch" ? "waiting for watched change" : "not scheduled";
+  if (dueAt <= current)
+    return mode === "idle" ? "waiting for idle" : "due; waiting for idle";
+  return `due in ${humanDuration(dueAt - current)}`;
+}
+function describeJob(job, current) {
+  const parts = [];
+  parts.push(scheduleDescription(job));
+  const runnable = jobRunnable(job);
+  const dueAt = jobDueAt(job, current);
+  const overdueMs = runnable && Number.isFinite(dueAt) ? current - dueAt : Number.POSITIVE_INFINITY;
+  if (Number.isFinite(overdueMs) && overdueMs >= OVERDUE_AFTER_MS) {
+    parts.push(`! overdue ${humanDuration(overdueMs)}`);
+  }
+  parts.push(describeScheduleState(job, current));
+  parts.push(`runs ${compactNumber(count(job?.runCount))}`);
+  parts.push(`fail ${compactNumber(count(job?.failureCount))}`);
+  if (job?.safe)
+    parts.push("safe");
+  if (job?.askNever)
+    parts.push("ask-never");
+  if (job?.noOverlap)
+    parts.push("no-overlap");
+  return parts.join(" \xB7 ");
+}
+function formatLoopSidebar(state, current = Date.now()) {
+  const jobs = Array.isArray(state?.jobs) ? state.jobs.filter((job) => job && typeof job === "object") : [];
+  if (!jobs.length)
+    return `OpenCode Loop
+No loop jobs`;
+  const active = jobs.filter((job) => jobRunnable(job));
+  const paused = jobs.filter((job) => job?.paused === true);
+  const stopped = jobs.length - active.length - paused.length;
+  const summary = [`${jobs.length} job${jobs.length === 1 ? "" : "s"} \xB7 ${active.length} runnable`];
+  if (paused.length)
+    summary.push(`${paused.length} paused`);
+  if (stopped > 0)
+    summary.push(`${stopped} stopped`);
+  const lines = ["OpenCode Loop", summary.join(" \xB7 ")];
+  for (const job of jobs.slice(0, MAX_JOBS)) {
+    const mark = isGoalJob(job) ? `goal:${goalStatusText(job) || "unknown"}` : jobKindLabel(job);
+    lines.push(`${jobName(job)} \xB7 ${mark} \xB7 ${describeJob(job, current)}`);
+  }
+  if (jobs.length > MAX_JOBS)
+    lines.push(`\u2026 +${jobs.length - MAX_JOBS} more`);
+  const failures = jobs.map((job) => [jobName(job), failureReason(job)]).filter(([, reason]) => reason);
+  for (const [name, reason] of failures.slice(0, 3))
+    lines.push(`! ${reason} (${truncate(name, MAX_NAME)})`);
+  if (failures.length > 3)
+    lines.push(`\u2026 +${failures.length - 3} more stop reason(s)`);
+  return lines.join(`
+`);
+}
+function jobKindLabel(job) {
+  return truncate(String(job?.kind || "prompt").toLowerCase(), 12);
+}
+
+// src/source/opencode2/status-rpc.js
+var unavailable = () => new Error("Loop status is unavailable for this session location.");
+var record3 = (value) => value !== null && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+var CONTROL_CHARS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
+async function registerLoopStatusRpc(ctx) {
+  if (typeof ctx?.rpc?.register !== "function")
+    return async () => {};
+  const directory = ctx?.location?.directory;
+  if (!directory || !path8.isAbsolute(directory) || typeof ctx?.session?.get !== "function")
+    throw unavailable();
+  let closed = false;
+  let disposal;
+  const registration = await ctx.rpc.register(LoopStatusRpc, {
+    read: async (input, context) => {
+      const request = record3(input);
+      const sessionID = request?.sessionID;
+      if (!request || Object.keys(request).some((key) => key !== "sessionID") || typeof sessionID !== "string" || !sessionID || sessionID.length > 256) {
+        throw unavailable();
+      }
+      if (closed || context?.signal?.aborted)
+        throw unavailable();
+      const session = record3(await ctx.session.get({ sessionID }));
+      if (closed || context?.signal?.aborted || session?.id !== sessionID)
+        throw unavailable();
+      const location = record3(session?.location);
+      const actual = location?.directory;
+      if (typeof actual !== "string" || !path8.isAbsolute(actual) || path8.relative(path8.resolve(directory), path8.resolve(actual)) !== "") {
+        throw unavailable();
+      }
+      if ((location?.workspaceID ?? "") !== (ctx?.location?.workspaceID ?? ""))
+        throw unavailable();
+      let text;
+      try {
+        const state = await readState(actual, sessionID);
+        if (closed || context?.signal?.aborted)
+          throw unavailable();
+        text = formatLoopSidebar(state, Date.now());
+      } catch (error) {
+        if (error?.message === unavailable().message)
+          throw error;
+        text = `OpenCode Loop
+! Loop storage unavailable`;
+      }
+      text = text.replace(CONTROL_CHARS, "").slice(0, 4096);
+      return { schemaVersion: 1, sessionID, directory: actual, text };
+    }
+  });
+  return () => {
+    if (disposal)
+      return disposal;
+    closed = true;
+    disposal = Promise.resolve().then(async () => {
+      await registration.dispose();
+    });
+    return disposal;
+  };
+}
+
 // src/source/opencode2/native-plugin.js
 init_process();
 init_state();
 
 // src/source/core/progress.js
 import { promises as fs4 } from "fs";
-import path8 from "path";
+import path9 from "path";
 var DEFAULT_PROGRESS_MD = `# Progress
 
 ## Current Goal
@@ -3141,20 +3417,20 @@ Describe the current project goal here.
 - None.
 `;
 function inside(root, candidate) {
-  const relative = path8.relative(root, candidate);
-  return relative !== ".." && !relative.startsWith(`..${path8.sep}`) && !path8.isAbsolute(relative);
+  const relative = path9.relative(root, candidate);
+  return relative !== ".." && !relative.startsWith(`..${path9.sep}`) && !path9.isAbsolute(relative);
 }
 async function initializeProgressFile(directory, argumentsText = "") {
   const root = await fs4.realpath(directory);
   const target = String(argumentsText || "").trim() || "progress.md";
-  const file = path8.resolve(root, target);
-  const relative = path8.relative(root, file);
+  const file = path9.resolve(root, target);
+  const relative = path9.relative(root, file);
   if (!relative || !inside(root, file))
     throw new Error("Progress file must be inside the project");
-  if ([".git", ".opencode"].includes(relative.split(path8.sep)[0].toLowerCase())) {
+  if ([".git", ".opencode"].includes(relative.split(path9.sep)[0].toLowerCase())) {
     throw new Error("Progress file cannot replace a control-plane path");
   }
-  const parent = await fs4.realpath(path8.dirname(file));
+  const parent = await fs4.realpath(path9.dirname(file));
   if (!inside(root, parent))
     throw new Error("Progress file must remain inside the project; symlink escape refused");
   try {
@@ -3212,6 +3488,19 @@ var OpenCodeLoopNativePlugin = Object.freeze({
       getSession: (input) => ctx.session.get(input)
     });
     const registrations = [];
+    let stopStatusRpc = async () => {};
+    let statusRpcState = "unsupported";
+    try {
+      stopStatusRpc = await registerLoopStatusRpc(ctx);
+      statusRpcState = typeof ctx?.rpc?.register === "function" ? "registered" : "unsupported";
+    } catch (error) {
+      statusRpcState = "unavailable";
+      await appendLoopLog(directory, "v2-status-rpc-unavailable", { message: String(error?.message || error) }).catch(() => {});
+    }
+    if (statusRpcState === "registered") {
+      await appendLoopLog(directory, "v2-status-rpc-ready", { host: ctx.app?.version || "unknown" }).catch(() => {});
+    }
+    registrations.push(() => stopStatusRpc());
     const lifecycleAbort = new AbortController;
     const prompt = (request) => ctx.session.prompt({ ...request, delivery: request.delivery || "queue", metadata: { ...request.metadata, opencode_loop_v2: true } });
     const shellHost = createNativeShellHost({
@@ -3286,7 +3575,7 @@ var OpenCodeLoopNativePlugin = Object.freeze({
         return { handled: true, accepted: true, ...output };
       }
       if (["loop-help", "loop-doctor", "loop-logs"].includes(name)) {
-        const text = name === "loop-logs" ? (await readSmallTextFile(path9.join(stateDir(directory), "loop.log"), 2000000)).split(`
+        const text = name === "loop-logs" ? (await readSmallTextFile(path10.join(stateDir(directory), "loop.log"), 2000000)).split(`
 `).slice(-60).join(`
 `) || "No Loop log entries." : name === "loop-doctor" ? `Native OpenCode Loop
 Host: ${ctx.app?.version || "unknown"}
@@ -3295,6 +3584,7 @@ Prompt hooks: enabled
 Compaction ownership: native host
 Delivery: durable queue
 Scheduled timers: ${runtime.scheduledCount()}
+Sidebar status RPC: ${statusRpcState}
 Use /loop-status for paused/admitted job state.` : HELP;
         await prompt({ sessionID, text, resume: false });
         return { handled: true, accepted: true };
