@@ -111,7 +111,7 @@ async function createStateLockCandidate(directory, owner) {
 
 // A cleanup-election hard link prevents two processes from deleting a newer
 // lock while reclaiming a dead owner. Never reclaim a live or corrupt owner.
-async function recoverDeadStateProcessLock(directory, canonical, stale) {
+async function recoverDeadStateProcessLock(directory, canonical, stale, depth = 0) {
   const cleanupFile = `${canonical}.cleanup`
   const cleanupOwner = stateProcessLockOwner()
   const cleanupCandidate = await createStateLockCandidate(directory, cleanupOwner)
@@ -119,7 +119,17 @@ async function recoverDeadStateProcessLock(directory, canonical, stale) {
   try {
     await assertStatePathSafe(directory, cleanupFile)
     elected = await claimStateProcessLock(cleanupCandidate, cleanupFile)
-    if (!elected) return false
+    if (!elected) {
+      // The previous cleanup winner may itself have crashed. Reclaim that
+      // dead election through another hard-linked, owner-verified election.
+      // Never blindly unlink the election path: a live winner may replace it.
+      const existing = await readStateProcessOwner(cleanupFile)
+      if (existing && !stateProcessAlive(existing.pid)) {
+        if (depth >= 6) throw stateLockError("recovery_depth", `too many orphaned cleanup elections for ${canonical}`)
+        await recoverDeadStateProcessLock(directory, cleanupFile, existing, depth + 1)
+      }
+      return false
+    }
     const current = await readStateProcessOwner(canonical)
     if (!current || current.token !== stale.token || current.pid !== stale.pid || stateProcessAlive(current.pid)) return false
     await assertStatePathSafe(directory, canonical)

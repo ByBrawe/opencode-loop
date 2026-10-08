@@ -665,7 +665,7 @@ async function createStateLockCandidate(directory, owner) {
 `, { flag: "wx", mode: 384 });
   return candidate;
 }
-async function recoverDeadStateProcessLock(directory, canonical, stale) {
+async function recoverDeadStateProcessLock(directory, canonical, stale, depth = 0) {
   const cleanupFile = `${canonical}.cleanup`;
   const cleanupOwner = stateProcessLockOwner();
   const cleanupCandidate = await createStateLockCandidate(directory, cleanupOwner);
@@ -673,8 +673,15 @@ async function recoverDeadStateProcessLock(directory, canonical, stale) {
   try {
     await assertStatePathSafe(directory, cleanupFile);
     elected = await claimStateProcessLock(cleanupCandidate, cleanupFile);
-    if (!elected)
+    if (!elected) {
+      const existing = await readStateProcessOwner(cleanupFile);
+      if (existing && !stateProcessAlive(existing.pid)) {
+        if (depth >= 6)
+          throw stateLockError("recovery_depth", `too many orphaned cleanup elections for ${canonical}`);
+        await recoverDeadStateProcessLock(directory, cleanupFile, existing, depth + 1);
+      }
       return false;
+    }
     const current = await readStateProcessOwner(canonical);
     if (!current || current.token !== stale.token || current.pid !== stale.pid || stateProcessAlive(current.pid))
       return false;
