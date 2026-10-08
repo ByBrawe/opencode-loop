@@ -337,7 +337,7 @@ async function testActionRoutingAndSafety() {
   try {
     await h.command("loop-shell", "0s --safe npm run format")
     await h.command("loop-now", "shell")
-    await delay(25)
+    await waitForValue(() => h.records.shells[0], 2_000)
     assert.equal(h.records.shells.length, 1)
     assert.equal(h.records.shells[0].command, "npm run format", "safe mode must allow a harmless format script")
   } finally {
@@ -403,8 +403,8 @@ async function testActionRoutingAndSafety() {
   try {
     await h.command("loop-command", "0s /custom-command alpha beta")
     await h.command("loop-now", "command")
-    await delay(25)
-    assert.deepEqual(h.records.commands[0], {
+    const dispatched = await waitForValue(() => h.records.commands[0], 2_000)
+    assert.deepEqual(dispatched, {
       command: "custom-command",
       arguments: "alpha beta",
       agent: "build",
