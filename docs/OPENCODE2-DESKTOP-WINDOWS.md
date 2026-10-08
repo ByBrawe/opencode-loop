@@ -26,6 +26,32 @@ Authoritative upstream references:
 - [Desktop/TUI slash parity issue #49803](https://github.com/anomalyco/opencode/issues/49803)
 - [Desktop plugin UI surface request #43132](https://github.com/anomalyco/opencode/issues/43132)
 
+## Read-only local command-registry probe
+
+On Loop versions that include `--desktop-diagnostics`, run this in PowerShell
+(while Desktop is open, from the **same directory** shown in Desktop):
+
+```powershell
+npx -y @bybrawe/opencode-loop@latest --desktop-diagnostics --workspace (Get-Location).Path
+```
+
+The command does **not** reinstall either plugin. It scans only the presence of
+package references in known global config files (not the secrets), and probes the
+locally registered OpenCode service at `~/.local/state/opencode/service.json`,
+without disclosing its password or full response. It refuses a non-loopback
+service URL; remote or WSL Desktop connections must be checked from their own
+environment. To probe another **local** endpoint explicitly:
+
+```powershell
+npx -y @bybrawe/opencode-loop@latest --desktop-diagnostics --server http://127.0.0.1:4096 --workspace (Get-Location).Path
+```
+
+Use `OPENCODE_PASSWORD` in the environment if that explicit local server needs
+authentication. Do not paste the server registration file, password, full config
+or auth headers into issues or chat. The auto-discovered service may still be a
+different server than the Desktop window's selected remote; the result is
+diagnostic evidence, not proof of a GUI bug.
+
 ## Diagnostic checklist (Windows)
 
 1. Keep both packages **independently installed**. Verify that the individual
@@ -86,3 +112,16 @@ Do not claim a GUI bug is fixed until a genuine Desktop reproduction passes.
 selected server mode, exact Desktop-opened project path, plugin status, and
 whether Desktop itself shows `/loop` and `/goal` after a full quit/reopen.
 Redact host credentials and user tokens from logs.
+
+
+## Possible command catalog refresh gap in 2.0.22
+
+OpenCode's native command service publishes `command.updated` when a plugin's
+`command.transform` changes definitions. In v2.0.22,
+`packages/app/src/runtime/server/sync.tsx` queues project refresh for
+`config.updated` and `agent.updated`, but does not explicitly do the same
+for `command.updated`. A native plugin arriving **after** the composer loaded
+its command catalog can leave Desktop suggestions stale. This is an upstream
+hypothesis, **not** confirmation of the user's particular Windows problem;
+compare the connected server `GET /api/command` catalog first. Do not turn
+the dedicated Goal and Loop native commands into prompt-template bridges.

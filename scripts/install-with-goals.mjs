@@ -83,6 +83,17 @@ function printCompanionHelp() {
 }
 
 async function main() {
+  if (rawArgs[0] === "--desktop-diagnostics") {
+    // Diagnostic mode must not run either installer or modify any configuration.
+    const { runDesktopDiagnosticCli } = await import("./desktop-command-diagnostics.mjs")
+    process.exitCode = await runDesktopDiagnosticCli(rawArgs.slice(1))
+    return
+  }
+  if (rawArgs.includes("--desktop-diagnostics")) {
+    console.error("--desktop-diagnostics must be the first argument.")
+    process.exitCode = 2
+    return
+  }
   if (withGoals && loopOnly) {
     console.error("Use either --with-goals or --loop-only, not both.")
     process.exitCode = 2

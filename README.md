@@ -70,6 +70,8 @@ If you installed Goal too:
 
 If both native commands work in terminal TUI but are missing from Windows Desktop, follow the [Windows Desktop command-registry diagnostic guide](docs/OPENCODE2-DESKTOP-WINDOWS.md). Do not replace native commands with legacy Markdown bridges.
 
+On a version containing the diagnostic, run `npx -y @bybrawe/opencode-loop@latest --desktop-diagnostics --workspace "C:\\path\\to\\your\\project"` to check both commands against the currently registered *local* V2 service without printing its credentials. This does not install or modify Goal or Loop.
+
 Global npm alternative:
 
 ```bash
