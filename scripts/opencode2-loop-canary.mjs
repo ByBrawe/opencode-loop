@@ -478,6 +478,46 @@ async function main() {
       }, "native shell terminal correlation", diagnostics, 20_000)
       assert.equal(await readFile(path.join(workspace, "native-preflight.txt"), "utf8"), "PP")
       await sendControl("loop-clear")
+
+      // OpenCode 2.0.22+ exposes public session.compact. Unlike prompt items,
+      // a host compaction control does not produce session.inbox.delivered.
+      // Exercise a REAL manual compaction and correlate its started.inputID
+      // with the request admitted by this Loop job before accepting completion.
+      if (process.env.OPENCODE2_NATIVE_COMPACT_CANARY === "1") {
+        await sendControl("loop-compact", "0s --now --max-runs 1 --name native-compact")
+        await waitFor(async () => {
+          const job = await jobNamed("native-compact")
+          return Boolean(
+            job?.runCount === 1
+            && !job.v2Run
+            && job.enabled === false
+            && typeof job.lastCompactAt === "number"
+            && job.lastCompactAt > 0
+          )
+        }, "real host-owned manual compaction completion", diagnostics, 90_000)
+
+        const recorded = (await readFile(eventTrace, "utf8"))
+          .split("\n").filter(Boolean).map((line) => JSON.parse(line))
+          .filter((event) => event?.data?.sessionID === sessionID)
+        const manualStart = recorded.find((event) =>
+          event.type === "session.compaction.started"
+          && event.data?.reason === "manual"
+          && typeof event.data?.inputID === "string"
+          && event.data.inputID.length > 0
+        )
+        const manualEnd = recorded.find((event) =>
+          event.type === "session.compaction.ended"
+          && event.data?.reason === "manual"
+          && manualStart
+          && event.id !== undefined
+        ) ?? recorded.find((event) =>
+          event.type === "session.compaction.ended" && event.data?.reason === "manual"
+        )
+        assert.ok(manualStart, `real V2 host never started the manual inbox compaction\n${await diagnostics()}`)
+        assert.ok(manualEnd, `real V2 host never completed the manual inbox compaction\n${await diagnostics()}`)
+        assert.equal(server.exitCode, null)
+        await sendControl("loop-clear")
+      }
       const beforePresets = provider.stats.loopRequests
       await sendControl("loop-init")
       assert.match(await readFile(path.join(workspace, "progress.md"), "utf8"), /^# Progress\n/)
