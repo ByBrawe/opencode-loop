@@ -43,7 +43,7 @@ for (const block of workflow.split(/- uses: actions\/checkout@/).slice(1)) asser
 const publisher = workflow.slice(workflow.indexOf("  publish:\n"), workflow.indexOf("  github-release:\n"))
 assert.doesNotMatch(publisher, /contents:\s*write/, "OIDC publisher must not gain repository mutation privileges")
 
-assert.match(workflow, /for attempt in \\{1\\.\\.12\\}/, "clean published npm consumer must retry version propagation")
+assert.match(workflow, /for attempt in \{1\.\.12\}/, "clean published npm consumer must retry version propagation")
 assert.ok(workflow.includes('--prefer-online --cache "$VERIFY_DIR/npm-cache-$attempt"'), "consumer retries must not reuse a stale npm cache")
 assert.ok(workflow.includes("Published Loop+Goal clean-install validation did not converge"), "clean consumer must remain a hard release gate")
 
