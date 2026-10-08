@@ -61,11 +61,9 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
       prompt,
       command: typeof ctx.session.command === "function" ? (request) => ctx.session.command(request) : undefined,
       wait: typeof ctx.session.wait === "function" ? (request) => ctx.session.wait(request) : undefined,
-      // OpenCode 2 exposes ctx.shell as a hook domain, not an execution method,
-      // and SessionDomain has no public compact/inbox-cancel action. Keep those
-      // undocumented capabilities out of the V2 runtime instead of probing
-      // private host fields that may disappear between releases.
-      compact: undefined,
+      // Current V2 exposes public session.compact; older hosts may not.
+      // Shell execution and inbox cancellation remain separate from SessionDomain.
+      compact: typeof ctx.session.compact === "function" ? (request) => ctx.session.compact(request) : undefined,
       shell: (request) => shellHost.dispatch(request),
       cancel: undefined,
       onError: (error) => { void appendLoopLog(directory, "v2-native-error", { message: String(error?.message || error) }).catch(() => {}) },

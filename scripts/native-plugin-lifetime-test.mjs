@@ -100,19 +100,22 @@ test("native Loop cleanup is shared and drains all registrations after an error"
   }
 })
 
-test("native Loop never probes undocumented SessionDomain shell compact or inbox fields", async () => {
+test("native Loop never probes undocumented SessionDomain shell or inbox fields", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "loop-v2-public-session-"))
   const host = fixture(directory)
   let dispose
   try {
-    for (const field of ["shell", "compact", "inbox"]) {
+    for (const field of ["shell", "inbox"]) {
       Object.defineProperty(host.ctx.session, field, {
         configurable: true,
         get() { throw new Error(`undocumented session.${field} was accessed`) },
       })
     }
+    const calls = []
+    host.ctx.session.compact = async (input) => { calls.push(input); return { id: input.id } }
     dispose = await plugin.setup(host.ctx)
     assert.equal(typeof dispose, "function")
+    assert.deepEqual(calls, [], "public compact is invoked only for scheduled work")
   } finally {
     host.end()
     await dispose?.().catch(() => {})

@@ -2021,7 +2021,7 @@ function createNativeLoopRuntime(options = {}) {
     const run = scope.active;
     if (!run || scope.compaction || scope.busy)
       return result({ reason: "no-terminal-boundary" });
-    if (run.kind === "prompt" && !run.delivered || run.kind === "command" && !run.commandFinished || run.kind === "shell" && !run.shellFinished || ["compact", "cadence"].includes(run.kind) && !run.compactFinished) {
+    if (run.kind === "prompt" && !run.delivered || run.kind === "command" && !run.commandFinished || run.kind === "shell" && !run.shellFinished || ["compact", "cadence"].includes(run.kind) && (!run.delivered || !run.compactFinished)) {
       return result({ reason: "awaiting-owned-completion" });
     }
     clear(scope, "deadline");
@@ -2376,7 +2376,7 @@ ${await policy.buildPrompt(scope.directory, job)}`, delivery: "queue", metadata:
       if (event.kind === "compaction" && event.action === "ended") {
         scope.compaction ||= { ended: false, terminal: false };
         scope.compaction.ended = true;
-        if (["compact", "cadence"].includes(scope.active?.kind))
+        if (["compact", "cadence"].includes(scope.active?.kind) && scope.active.delivered && event.reason !== "auto")
           scope.active.compactFinished = true;
         if (!scope.compaction.terminal)
           return result({ reason: "awaiting-execution-terminal" });
@@ -2860,7 +2860,7 @@ function normalizeOpenCode2NativeEvent(raw) {
   if (["session.compaction.started", "session.compaction.ended", "session.compaction.failed"].includes(type)) {
     if (!sessionID)
       return;
-    return Object.freeze({ kind: "compaction", action: type.split(".").at(-1), sessionID, directory });
+    return Object.freeze({ kind: "compaction", action: type.split(".").at(-1), sessionID, directory, reason: text(data.reason), inputID: text(data.inputID) });
   }
   if (["session.execution.failed", "session.execution.interrupted"].includes(type)) {
     if (!sessionID)
@@ -3207,7 +3207,7 @@ var OpenCodeLoopNativePlugin = Object.freeze({
       prompt,
       command: typeof ctx.session.command === "function" ? (request) => ctx.session.command(request) : undefined,
       wait: typeof ctx.session.wait === "function" ? (request) => ctx.session.wait(request) : undefined,
-      compact: undefined,
+      compact: typeof ctx.session.compact === "function" ? (request) => ctx.session.compact(request) : undefined,
       shell: (request) => shellHost.dispatch(request),
       cancel: undefined,
       onError: (error) => {
