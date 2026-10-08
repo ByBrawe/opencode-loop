@@ -444,7 +444,7 @@ async function readStateFile(directory, sessionID) {
     await ensureDir(stateDir(directory));
     await fs.copyFile(target, `${target}.corrupt-${Date.now()}`);
   } catch {}
-  return { version: 4, jobs: [] };
+  throw new Error(`OpenCode Loop state at ${target} could not be read; refusing to replace persisted jobs.`);
 }
 async function readState(directory, sessionID) {
   const state = await readStateFile(directory, sessionID);
