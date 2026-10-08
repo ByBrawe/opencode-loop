@@ -29,6 +29,11 @@ try {
   assert.ok(backups.length >= 1, "corrupted bytes should be backed up for investigation")
   assert.equal(await readFile(path.join(stateDir(root), backups[0]), "utf8"), corrupt)
 
+  await writeFile(file, JSON.stringify({ version: 4, jobs: { invalid: "shape" } }))
+  await assert.rejects(readState(root, sessionID), /could not be read; refusing to replace persisted jobs/)
+  assert.equal(JSON.parse(await readFile(file, "utf8")).jobs.invalid, "shape")
+  await writeFile(file, corrupt)
+
   oldSnapshot.jobs[0].runCount = 8
   await assert.rejects(
     writeState(root, sessionID, oldSnapshot),

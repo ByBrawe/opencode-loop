@@ -380,6 +380,7 @@ import path2 from "path";
 import { spawn } from "child_process";
 
 // src/source/core/state.js
+import { randomUUID as stateLockRandomUUID } from "crypto";
 import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
@@ -403,34 +404,211 @@ async function pathExists(filePath) {
     return false;
   }
 }
-function stateLockKey(directory, sessionID) {
-  return `${path.resolve(directory)}:${safeID(sessionID)}`;
+const STATE_PROCESS_LOCK_TIMEOUT_MS = 5_000
+const STATE_PROCESS_LOCK_POLL_MS = 20
+
+function stateLockError(kind, detail) {
+  const error = new Error(`OpenCode Loop state lock ${kind}: ${detail}`)
+  error.code = "OPENCODE_LOOP_STATE_LOCK"
+  return error
 }
-async function withStateWriteLock(directory, sessionID, fn) {
-  const key = stateLockKey(directory, sessionID);
-  const previous = stateWriteLocks.get(key) || Promise.resolve();
-  let release;
-  const current = new Promise((resolve) => {
-    release = resolve;
-  });
-  const next = previous.catch(() => {}).then(() => current);
-  stateWriteLocks.set(key, next);
-  await previous.catch(() => {});
-  try {
-    return await fn();
-  } finally {
-    release();
-    if (stateWriteLocks.get(key) === next)
-      stateWriteLocks.delete(key);
+
+async function assertStatePathSafe(directory, target) {
+  const root = path.resolve(directory)
+  const relative = path.relative(root, path.resolve(target))
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw stateLockError("unsafe_path", `path escapes project: ${target}`)
+  }
+  let current = root
+  for (const part of relative.split(path.sep).filter(Boolean)) {
+    current = path.join(current, part)
+    let info
+    try { info = await fs.lstat(current) }
+    catch (error) {
+      if (error?.code === "ENOENT") return
+      throw error
+    }
+    if (info.isSymbolicLink()) throw stateLockError("unsafe_path", `symbolic link or junction: ${current}`)
   }
 }
+
+function stateProcessLockOwner() {
+  const token = stateLockRandomUUID()
+  return {
+    schemaVersion: 1, pid: process.pid, token, acquiredAt: Date.now(),
+    candidateName: `.loop-lock-${process.pid}-${token}.json`,
+  }
+}
+
+function stateProcessLockOwnerValid(owner) {
+  return owner?.schemaVersion === 1
+    && Number.isSafeInteger(owner.pid) && owner.pid > 0
+    && typeof owner.token === "string" && /^[0-9a-f-]{36}$/i.test(owner.token)
+    && Number.isFinite(owner.acquiredAt) && owner.acquiredAt > 0
+    && owner.candidateName === `.loop-lock-${owner.pid}-${owner.token}.json`
+    && path.basename(owner.candidateName) === owner.candidateName
+}
+
+async function readStateProcessOwner(file) {
+  let raw
+  for (let attempt = 0; ; attempt++) {
+    try { raw = await fs.readFile(file, "utf8"); break }
+    catch (error) {
+      if (error?.code === "ENOENT") return null
+      if (process.platform !== "win32" || !["EPERM", "EACCES", "EBUSY"].includes(error?.code) || attempt >= 5) throw error
+      await delay(10 * (attempt + 1))
+    }
+  }
+  let owner
+  try { owner = JSON.parse(raw) }
+  catch { throw stateLockError("invalid_owner", `corrupt lock metadata at ${file}`) }
+  if (!stateProcessLockOwnerValid(owner)) throw stateLockError("invalid_owner", `invalid lock metadata at ${file}`)
+  return owner
+}
+
+function stateProcessAlive(pid) {
+  if (pid === process.pid) return true
+  try { process.kill(pid, 0); return true }
+  catch (error) { return error?.code !== "ESRCH" }
+}
+
+async function removeStateProcessFile(file) {
+  for (let attempt = 0; ; attempt++) {
+    try { await fs.rm(file, { force: true }); return }
+    catch (error) {
+      if (process.platform !== "win32" || !["EPERM", "EACCES", "EBUSY"].includes(error?.code) || attempt >= 5) throw error
+      await delay(10 * (attempt + 1))
+    }
+  }
+}
+
+async function claimStateProcessLock(candidate, canonical) {
+  for (let attempt = 0; ; attempt++) {
+    try { await fs.link(candidate, canonical); return true }
+    catch (error) {
+      if (error?.code === "EEXIST") return false
+      if (process.platform !== "win32" || !["EPERM", "EACCES", "EBUSY"].includes(error?.code) || attempt >= 5) throw error
+      await delay(10 * (attempt + 1))
+    }
+  }
+}
+
+async function createStateLockCandidate(directory, owner) {
+  const candidate = path.join(stateDir(directory), owner.candidateName)
+  await assertStatePathSafe(directory, candidate)
+  await fs.writeFile(candidate, `${JSON.stringify(owner)}\n`, { flag: "wx", mode: 0o600 })
+  return candidate
+}
+
+// A cleanup-election hard link prevents two processes from deleting a newer
+// lock while reclaiming a dead owner. Never reclaim a live or corrupt owner.
+async function recoverDeadStateProcessLock(directory, canonical, stale) {
+  const cleanupFile = `${canonical}.cleanup`
+  const cleanupOwner = stateProcessLockOwner()
+  const cleanupCandidate = await createStateLockCandidate(directory, cleanupOwner)
+  let elected = false
+  try {
+    await assertStatePathSafe(directory, cleanupFile)
+    elected = await claimStateProcessLock(cleanupCandidate, cleanupFile)
+    if (!elected) return false
+    const current = await readStateProcessOwner(canonical)
+    if (!current || current.token !== stale.token || current.pid !== stale.pid || stateProcessAlive(current.pid)) return false
+    await assertStatePathSafe(directory, canonical)
+    await removeStateProcessFile(canonical)
+    const staleCandidate = path.join(stateDir(directory), current.candidateName)
+    await assertStatePathSafe(directory, staleCandidate)
+    await removeStateProcessFile(staleCandidate).catch(() => {})
+    return true
+  } finally {
+    if (elected) {
+      const current = await readStateProcessOwner(cleanupFile).catch(() => null)
+      if (current?.token === cleanupOwner.token) await removeStateProcessFile(cleanupFile)
+    }
+    await removeStateProcessFile(cleanupCandidate).catch(() => {})
+  }
+}
+
+async function acquireStateProcessLock(directory, sessionID) {
+  const targetDirectory = stateDir(directory)
+  await assertStatePathSafe(directory, targetDirectory)
+  await ensureDir(targetDirectory)
+  await assertStatePathSafe(directory, targetDirectory)
+  const target = statePath(directory, sessionID)
+  const canonical = `${target}.lock`
+  await assertStatePathSafe(directory, target)
+  await assertStatePathSafe(directory, canonical)
+  const owner = stateProcessLockOwner()
+  const candidate = await createStateLockCandidate(directory, owner)
+  const started = Date.now()
+  let acquired = false
+  try {
+    while (true) {
+      await assertStatePathSafe(directory, canonical)
+      if (await claimStateProcessLock(candidate, canonical)) {
+        acquired = true
+        break
+      }
+      const current = await readStateProcessOwner(canonical)
+      if (current && !stateProcessAlive(current.pid)) await recoverDeadStateProcessLock(directory, canonical, current)
+      if (Date.now() - started >= STATE_PROCESS_LOCK_TIMEOUT_MS) {
+        throw stateLockError("timeout", `session ${sessionID} remained locked for ${STATE_PROCESS_LOCK_TIMEOUT_MS}ms`)
+      }
+      await delay(STATE_PROCESS_LOCK_POLL_MS)
+    }
+    return async () => {
+      const current = await readStateProcessOwner(canonical)
+      if (current?.token !== owner.token || current.pid !== owner.pid) {
+        throw stateLockError("lost", `session ${sessionID} lock ownership changed`)
+      }
+      await assertStatePathSafe(directory, canonical)
+      await removeStateProcessFile(canonical)
+      await removeStateProcessFile(candidate)
+    }
+  } catch (error) {
+    if (acquired && (await readStateProcessOwner(canonical).catch(() => null))?.token === owner.token) {
+      await removeStateProcessFile(canonical).catch(() => {})
+    }
+    await removeStateProcessFile(candidate).catch(() => {})
+    throw error
+  }
+}
+
+function stateLockKey(directory, sessionID) {
+  return `${path.resolve(directory)}:${safeID(sessionID)}`
+}
+
+async function withStateWriteLock(directory, sessionID, fn) {
+  const key = stateLockKey(directory, sessionID)
+  const previous = stateWriteLocks.get(key) || Promise.resolve()
+  let release
+  const current = new Promise((resolve) => { release = resolve })
+  const next = previous.catch(() => {}).then(() => current)
+  stateWriteLocks.set(key, next)
+  await previous.catch(() => {})
+  let unlock
+  try {
+    unlock = await acquireStateProcessLock(directory, sessionID)
+    return await fn()
+  } finally {
+    try { if (unlock) await unlock() }
+    finally {
+      release()
+      if (stateWriteLocks.get(key) === next) stateWriteLocks.delete(key)
+    }
+  }
+}
+
 async function readStateFile(directory, sessionID) {
   const target = statePath(directory, sessionID);
+  await assertStatePathSafe(directory, target);
   const attempts = 5;
   for (let attempt = 0;attempt < attempts; attempt++) {
     try {
       const parsed = JSON.parse(await fs.readFile(target, "utf8"));
-      return { version: 4, jobs: Array.isArray(parsed.jobs) ? parsed.jobs : [] };
+      if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.jobs)) {
+        throw new SyntaxError("invalid Loop state schema: jobs must be an array")
+      }
+      return { version: 4, jobs: parsed.jobs }
     } catch (error) {
       if (error?.code === "ENOENT")
         return { version: 4, jobs: [] };
@@ -574,27 +752,31 @@ function mergeStateJobs(baseJobs, intendedJobs, currentJobs) {
 }
 async function writeState(directory, sessionID, state) {
   await withStateWriteLock(directory, sessionID, async () => {
-    await ensureDir(stateDir(directory));
-    const target = statePath(directory, sessionID);
-    const baseline = state?.[STATE_BASELINE];
-    let jobs = structuredClone(state.jobs || []);
+    const target = statePath(directory, sessionID)
+    await assertStatePathSafe(directory, target)
+    const current = await readStateFile(directory, sessionID)
+    const baseline = state?.[STATE_BASELINE]
+    let jobs = structuredClone(state.jobs || [])
     if (Array.isArray(baseline)) {
-      const current = await readStateFile(directory, sessionID);
-      jobs = mergeStateJobs(baseline, jobs, current.jobs || []);
-      state.jobs = structuredClone(jobs);
-      state[STATE_BASELINE] = structuredClone(jobs);
+      jobs = mergeStateJobs(baseline, jobs, current.jobs || [])
     }
-    const payload = JSON.stringify({ version: 4, jobs }, null, 2);
-    await writeFileAtomically(target, payload);
-  });
+    const payload = JSON.stringify({ version: 4, jobs }, null, 2)
+    await writeFileAtomically(target, payload)
+    // A failed disk write must not advance the in-memory snapshot baseline.
+    state.jobs = structuredClone(jobs)
+    if (Array.isArray(baseline)) state[STATE_BASELINE] = structuredClone(jobs)
+  })
 }
+
 async function removeState(directory, sessionID) {
   await withStateWriteLock(directory, sessionID, async () => {
-    try {
-      await fs.unlink(statePath(directory, sessionID));
-    } catch {}
-  });
+    const target = statePath(directory, sessionID)
+    await assertStatePathSafe(directory, target)
+    try { await fs.unlink(target) }
+    catch (error) { if (error?.code !== "ENOENT") throw error }
+  })
 }
+
 
 // src/source/core/process.js
 async function appendLoopLog(directory, line, extra = {}) {

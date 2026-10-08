@@ -1,0 +1,103 @@
+import assert from "node:assert/strict"
+import { spawn, spawnSync } from "node:child_process"
+import { randomUUID } from "node:crypto"
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile, link, stat } from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
+import { readState, writeState, stateDir } from "../src/source/core/state.js"
+
+const filename = fileURLToPath(import.meta.url)
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+async function exists(file) { try { await stat(file); return true } catch (error) { if (error?.code === "ENOENT") return false; throw error } }
+async function until(fn, duration = 15_000) {
+  const started = Date.now()
+  while (Date.now() - started < duration) {
+    if (await fn()) return
+    await pause(20)
+  }
+  throw new Error("state worker sync timeout")
+}
+
+if (process.argv[2] === "--worker") {
+  const [, , , root, sessionID, marker, gate] = process.argv
+  const snapshot = await readState(root, sessionID)
+  await writeFile(`${gate}.${marker}.ready`, "ready")
+  await until(() => exists(gate))
+  snapshot.jobs[0][marker] = Number(marker.slice(1))
+  await writeState(root, sessionID, snapshot)
+} else {
+  const root = await mkdtemp(path.join(os.tmpdir(), "opencode-loop-process-lock-"))
+  const sessionID = "multi-process"
+  const lockFile = path.join(stateDir(root), `${sessionID}.json.lock`)
+  try {
+    for (let round = 0; round < 6; round++) {
+      const initial = await readState(root, sessionID)
+      initial.jobs = [{ id: "shared", round }]
+      await writeState(root, sessionID, initial)
+      const gate = path.join(root, `round-${round}.go`)
+      const workers = []
+      for (let n = 0; n < 4; n++) {
+        const marker = `f${n}`
+        const child = spawn(process.execPath, [filename, "--worker", root, sessionID, marker, gate], { stdio: ["ignore", "ignore", "pipe"] })
+        let stderr = ""
+        child.stderr.on("data", (part) => { stderr += part.toString() })
+        const closed = new Promise((resolve, reject) => {
+          child.once("error", reject)
+          child.once("close", (code) => code === 0 ? resolve() : reject(new Error(`worker ${marker} exited ${code}: ${stderr}`)))
+        })
+        workers.push({ marker, closed })
+      }
+      await until(async () => (await Promise.all(workers.map((w) => exists(`${gate}.${w.marker}.ready`)))).every(Boolean))
+      await writeFile(gate, "go")
+      await Promise.all(workers.map((w) => w.closed))
+      const saved = (await readState(root, sessionID)).jobs[0]
+      assert.equal(saved.round, round)
+      for (let n = 0; n < 4; n++) assert.equal(saved[`f${n}`], n, "each independent writer must survive")
+      assert.equal(await exists(lockFile), false, "all writers must release the lock")
+    }
+
+    // A malformed lock is never stolen or silently removed.
+    const corrupt = await readState(root, sessionID)
+    await writeFile(lockFile, "corrupt owner")
+    corrupt.jobs[0].newField = "must-not-commit"
+    await assert.rejects(writeState(root, sessionID, corrupt), /state lock invalid_owner/)
+    assert.equal((await readState(root, sessionID)).jobs[0].newField, undefined)
+    await rm(lockFile)
+
+    // A dead owner is reclaimed with an election lock, never a blind unlink.
+    const dead = spawnSync(process.execPath, ["-e", "process.exit(0)"], { encoding: "utf8" })
+    assert.equal(dead.status, 0)
+    assert.ok(dead.pid > 0)
+    const token = randomUUID()
+    const candidate = path.join(stateDir(root), `.loop-lock-${dead.pid}-${token}.json`)
+    const owner = { schemaVersion: 1, pid: dead.pid, token, acquiredAt: Date.now(), candidateName: path.basename(candidate) }
+    await writeFile(candidate, JSON.stringify(owner))
+    await link(candidate, lockFile)
+    const revived = await readState(root, sessionID)
+    revived.jobs[0].recovered = true
+    await writeState(root, sessionID, revived)
+    assert.equal((await readState(root, sessionID)).jobs[0].recovered, true)
+    assert.equal(await exists(lockFile), false)
+    assert.equal(await exists(candidate), false)
+
+    // A path supplied by another tool cannot symlink Loop state outside the project.
+    const other = await mkdtemp(path.join(os.tmpdir(), "opencode-loop-escape-"))
+    const unsafe = path.join(root, "unsafe")
+    await mkdir(unsafe)
+    try {
+      const linkTarget = path.join(unsafe, ".opencode")
+      try {
+        const { symlink } = await import("node:fs/promises")
+        await symlink(other, linkTarget, process.platform === "win32" ? "junction" : "dir")
+        await assert.rejects(readState(unsafe, sessionID), /state lock unsafe_path/)
+        await assert.rejects(writeState(unsafe, sessionID, { version: 4, jobs: [] }), /state lock unsafe_path/)
+      } catch (error) {
+        if (process.platform !== "win32" || !["EPERM", "EACCES"].includes(error?.code)) throw error
+      }
+    } finally { await rm(other, { recursive: true, force: true }) }
+    console.log("Loop multi-process transaction lock, dead-owner recovery, and unsafe-path regressions passed")
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
+}
