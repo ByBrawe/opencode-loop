@@ -54,6 +54,8 @@ If Goal is installed too, also verify:
 /goal status
 ```
 
+If Windows Desktop cannot find `/loop` and `/goal` while terminal TUI can, use the [Windows Desktop command-registry diagnostic guide](OPENCODE2-DESKTOP-WINDOWS.md) before reinstalling plugins or adding legacy command files.
+
 ## Goal installer
 
 Installation defaults to the native `plugins` configuration and the plugin's
