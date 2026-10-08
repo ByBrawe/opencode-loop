@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, writeFile, link, stat } from "no
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { readState, writeState, stateDir } from "../src/source/core/state.js"
+import { readState, writeState, removeState, stateDir } from "../src/source/core/state.js"
 
 const filename = fileURLToPath(import.meta.url)
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -24,8 +24,11 @@ if (process.argv[2] === "--worker") {
   const snapshot = await readState(root, sessionID)
   await writeFile(`${gate}.${marker}.ready`, "ready")
   await until(() => exists(gate))
-  snapshot.jobs[0][marker] = Number(marker.slice(1))
-  await writeState(root, sessionID, snapshot)
+  if (marker === "delete") await removeState(root, sessionID)
+  else {
+    snapshot.jobs[0][marker] = Number(marker.slice(1))
+    await writeState(root, sessionID, snapshot)
+  }
 } else {
   const root = await mkdtemp(path.join(os.tmpdir(), "opencode-loop-process-lock-"))
   const sessionID = "multi-process"
@@ -56,6 +59,41 @@ if (process.argv[2] === "--worker") {
       for (let n = 0; n < 4; n++) assert.equal(saved[`f${n}`], n, "each independent writer must survive")
       assert.equal(await exists(lockFile), false, "all writers must release the lock")
     }
+
+    // A stale writer must not resurrect a job removed by another process.
+    // Race both operation orders: the lock serializes remove and write, while
+    // baseline-aware merge must preserve the deletion if write runs second.
+    for (let round = 0; round < 8; round++) {
+      const seed = await readState(root, sessionID)
+      seed.jobs = [{ id: "shared", round: `delete-${round}` }]
+      await writeState(root, sessionID, seed)
+      const gate = path.join(root, `delete-${round}.go`)
+      const workers = []
+      for (const marker of ["delete", "f0"]) {
+        const child = spawn(process.execPath, [filename, "--worker", root, sessionID, marker, gate], {
+          stdio: ["ignore", "ignore", "pipe"],
+        })
+        let stderr = ""
+        child.stderr.on("data", (part) => { stderr += part.toString() })
+        workers.push({
+          marker,
+          closed: new Promise((resolve, reject) => {
+            child.once("error", reject)
+            child.once("close", (code) => code === 0 ? resolve() : reject(new Error(`worker ${marker} exited ${code}: ${stderr}`)))
+          }),
+        })
+      }
+      await until(async () => (await Promise.all(workers.map((w) =>
+        exists(`${gate}.${w.marker}.ready`)))).every(Boolean))
+      await writeFile(gate, "go")
+      await Promise.all(workers.map((w) => w.closed))
+      assert.deepEqual((await readState(root, sessionID)).jobs, [],
+        "remove-vs-stale-writer must not resurrect deleted work")
+      assert.equal(await exists(lockFile), false, "both processes must release lock after deletion race")
+    }
+    const fresh = await readState(root, sessionID)
+    fresh.jobs = [{ id: "shared", round: "reseeded" }]
+    await writeState(root, sessionID, fresh)
 
     // A malformed lock is never stolen or silently removed.
     const corrupt = await readState(root, sessionID)
@@ -96,7 +134,7 @@ if (process.argv[2] === "--worker") {
         if (process.platform !== "win32" || !["EPERM", "EACCES"].includes(error?.code)) throw error
       }
     } finally { await rm(other, { recursive: true, force: true }) }
-    console.log("Loop multi-process transaction lock, dead-owner recovery, and unsafe-path regressions passed")
+    console.log("Loop multi-process write/delete races, stale-owner recovery, and unsafe-path regressions passed")
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   }
