@@ -153,6 +153,16 @@ local provider: two turns, one newly created and pinned native session.
 The real-host CLI canary and production tarball gates run in CI. Their job
 results, rather than the existence of the tests, establish compatibility.
 
+On Linux, `package:smoke` requires a genuine clean npm install of the generated
+tarball. On Windows, the test first attempts a clean offline npm install. If the
+runner's npm cache lacks metadata, it extracts the **same** tarball and tests
+native entrypoints in an isolated consumer against the pre-installed, pinned
+CI dependency tree (without claiming a clean npm install succeeded). Set
+`OPENCODE_PACKAGE_SMOKE_REQUIRE_INSTALL=1` to require a Windows npm consumer
+install and fail on network timeout; the published consumer install remains a
+separate strict release gate. This avoids conflating Windows registry/CDN
+timeouts with V2 runtime regressions or quietly skipping packed artifact checks.
+
 ## Official references
 
 Read the V2 pages, not the legacy `/docs/plugins` examples. These references
