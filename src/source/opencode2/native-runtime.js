@@ -368,9 +368,9 @@ export function createNativeLoopRuntime(options = {}) {
     }
     if (event.kind === "compaction" && event.action === "started") {
       scope.compaction ||= { ended: false, terminal: false }
-      // The host promotes compaction control items directly; unlike ordinary
-      // user input, they do NOT emit session.inbox.delivered. Match the
-      // published manual-compaction inputID to our admitted durable item.
+      // Host versions may differ in compaction inbox-delivery events. The
+      // authoritative boundary is the published manual-compaction inputID
+      // matching our admitted durable item, not delivery alone.
       if (
         ["compact", "cadence"].includes(scope.active?.kind)
         && event.reason === "manual"

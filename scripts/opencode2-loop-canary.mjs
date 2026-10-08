@@ -118,7 +118,7 @@ function streamText(res, content, sequence) {
 }
 
 function startProvider() {
-  const stats = { chatRequests: 0, loopRequests: 0, paths: [] }
+  const stats = { chatRequests: 0, loopRequests: 0, compactionRequests: 0, paths: [] }
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1")
     stats.paths.push(`${req.method} ${url.pathname}`)
@@ -137,6 +137,18 @@ function startProvider() {
     for await (const chunk of req) raw += String(chunk)
     const body = raw ? JSON.parse(raw) : {}
     stats.chatRequests += 1
+    // The real host requires a structured checkpoint. A plain "OK" response
+    // triggers its retried summary validation and fails for test reasons,
+    // unrelated to Loop's durable compaction lifecycle.
+    const compactionPrompt = JSON.stringify(body.messages ?? [])
+    if (
+      compactionPrompt.includes("## Objective")
+      && compactionPrompt.includes("Do not continue the task or call tools.")
+    ) {
+      stats.compactionRequests += 1
+      streamText(res, "## Objective\n- Preserve the verified native Loop job and provider canary context.\n\n## Requirements\n- Continue only the configured user work.", stats.chatRequests)
+      return
+    }
     const text = lastUserText(body)
     if (text.includes("AUTONOMOUS OPENCODE LOOP ITERATION")) {
       stats.loopRequests += 1
@@ -496,6 +508,8 @@ async function main() {
           )
         }, "real host-owned manual compaction completion", diagnostics, 90_000)
 
+        assert.ok(provider.stats.compactionRequests >= 1,
+          `host compaction never called the structured-summary model\n${await diagnostics()}`)
         const recorded = (await readFile(eventTrace, "utf8"))
           .split("\n").filter(Boolean).map((line) => JSON.parse(line))
           .filter((event) => event?.data?.sessionID === sessionID)
