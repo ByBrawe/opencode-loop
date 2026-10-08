@@ -43,6 +43,10 @@ for (const block of workflow.split(/- uses: actions\/checkout@/).slice(1)) asser
 const publisher = workflow.slice(workflow.indexOf("  publish:\n"), workflow.indexOf("  github-release:\n"))
 assert.doesNotMatch(publisher, /contents:\s*write/, "OIDC publisher must not gain repository mutation privileges")
 
+assert.match(workflow, /for attempt in \\{1\\.\\.12\\}/, "clean published npm consumer must retry version propagation")
+assert.ok(workflow.includes('--prefer-online --cache "$VERIFY_DIR/npm-cache-$attempt"'), "consumer retries must not reuse a stale npm cache")
+assert.ok(workflow.includes("Published Loop+Goal clean-install validation did not converge"), "clean consumer must remain a hard release gate")
+
 const sha = "a".repeat(40)
 const request = { name: "@bybrawe/opencode-loop", version: "0.6.6", predecessor: "0.6.5", goal: { version: "1.3.47", sha: "b".repeat(40) } }
 const pkg = { name: request.name, version: request.version }

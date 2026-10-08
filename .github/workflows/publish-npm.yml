@@ -154,7 +154,21 @@ jobs:
         run: |
           VERIFY_DIR="$(mktemp -d)"
           trap 'rm -rf "$VERIFY_DIR"' EXIT
-          (cd "$VERIFY_DIR" && npm init -y >/dev/null && npm install --omit=dev --omit=peer --ignore-scripts --no-audit --no-fund @bybrawe/opencode-loop@0.6.6 @bybrawe/opencode-goal@1.3.47)
+          (cd "$VERIFY_DIR" && npm init -y >/dev/null)
+          # The registry's version URL can become readable before npm's
+          # install-facing packument/CDN mirrors converge. A clean consumer
+          # must still pass; retry with a fresh npm cache, never skip this gate.
+          for attempt in {1..12}; do
+            if (cd "$VERIFY_DIR" && npm install --omit=dev --omit=peer --ignore-scripts --no-audit --no-fund --prefer-online --cache "$VERIFY_DIR/npm-cache-$attempt" @bybrawe/opencode-loop@0.6.6 @bybrawe/opencode-goal@1.3.47); then
+              break
+            fi
+            if [ "$attempt" -eq 12 ]; then
+              echo "Published Loop+Goal clean-install validation did not converge after 12 attempts" >&2
+              exit 1
+            fi
+            rm -rf "$VERIFY_DIR/node_modules" "$VERIFY_DIR/package-lock.json"
+            sleep 10
+          done
           npm install --prefix "$VERIFY_DIR/host" --package-lock=false @opencode/cli@2.0.18
           export OPENCODE2_BINARY="$VERIFY_DIR/host/node_modules/.bin/opencode2"
           export OPENCODE_GOAL_INSTALLER="$VERIFY_DIR/node_modules/@bybrawe/opencode-goal/dist/install.js"
