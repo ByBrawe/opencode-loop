@@ -8,7 +8,7 @@ The installer defaults to the native V2 package plugin. It needs no loose local 
 
 V2 prompt admission and durable inbox/execution/compaction events own scheduling. Core-generated user-role messages never authorize a session abort. An unfinished dedicated Goal reserves its session, including paused and handed-off states; Loop does not wake or replace that Goal. Soft iteration timeouts do not abort a native model/tool/compaction turn.
 
-Scheduled shell commands use Loop-managed bounded local child processes; the OpenCode 2 `ctx.shell` surface is a hook domain, not a command-execution API. Automatic compaction stays host-owned. **The public OpenCode 2 SessionDomain has no manual compaction action, so `/loop-compact`, `--compact`, and `--compact-every` are rejected before job creation instead of probing undocumented `session.compact` fields.** Use OpenCode's built-in manual/automatic compaction on V2.
+Automatic compaction remains host-owned. On OpenCode 2 versions exposing public `session.compact`, Loop's explicit native compaction is capability-gated and waits for its own manual `session.compaction.started` input ID, compaction completion, and a session terminal event. Older hosts reject unsupported compaction before scheduling.
 
 Prompt/command timers, watch and stop conditions, verification, preflight/postrun, notifications, checkpoints and diagnostic commands use the V2 runtime. Uncertain restart admissions pause for review rather than replaying potentially admitted work. The dedicated `@bybrawe/opencode-goal` plugin owns `/goal`; legacy Loop Goal records are preserved and are not silently reinterpreted as new Goal contracts.
 

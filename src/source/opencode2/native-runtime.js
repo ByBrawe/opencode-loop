@@ -134,7 +134,7 @@ export function createNativeLoopRuntime(options = {}) {
   async function finish(scope) {
     const run = scope.active
     if (!run || scope.compaction || scope.busy) return result({ reason: "no-terminal-boundary" })
-    if ((run.kind === "prompt" && !run.delivered) || (run.kind === "command" && !run.commandFinished) || (run.kind === "shell" && !run.shellFinished) || (["compact", "cadence"].includes(run.kind) && (!run.delivered || !run.compactFinished))) {
+    if ((run.kind === "prompt" && !run.delivered) || (run.kind === "command" && !run.commandFinished) || (run.kind === "shell" && !run.shellFinished) || (["compact", "cadence"].includes(run.kind) && (!run.compactionStarted || !run.compactFinished))) {
       return result({ reason: "awaiting-owned-completion" })
     }
     clear(scope, "deadline")
@@ -368,6 +368,14 @@ export function createNativeLoopRuntime(options = {}) {
     }
     if (event.kind === "compaction" && event.action === "started") {
       scope.compaction ||= { ended: false, terminal: false }
+      // The host promotes compaction control items directly; unlike ordinary
+      // user input, they do NOT emit session.inbox.delivered. Match the
+      // published manual-compaction inputID to our admitted durable item.
+      if (
+        ["compact", "cadence"].includes(scope.active?.kind)
+        && event.reason === "manual"
+        && event.inputID && event.inputID === scope.active.inboxID
+      ) scope.active.compactionStarted = true
       scope.busy = true
       clear(scope, "timer")
       return result({ reason: "compacting" })
@@ -435,7 +443,7 @@ export function createNativeLoopRuntime(options = {}) {
       if (event.kind === "compaction" && event.action === "ended") {
         scope.compaction ||= { ended: false, terminal: false }
         scope.compaction.ended = true
-        if (["compact", "cadence"].includes(scope.active?.kind) && scope.active.delivered && event.reason !== "auto") scope.active.compactFinished = true
+        if (["compact", "cadence"].includes(scope.active?.kind) && scope.active.compactionStarted && event.reason === "manual") scope.active.compactFinished = true
         if (!scope.compaction.terminal) return result({ reason: "awaiting-execution-terminal" })
       } else if (event.kind === "session" && event.action === "idle") {
         if (scope.compaction) { scope.compaction.terminal = true; if (!scope.compaction.ended) return result({ reason: "awaiting-compaction-end" }) }
