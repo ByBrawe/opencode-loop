@@ -9,9 +9,14 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const npmCLI = process.env.npm_execpath
 assert.ok(npmCLI, "run this through npm run package:smoke")
 function run(command, args, cwd) {
-  const result = spawnSync(command, args, { cwd, encoding: "utf8", timeout: 360_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true })
-  if (result.error) throw result.error
-  assert.equal(result.status, 0, [result.stdout, result.stderr].filter(Boolean).join("\n"))
+  const result = spawnSync(command, args, {
+    cwd, encoding: "utf8", timeout: 180_000, maxBuffer: 8 * 1024 * 1024,
+    windowsHide: true,
+    env: { ...process.env, npm_config_fetch_retries: "1", npm_config_fetch_timeout: "90000" },
+  })
+  const output = [result.stdout, result.stderr].filter(Boolean).join("\n")
+  if (result.error) throw new Error(`npm smoke subprocess failed: ${result.error.message}\n${output}`, { cause: result.error })
+  assert.equal(result.status, 0, output)
   return result.stdout
 }
 const temp = await mkdtemp(path.join(tmpdir(), "loop native package "))
@@ -23,7 +28,19 @@ try {
   const consumer = path.join(temp, "consumer with spaces")
   await mkdir(consumer)
   await writeFile(path.join(consumer, "package.json"), JSON.stringify({ private: true, type: "module" }))
-  run(process.execPath, [npmCLI, "install", "--ignore-scripts", "--omit=dev", "--omit=peer", "--no-audit", "--no-fund", path.join(temp, packed[0].filename)], consumer)
+  const packedTarball = path.join(temp, packed[0].filename)
+  const installArgs = ["install", "--ignore-scripts", "--omit=dev", "--omit=peer", "--no-audit", "--no-fund"]
+  try {
+    // npm ci just populated this runner's cache from the same lockfile. Test
+    // the real tarball installer without waiting indefinitely for Windows
+    // registry/CDN propagation. A truly uncached dependency can fall back to
+    // one bounded online resolution attempt; every failure remains fatal.
+    run(process.execPath, [npmCLI, ...installArgs, "--offline", packedTarball], consumer)
+  } catch (error) {
+    if (!/ENOTCACHED|cache mode is .only-if-cached./i.test(String(error))) throw error
+    console.warn("Offline package smoke cache incomplete; retrying bounded online npm install")
+    run(process.execPath, [npmCLI, ...installArgs, "--prefer-offline", packedTarball], consumer)
+  }
   console.log(run(process.execPath, [path.join(root, "scripts/native-entry-test.mjs"), consumer], root).trim())
   console.log("Production tarball native entry isolation and lazy legacy delegation PASS")
 } finally {
