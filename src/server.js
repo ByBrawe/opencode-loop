@@ -2021,7 +2021,7 @@ function createNativeLoopRuntime(options = {}) {
     const run = scope.active;
     if (!run || scope.compaction || scope.busy)
       return result({ reason: "no-terminal-boundary" });
-    if (run.kind === "prompt" && !run.delivered || run.kind === "command" && !run.commandFinished || run.kind === "shell" && !run.shellFinished || ["compact", "cadence"].includes(run.kind) && (!run.delivered || !run.compactFinished)) {
+    if (run.kind === "prompt" && !run.delivered || run.kind === "command" && !run.commandFinished || run.kind === "shell" && !run.shellFinished || ["compact", "cadence"].includes(run.kind) && (!run.compactionStarted || !run.compactFinished)) {
       return result({ reason: "awaiting-owned-completion" });
     }
     clear(scope, "deadline");
@@ -2297,6 +2297,8 @@ ${await policy.buildPrompt(scope.directory, job)}`, delivery: "queue", metadata:
     }
     if (event.kind === "compaction" && event.action === "started") {
       scope.compaction ||= { ended: false, terminal: false };
+      if (["compact", "cadence"].includes(scope.active?.kind) && event.reason === "manual" && event.inputID && event.inputID === scope.active.inboxID)
+        scope.active.compactionStarted = true;
       scope.busy = true;
       clear(scope, "timer");
       return result({ reason: "compacting" });
@@ -2376,7 +2378,7 @@ ${await policy.buildPrompt(scope.directory, job)}`, delivery: "queue", metadata:
       if (event.kind === "compaction" && event.action === "ended") {
         scope.compaction ||= { ended: false, terminal: false };
         scope.compaction.ended = true;
-        if (["compact", "cadence"].includes(scope.active?.kind) && scope.active.delivered && event.reason !== "auto")
+        if (["compact", "cadence"].includes(scope.active?.kind) && scope.active.compactionStarted && event.reason === "manual")
           scope.active.compactFinished = true;
         if (!scope.compaction.terminal)
           return result({ reason: "awaiting-execution-terminal" });
@@ -2860,7 +2862,7 @@ function normalizeOpenCode2NativeEvent(raw) {
   if (["session.compaction.started", "session.compaction.ended", "session.compaction.failed"].includes(type)) {
     if (!sessionID)
       return;
-    return Object.freeze({ kind: "compaction", action: type.split(".").at(-1), sessionID, directory, reason: text(data.reason), inputID: text(data.inputID) });
+    return Object.freeze({ kind: "compaction", action: type.split(".").at(-1), sessionID, directory, reason: text2(data.reason), inputID: text2(data.inputID) });
   }
   if (["session.execution.failed", "session.execution.interrupted"].includes(type)) {
     if (!sessionID)
