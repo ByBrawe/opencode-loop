@@ -2880,7 +2880,7 @@ function normalizeOpenCode2NativeEvent(raw) {
   if (["session.compaction.started", "session.compaction.ended", "session.compaction.failed"].includes(type)) {
     if (!sessionID)
       return;
-    return Object.freeze({ kind: "compaction", action: type.split(".").at(-1), sessionID, directory, reason: text2(data.reason), inputID: text2(data.inputID), error: text2(record3(data.error)?.message) });
+    return Object.freeze({ kind: "compaction", action: type.split(".").at(-1), sessionID, directory, reason: text2(data.reason), inputID: text2(data.inputID), error: text2(record2(data.error)?.message) });
   }
   if (["session.execution.failed", "session.execution.interrupted"].includes(type)) {
     if (!sessionID)

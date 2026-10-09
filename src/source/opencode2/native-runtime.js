@@ -445,7 +445,7 @@ export function createNativeLoopRuntime(options = {}) {
         }
         delete scope.compaction
         scope.busy = false
-        const detail = String(event.error || "").replace(/\\s+/g, " ").trim().slice(0, 160)
+        const detail = String(event.error || "").replace(/\s+/g, " ").trim().slice(0, 160)
         const reason = event.kind === "compaction"
           ? `compaction-failed${detail ? `: ${detail}` : ""}`
           : event.reason || `${event.kind}-${event.action}`
