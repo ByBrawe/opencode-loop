@@ -46,7 +46,7 @@ export async function waitForSessionBootstrap({
     // A side probe distinguishes a live command catalog from a stalled global
     // bootstrap. It is diagnostic only: we never waive the session readiness
     // requirement, and do not emit any endpoint response or credentials.
-    if (attempts % 3 === 0 && Date.now() < deadline - 2_000) {
+    if (attempts % 3 === 0 && Date.now() < deadline) {
       try {
         const res = await fetchImpl(new URL("/command", base), {
           method: "GET",
