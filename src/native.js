@@ -3181,7 +3181,7 @@ Presets: /loop-dev, /loop-testfix, /loop-progress, /loop-safe-dev, /loop-ask, /l
 Controls: /loop-now, /loop-pause, /loop-resume, /loop-stop, /loop-remove, /loop-clear, /loop-status, /loop-export.
 Preflight, postrun, notifications, stop files, completion markers, runtime/failure/run limits, branches and checkpoints are supported.
 Scheduled shell commands run as bounded local child processes managed by Loop; OpenCode 2's ctx.shell surface is a hook API, not a shell-execution method.
-The public OpenCode 2 plugin API does not expose manual session compaction. /loop-compact, --compact and --compact-every are rejected before job creation on V2; native automatic compaction remains host-owned and is observed through the compaction hook.
+Manual /loop-compact, --compact and --compact-every use public session.compact when the V2 host exposes it. Loop matches the admitted manual compaction inputID and waits for host completion; older hosts without this capability reject the job before creation. Automatic compaction stays host-owned.
 An unfinished dedicated Goal reserves its session; Loop will not override it.
 --timeout pauses future iterations without aborting the current native model/tool/compaction operation.
 --safe is a command heuristic, not a sandbox. --dry-run does not dispatch or run hooks.

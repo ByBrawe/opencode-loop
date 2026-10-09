@@ -5,8 +5,10 @@ import os from "node:os"
 import path from "node:path"
 import plugin from "../src/source/opencode2/native-plugin.js"
 
-function fixture(directory, { failCleanup = false } = {}) {
+function fixture(directory, { failCleanup = false, captureCommands = false } = {}) {
   const released = []
+  const commands = new Map()
+  const prompts = []
   let releaseRead, signal
   let streamClosed = false
   const end = () => releaseRead?.()
@@ -18,10 +20,17 @@ function fixture(directory, { failCleanup = false } = {}) {
     location: { directory }, options: {}, app: { version: "2.0.18" },
     session: {
       get: async ({ sessionID }) => ({ id: sessionID, location: { directory } }),
-      prompt: async () => { throw new Error("cleanup must not dispatch a prompt") },
+      prompt: async (request) => {
+        if (!captureCommands) throw new Error("cleanup must not dispatch a prompt")
+        prompts.push(request)
+        return { id: "test-prompt" }
+      },
       hook: async (name) => registration(name),
     },
-    command: { transform: async () => registration("commands") },
+    command: { transform: async (register) => {
+      if (captureCommands) await register({ add: ({ name, execute }) => commands.set(name, execute) })
+      return registration("commands")
+    } },
     event: { subscribe(options = {}) {
       signal = options.signal
       return (async function* () {
@@ -35,7 +44,7 @@ function fixture(directory, { failCleanup = false } = {}) {
       })()
     } },
   }
-  return { ctx, end, released, signal: () => signal, streamClosed: () => streamClosed }
+  return { ctx, end, released, commands, prompts, signal: () => signal, streamClosed: () => streamClosed }
 }
 
 async function bounded(promise) {
@@ -125,4 +134,25 @@ test("native Loop never probes undocumented SessionDomain shell or inbox fields"
 
 test("native Loop uses the same public plugin identity as the package entry", () => {
   assert.equal(plugin.id, "@bybrawe/opencode-loop", "native entry must share canonical plugin identity")
+})
+
+test("native /loop-help reflects public V2 compaction rather than obsolete unsupported guidance", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "loop-v2-help-compaction-"))
+  const host = fixture(directory, { captureCommands: true })
+  host.ctx.session.compact = async () => ({ id: "unused-compaction" })
+  let dispose
+  try {
+    dispose = await plugin.setup(host.ctx)
+    const help = host.commands.get("loop-help")
+    assert.equal(typeof help, "function")
+    await help({ sessionID: "ses-help" })
+    assert.equal(host.prompts.length, 1)
+    assert.match(host.prompts[0].text, /public session\.compact/)
+    assert.match(host.prompts[0].text, /inputID/)
+    assert.doesNotMatch(host.prompts[0].text, /does not expose manual session compaction/)
+  } finally {
+    host.end()
+    await dispose?.().catch(() => {})
+    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+  }
 })

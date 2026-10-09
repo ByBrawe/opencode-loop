@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased (main only)
+
+- Recover the native Loop+Goal coexistence canary's cold Windows server bootstrap with bounded read-only session polling and distinguish server startup hangs from actual autonomous-ownership conflicts.
+- Enforce fail-closed corrupt Loop state reads and protect per-session writes across multiple processes on Windows and Linux, including dead-owner recovery.
+- Support manual native V2 compaction through the public `session.compact` capability, verified by matching manual `inputID`, completion and terminal boundaries.
+- Add read-only Windows Desktop command-registry diagnostics for Loop and Goal and parent-versus-child workspace comparisons; the separate GUI `command.updated` refresh is proposed upstream but not published.
+- Align `/loop-help` with the current compaction behavior, rather than advertising the removed V2 limitation.
+
 ## 0.6.6 - 2026-10-04
 
 - Make a normal Loop install/update strictly Loop-only: it no longer installs, detects, refreshes, migrates, or modifies the dedicated `@bybrawe/opencode-goal` package.
