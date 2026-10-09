@@ -8,6 +8,8 @@ on:
     branches: [main]
     paths:
       - "scripts/host-goal-coexistence-canary.mjs"
+      - "scripts/host-goal-bootstrap.mjs"
+      - "scripts/host-goal-bootstrap-test.mjs"
       - ".github/workflows/goal-coexistence-latest.yml"
 
 permissions:
@@ -51,6 +53,9 @@ jobs:
           node -p "require('./package.json').version"
           npx --no-install opencode --version
           node -p "require('./node_modules/@bybrawe/opencode-goal/package.json').version"
+
+      - name: Verify coexistence bootstrap is bounded and read-only
+        run: node --test scripts/host-goal-bootstrap-test.mjs
 
       - name: Check coexistence canary syntax
         run: node --check scripts/host-goal-coexistence-canary.mjs

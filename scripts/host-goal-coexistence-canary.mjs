@@ -7,11 +7,12 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { waitForSessionBootstrap } from "./host-goal-bootstrap.mjs"
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const isWindows = process.platform === "win32"
 const SERVER_READY_TIMEOUT_MS = isWindows ? 60_000 : 30_000
-const API_BOOTSTRAP_TIMEOUT_MS = isWindows ? 90_000 : 30_000
+const API_BOOTSTRAP_TIMEOUT_MS = isWindows ? 180_000 : 60_000
 const PREWARM_TIMEOUT_MS = isWindows ? 120_000 : 60_000
 const GOAL_OBJECTIVE = "prove dedicated Goal owns continuation over Loop"
 const GOAL_PROMPT_MARKER = "Continue working toward the active OpenCode goal."
@@ -341,7 +342,15 @@ async function main() {
       }
     }
 
-    const sessionsPayload = await api("/session", { method: "GET" })
+    // A Windows cold host may accept TCP before its session/project/plugin
+    // services are ready. Probe readiness in bounded requests rather than
+    // hanging for 90 seconds on one socket and attributing it to Goal/Loop.
+    const sessionsPayload = await waitForSessionBootstrap({
+      baseURL,
+      workspace,
+      timeoutMs: API_BOOTSTRAP_TIMEOUT_MS,
+      fetchImpl: fetch,
+    })
     assert.ok(Array.isArray(sessionsPayload?.data ?? sessionsPayload), "GET /session bootstrap did not return an array")
     const createdPayload = await api("/session", { method: "POST", body: JSON.stringify({ title: "Loop + Goal ownership canary" }) })
     const session = createdPayload?.data ?? createdPayload
