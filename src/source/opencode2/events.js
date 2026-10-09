@@ -67,7 +67,7 @@ export function normalizeOpenCode2NativeEvent(raw) {
   }
   if (["session.compaction.started", "session.compaction.ended", "session.compaction.failed"].includes(type)) {
     if (!sessionID) return undefined
-    return Object.freeze({ kind: "compaction", action: type.split(".").at(-1), sessionID, directory, reason: text(data.reason), inputID: text(data.inputID) })
+    return Object.freeze({ kind: "compaction", action: type.split(".").at(-1), sessionID, directory, reason: text(data.reason), inputID: text(data.inputID), error: text(record(data.error)?.message) })
   }
   if (["session.execution.failed", "session.execution.interrupted"].includes(type)) {
     if (!sessionID) return undefined

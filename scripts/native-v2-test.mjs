@@ -243,6 +243,47 @@ await test("manual compaction needs delivered inbox and completed host boundary"
   assert.equal((await f.state()).jobs[0].runCount, 1)
 })
 
+await test("foreign host compaction failure cannot pause or consume a pending Loop compact", async (f) => {
+  await f.control("loop-compact", "0s --now --max-runs 1")
+  await f.wake()
+  const jobID = f.compacts[0].id
+  await f.event("compaction", "started", { reason: "manual", inputID: "another-user-input" })
+  await f.event("compaction", "failed", {
+    reason: "manual", inputID: "another-user-input",
+    error: "Not our compaction",
+  })
+  await f.event("session", "idle")
+  const waiting = (await f.state()).jobs[0]
+  assert.equal(waiting.paused, false, "foreign compaction failure must not pause our pending operation")
+  assert.ok(waiting.v2Run, "foreign event must not erase the pending compact request")
+  assert.equal(waiting.runCount, 0)
+
+  await f.event("compaction", "started", { reason: "manual", inputID: jobID })
+  await f.event("compaction", "failed", {
+    reason: "manual", inputID: jobID,
+    error: "Summary did not match the template\nwith details",
+  })
+  const failed = (await f.state()).jobs[0]
+  assert.equal(failed.paused, true)
+  assert.match(failed.pauseReason, /^compaction-failed: Summary did not match the template/)
+  assert.equal(failed.pauseReason.includes("\n"), false, "provider messages cannot inject log newlines")
+  assert.equal(failed.v2Run, undefined, "confirmed owned host failure must release pending work")
+  assert.equal(failed.runCount, 0, "a failed host compact cannot charge a logical run")
+  await f.event("session", "idle")
+  assert.equal((await f.state()).jobs[0].paused, true)
+})
+
+await test("unowned automatic host compaction failure leaves unrelated Loop jobs enabled", async (f) => {
+  await f.add("every 1h delayed task --max-runs 1")
+  await f.event("compaction", "started", { reason: "auto" })
+  await f.event("compaction", "failed", { reason: "auto", error: "host model unavailable" })
+  await f.event("session", "idle")
+  const job = (await f.state()).jobs[0]
+  assert.equal(job.paused, false)
+  assert.equal(job.runCount, 0)
+  assert.equal(job.v2Run, undefined)
+})
+
 await test("a failed delivered execution is paused and can be explicitly resumed", async (f) => {
   await f.add("0s task --max-runs 3")
   await f.wake()

@@ -428,10 +428,28 @@ export function createNativeLoopRuntime(options = {}) {
         return finish(scope)
       }
       if ((event.kind === "session" && ["error", "failed", "interrupted"].includes(event.action)) || (event.kind === "compaction" && event.action === "failed")) {
+        const run = scope.active
+        // Unowned compaction failures must not pause unrelated scheduled Loop
+        // work. An automated host summary can fail when no Loop job owns it,
+        // and a different manual inputID cannot settle our pending request.
+        if (event.kind === "compaction" && event.action === "failed") {
+          const compactRun = ["compact", "cadence"].includes(run?.kind)
+          const owned = compactRun && event.reason === "manual" &&
+            ((event.inputID && event.inputID === run.inboxID) ||
+              (!event.inputID && run.compactionStarted))
+          if (!run || (compactRun && !owned)) {
+            delete scope.compaction
+            scope.busy = false
+            return result({ reason: "unowned-compaction-failed" })
+          }
+        }
         delete scope.compaction
         scope.busy = false
-        const run = scope.active
-        const paused = await pauseActive(scope, event.reason || `${event.kind}-${event.action}`)
+        const detail = String(event.error || "").replace(/\\s+/g, " ").trim().slice(0, 160)
+        const reason = event.kind === "compaction"
+          ? `compaction-failed${detail ? `: ${detail}` : ""}`
+          : event.reason || `${event.kind}-${event.action}`
+        const paused = await pauseActive(scope, reason)
         if (run && (run.delivered || ["compact", "cadence", "shell"].includes(run.kind))) {
           const state = await read(scope)
           const job = (state.jobs || []).find((entry) => entry.id === run.jobID)
