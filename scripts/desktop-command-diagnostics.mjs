@@ -81,11 +81,19 @@ async function request(fetchImpl, base, pathname, headers) {
   }
 }
 
+async function catalog(fetchImpl, origin, headers) {
+  let response = await request(fetchImpl, origin, "/api/command", headers)
+  if (response.status === 404) response = await request(fetchImpl, origin, "/command", headers)
+  return response
+}
+
 export async function diagnose({
   env = process.env, home = homedir(), workspace = process.cwd(),
-  server, serviceFile, fetchImpl = fetch,
+  compareWorkspace, server, serviceFile, fetchImpl = fetch,
 } = {}) {
   const cwd = path.resolve(workspace)
+  const comparisonDirectory = typeof compareWorkspace === "string" && compareWorkspace.trim()
+    ? path.resolve(compareWorkspace) : undefined
   const config = await configPins(env, home)
   const registeredFile = serviceFile ?? path.join(
     env.XDG_STATE_HOME ?? path.join(home, ".local", "state"), "opencode", "service.json",
@@ -140,8 +148,7 @@ export async function diagnose({
     }
     if (typeof info.json.version === "string") output.service.actualVersion = info.json.version
   }
-  let list = await request(fetchImpl, origin, "/api/command", headers)
-  if (list.status === 404) list = await request(fetchImpl, origin, "/command", headers)
+  const list = await catalog(fetchImpl, origin, headers)
   if (list.error) {
     output.service.status = list.error
     return output
@@ -158,29 +165,45 @@ export async function diagnose({
   }
   output.service.status = "ready"
   output.service.commands = { loop: names.has("loop"), goal: names.has("goal"), count: names.size }
+  if (comparisonDirectory && comparisonDirectory !== cwd) {
+    const comparisonHeaders = { ...headers, "x-opencode-directory": comparisonDirectory }
+    const compared = await catalog(fetchImpl, origin, comparisonHeaders)
+    const comparedNames = commandsFrom(compared.json)
+    output.comparison = {
+      workspace: comparisonDirectory,
+      status: comparedNames ? "ready" : compared.error || (
+        compared.status === 401 || compared.status === 403 ? "authorization-failed" : "command-catalog-unavailable"
+      ),
+      ...(comparedNames ? {
+        commands: { loop: comparedNames.has("loop"), goal: comparedNames.has("goal"), count: comparedNames.size },
+        matchesPrimary: comparedNames.has("loop") === names.has("loop") && comparedNames.has("goal") === names.has("goal"),
+      } : {}),
+    }
+  }
   return output
 }
 
 export async function runDesktopDiagnosticCli(args = process.argv.slice(2), options = {}) {
-  let workspace = process.cwd(), server, json = false
+  let workspace = process.cwd(), compareWorkspace, server, json = false
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
     if (arg === "--help" || arg === "-h") {
-      console.log("Usage: opencode-loop --desktop-diagnostics [--workspace PATH] [--server LOCAL_URL] [--json]")
+      console.log("Usage: opencode-loop --desktop-diagnostics [--workspace PATH] [--compare-workspace PATH] [--server LOCAL_URL] [--json]")
       console.log("Read-only check of both native /loop and /goal registrations; never prints credentials.")
       return 0
     }
     if (arg === "--json") { json = true; continue }
-    if (arg === "--workspace" || arg === "--server") {
+    if (arg === "--workspace" || arg === "--compare-workspace" || arg === "--server") {
       if (!args[i + 1]) { console.error("Missing value for " + arg); return 2 }
       if (arg === "--workspace") workspace = args[++i]
+      else if (arg === "--compare-workspace") compareWorkspace = args[++i]
       else server = args[++i]
       continue
     }
     console.error("Unknown Desktop diagnostic option: " + arg)
     return 2
   }
-  const result = await diagnose({ ...options, workspace, server })
+  const result = await diagnose({ ...options, workspace, compareWorkspace, server })
   if (json) console.log(JSON.stringify(result, null, 2))
   else {
     console.log("OpenCode Desktop native command diagnosis (read-only)")
@@ -191,6 +214,14 @@ export async function runDesktopDiagnosticCli(args = process.argv.slice(2), opti
     console.log("Local service: " + result.service.status + (result.service.registeredVersion ? " (" + result.service.registeredVersion + ")" : ""))
     if (result.service.commands)
       console.log("Server /loop: " + result.service.commands.loop + " | /goal: " + result.service.commands.goal)
+    if (result.comparison) {
+      console.log("Compared workspace: " + result.comparison.workspace)
+      console.log("Compared catalog: " + result.comparison.status)
+      if (result.comparison.commands) {
+        console.log("Compared /loop: " + result.comparison.commands.loop + " | /goal: " + result.comparison.commands.goal)
+        console.log("Same native command visibility across directories: " + result.comparison.matchesPrimary)
+      }
+    }
     if (!result.service.commands)
       console.log("No confirmed local server catalog. Desktop may use a different connection or service.")
     console.log("This checks one local service and directory; it cannot prove which connection Desktop currently uses.")

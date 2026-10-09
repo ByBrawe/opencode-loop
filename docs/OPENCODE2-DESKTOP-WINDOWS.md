@@ -46,6 +46,19 @@ environment. To probe another **local** endpoint explicitly:
 npx -y @bybrawe/opencode-loop@latest --desktop-diagnostics --server http://127.0.0.1:4096 --workspace (Get-Location).Path
 ```
 
+To compare the terminal project with the **parent directory opened in Desktop**
+(using the same local server and no installs):
+
+```powershell
+npx -y @bybrawe/opencode-loop@latest --desktop-diagnostics --workspace (Get-Location).Path --compare-workspace (Split-Path (Get-Location).Path -Parent)
+```
+
+A comparison showing `/loop: true /goal: true` in the child but both false
+in the Desktop directory proves that this server publishes different command
+catalogs for the two locations. It does not by itself establish that Desktop is
+connected to the same server. Do not move or rewrite global plugin config
+based solely on this comparison.
+
 Use `OPENCODE_PASSWORD` in the environment if that explicit local server needs
 authentication. Do not paste the server registration file, password, full config
 or auth headers into issues or chat. The auto-discovered service may still be a
