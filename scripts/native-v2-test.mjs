@@ -256,7 +256,7 @@ await test("foreign host compaction failure cannot pause or consume a pending Lo
   const waiting = (await f.state()).jobs[0]
   assert.equal(waiting.paused, false, "foreign compaction failure must not pause our pending operation")
   assert.ok(waiting.v2Run, "foreign event must not erase the pending compact request")
-  assert.equal(waiting.runCount, 0)
+  assert.equal(waiting.runCount, 1, "a confirmed host admission is charged once; foreign failure cannot change its accounting")
 
   await f.event("compaction", "started", { reason: "manual", inputID: jobID })
   await f.event("compaction", "failed", {
@@ -268,7 +268,7 @@ await test("foreign host compaction failure cannot pause or consume a pending Lo
   assert.match(failed.pauseReason, /^compaction-failed: Summary did not match the template/)
   assert.equal(failed.pauseReason.includes("\n"), false, "provider messages cannot inject log newlines")
   assert.equal(failed.v2Run, undefined, "confirmed owned host failure must release pending work")
-  assert.equal(failed.runCount, 0, "a failed host compact cannot charge a logical run")
+  assert.equal(failed.runCount, 1, "a failed host compact preserves the one already-admitted logical run")
   await f.event("session", "idle")
   assert.equal((await f.state()).jobs[0].paused, true)
 })
