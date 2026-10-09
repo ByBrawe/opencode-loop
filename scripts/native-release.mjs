@@ -7,12 +7,12 @@ export function validateRelease(request, pkg, env) {
   assert.equal(env.GITHUB_REPOSITORY, "ByBrawe/opencode-loop", "wrong release repository")
   assert.equal(env.GITHUB_REF, "refs/heads/main", "npm release must come from main")
   assert.match(env.GITHUB_SHA ?? "", /^[a-f0-9]{40}$/, "immutable release SHA required")
-  assert.equal(request?.version, "0.6.6", "release version is not authorized")
+  assert.equal(request?.version, "0.6.7", "release version is not authorized")
   assert.equal(request?.name, "@bybrawe/opencode-loop")
   assert.equal(pkg.name, request.name)
   assert.equal(pkg.version, request.version)
-  assert.equal(request.predecessor, "0.6.5")
-  assert.equal(request.goal?.version, "1.3.47")
+  assert.equal(request.predecessor, "0.6.6")
+  assert.equal(request.goal?.version, "1.3.48")
   assert.match(request.goal?.sha ?? "", /^[a-f0-9]{40}$/)
   return request
 }

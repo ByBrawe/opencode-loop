@@ -2,6 +2,10 @@
 
 ## Unreleased (main only)
 
+No unreleased changes yet.
+
+## 0.6.7 - 2026-10-09
+
 - Recover the native Loop+Goal coexistence canary's cold Windows server bootstrap with bounded read-only session polling and distinguish server startup hangs from actual autonomous-ownership conflicts.
 - Enforce fail-closed corrupt Loop state reads and protect per-session writes across multiple processes on Windows and Linux, including dead-owner recovery.
 - Support manual native V2 compaction through the public `session.compact` capability, verified by matching manual `inputID`, completion and terminal boundaries.

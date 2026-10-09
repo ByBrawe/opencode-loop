@@ -1,11 +1,11 @@
 {
   "name": "@bybrawe/opencode-loop",
-  "version": "0.6.6",
-  "predecessor": "0.6.5",
+  "version": "0.6.7",
+  "predecessor": "0.6.6",
   "goal": {
-    "version": "1.3.47",
-    "sha": "0f44b5df1188a03204a6dc8d790e76e32b4da810"
+    "version": "1.3.48",
+    "sha": "28dd1ca8bcf8dc69e75bc5fbeeacb72f0dce438d"
   },
-  "requestedAt": "2026-10-04",
-  "reason": "User-authorized installer contract patch from main. Publish Loop 0.6.6 with the recommended OpenCode 2 setup as two independent commands: install/update Loop with npx -y @bybrawe/opencode-loop@latest and install/update the dedicated Goal plugin separately with npx -y @bybrawe/opencode-goal@latest. A normal Loop install must not install, detect, refresh, migrate, or modify Goal; Loop's legacy /loop-goal* commands are omitted by default and remain explicit compatibility opt-in only. Preserve Goal 1.3.47 coexistence gates and the aligned v0.6.6 release artifacts."
+  "requestedAt": "2026-10-09",
+  "reason": "User-authorized OpenCode 2 V2 stabilization release: publish Loop 0.6.7 from exact main after required Windows/Ubuntu and installed-native-host gates, paired with immutable dedicated Goal 1.3.48. Ship cross-process crash-safe Loop state transactions, native public-API manual compaction, Windows Desktop read-only command registry diagnostics, and bounded cold-start coexistence checks. Preserve two separate installers, Loop-only default, and opt-in legacy /loop-goal* commands; do not claim Windows Desktop GUI autocomplete is repaired."
 }
