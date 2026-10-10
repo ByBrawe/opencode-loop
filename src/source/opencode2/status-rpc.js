@@ -75,5 +75,3 @@ export async function registerLoopStatusRpc(ctx) {
     return disposal
   }
 }
-
-export default registerLoopStatusRpc

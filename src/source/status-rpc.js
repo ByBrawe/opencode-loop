@@ -48,5 +48,3 @@ export const LoopStatusRpc = Object.freeze({
 })
 
 assertNoReservedErrors(LoopStatusRpc)
-
-export default LoopStatusRpc

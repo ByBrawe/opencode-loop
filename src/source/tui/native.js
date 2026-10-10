@@ -87,5 +87,3 @@ export function setupNativeLoopTui(context) {
     if (errors.length) throw new AggregateError(errors, "Loop sidebar cleanup failed")
   }
 }
-
-export default setupNativeLoopTui

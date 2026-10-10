@@ -136,5 +136,3 @@ export function formatLoopSidebar(state, current = Date.now()) {
 function jobKindLabel(job) {
   return truncate(String(job?.kind || "prompt").toLowerCase(), 12)
 }
-
-export default formatLoopSidebar
