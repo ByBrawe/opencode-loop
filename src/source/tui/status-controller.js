@@ -143,5 +143,3 @@ export function createLoopStatusController(options) {
 
   return { select, refresh, invalidate, dispose }
 }
-
-export default createLoopStatusController
