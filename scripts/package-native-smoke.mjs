@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -60,6 +60,65 @@ try {
     }
   }
   console.log(run(process.execPath, [path.join(root, "scripts/native-entry-test.mjs"), consumer], root).trim())
+
+  const installed = path.join(consumer, "node_modules", "@bybrawe", "opencode-loop")
+  const manifest = JSON.parse(await readFile(path.join(installed, "package.json"), "utf8"))
+
+  // A new subpath export only reaches a consumer if package.json files ships
+  // its target; the manifest can look correct while the packed archive is not.
+  for (const name of [".", "./server", "./v2", "./v1", "./tui", "./rpc"]) {
+    const target = manifest.exports[name]
+    assert.equal(typeof target, "string", `export ${name} must resolve to a packed path`)
+    assert.ok(files.has(target.replace(/^\.\//, "")), `export ${name} target is not packed`)
+  }
+
+  for (const entry of [
+    "src/source/tui/index.js",
+    "src/source/tui/native.js",
+    "src/source/tui/format.js",
+    "src/source/tui/status-controller.js",
+    "src/source/status-rpc.js",
+  ]) {
+    assert.ok(files.has(entry), `missing ${entry}`)
+  }
+
+  // The read contract is also loaded by the TUI process, so a bare import would
+  // become a dependency that a consumer has to resolve.
+  const contract = await readFile(path.join(installed, "src", "source", "status-rpc.js"), "utf8")
+  assert.doesNotMatch(contract, /^\s*import\s/m, "packed ./rpc contract must import nothing")
+
+  // The committed bundles are what every consumer loads, so an inlined optional
+  // peer would hand the OpenTUI runtime to a server-only install.
+  for (const bundle of ["src/index.js", "src/server.js", "src/native.js"]) {
+    const text = await readFile(path.join(installed, ...bundle.split("/")), "utf8")
+    assert.doesNotMatch(text, /@opentui\/|solid-js/, `${bundle} must not inline the optional UI peers`)
+  }
+
+  // Declared optional so a server-only install never resolves them; declaring
+  // them required would make every Loop user install the TUI runtime.
+  for (const peer of ["@opentui/core", "@opentui/solid", "solid-js"]) {
+    assert.ok(manifest.peerDependencies?.[peer], `missing peer ${peer}`)
+    assert.equal(manifest.peerDependenciesMeta?.[peer]?.optional, true, `${peer} must be optional`)
+  }
+
+  const resolved = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", 'const m = await import("@bybrawe/opencode-loop/rpc"); process.stdout.write(String(m.LoopStatusRpc?.id))'],
+    { cwd: consumer, encoding: "utf8", timeout: 60_000, windowsHide: true },
+  )
+  assert.equal(resolved.status, 0, `${resolved.stdout || ""}${resolved.stderr || ""}`)
+  assert.equal(resolved.stdout.trim(), "bybrawe-opencode-loop-status")
+
+  // The panel needs its UI peers from the TUI host. A clean consumer that could
+  // already import ./tui would mean those optional peers leaked somewhere else.
+  const tuiPeerProbe = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", 'await import("@bybrawe/opencode-loop/tui")'],
+    { cwd: consumer, encoding: "utf8", timeout: 60_000, windowsHide: true },
+  )
+  assert.notEqual(tuiPeerProbe.status, 0, "packed ./tui must require the host-provided UI peers")
+
+  console.log("Published ./tui and ./rpc contract, optional UI peers and UI-free server bundles PASS")
   console.log("Production tarball native entry isolation and lazy legacy delegation PASS")
 } finally {
   await rm(temp, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 })

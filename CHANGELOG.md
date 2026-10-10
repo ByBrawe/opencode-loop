@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased (main only)
+## Unreleased
 
-No unreleased changes yet.
+- Add a native OpenCode 2 sidebar that renders Loop status.
 
 ## 0.6.7 - 2026-10-09
 

@@ -4,6 +4,7 @@ import { createNativeShellHost } from "./native-shell.js"
 import { createNativeLoopRuntime } from "./native-runtime.js"
 import { createOpenCode2EventBridge } from "./event-bridge.js"
 import { registerOpenCode2LoopCommands, OPENCODE_LOOP_V2_PRESET_NAMES, commandArguments } from "./commands.js"
+import { registerLoopStatusRpc } from "./status-rpc.js"
 import { readSmallTextFile, appendLoopLog } from "../core/process.js"
 import { stateDir } from "../core/state.js"
 import { initializeProgressFile } from "../core/progress.js"
@@ -48,6 +49,23 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
       getSession: (input) => ctx.session.get(input),
     })
     const registrations = []
+    // Read-only sidebar telemetry. Presentation never participates in the
+    // scheduling lifecycle, so it is registered and released independently.
+    // Unlike the Goal companion this stays fail-open: a host that cannot serve
+    // the panel must not lose the scheduler itself.
+    let stopStatusRpc = async () => {}
+    let statusRpcState = "unsupported"
+    try {
+      stopStatusRpc = await registerLoopStatusRpc(ctx)
+      statusRpcState = typeof ctx?.rpc?.register === "function" ? "registered" : "unsupported"
+    } catch (error) {
+      statusRpcState = "unavailable"
+      await appendLoopLog(directory, "v2-status-rpc-unavailable", { message: String(error?.message || error) }).catch(() => {})
+    }
+    if (statusRpcState === "registered") {
+      await appendLoopLog(directory, "v2-status-rpc-ready", { host: ctx.app?.version || "unknown" }).catch(() => {})
+    }
+    registrations.push(() => stopStatusRpc())
     const lifecycleAbort = new AbortController()
     const prompt = (request) => ctx.session.prompt({ ...request, delivery: request.delivery || "queue", metadata: { ...request.metadata, opencode_loop_v2: true } })
     const shellHost = createNativeShellHost({
@@ -107,7 +125,7 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
         const text = name === "loop-logs"
           ? (await readSmallTextFile(path.join(stateDir(directory), "loop.log"), 2_000_000)).split("\n").slice(-60).join("\n") || "No Loop log entries."
           : name === "loop-doctor"
-            ? `Native OpenCode Loop\nHost: ${ctx.app?.version || "unknown"}\nDirectory: ${directory}\nPrompt hooks: enabled\nCompaction ownership: native host\nDelivery: durable queue\nScheduled timers: ${runtime.scheduledCount()}\nUse /loop-status for paused/admitted job state.`
+            ? `Native OpenCode Loop\nHost: ${ctx.app?.version || "unknown"}\nDirectory: ${directory}\nPrompt hooks: enabled\nCompaction ownership: native host\nDelivery: durable queue\nScheduled timers: ${runtime.scheduledCount()}\nSidebar status RPC: ${statusRpcState}\nUse /loop-status for paused/admitted job state.`
             : HELP
         await prompt({ sessionID, text, resume: false })
         return { handled: true, accepted: true }
