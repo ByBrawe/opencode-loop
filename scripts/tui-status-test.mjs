@@ -240,6 +240,28 @@ function job(overrides = {}) {
   await assert.rejects(() => readHandler({ sessionID: "ses_other" }, {}), /unavailable/)
   await assert.rejects(() => readHandler({ sessionID }, { signal: AbortSignal.abort() }), /unavailable/)
 
+  // A resolvable session from another worktree or another workspace is still
+  // not this plugin's session. The panel must refuse it rather than serve a
+  // second project's Loop state.
+  const readHandlerFor = async (location) => {
+    let handler
+    await registerLoopStatusRpc({
+      location: { directory, workspaceID: "w1" },
+      session: { get: async ({ sessionID: id }) => (id === sessionID ? { id: sessionID, location } : undefined) },
+      rpc: { register: async (_definition, handlers) => { handler = handlers.read; return { dispose: async () => {} } } },
+    })
+    return handler
+  }
+
+  for (const location of [
+    { directory: path.join(directory, "worktree-a"), workspaceID: "w1" },
+    { directory: path.join(directory, "..", "elsewhere"), workspaceID: "w1" },
+    { directory, workspaceID: "w2" },
+  ]) {
+    const foreign = await readHandlerFor(location)
+    await assert.rejects(() => foreign({ sessionID }, {}), /unavailable/)
+  }
+
   await stop()
   assert.equal(disposed, true)
   // A released registration must refuse to keep serving stale panel text.
