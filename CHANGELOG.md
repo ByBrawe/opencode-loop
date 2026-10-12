@@ -4,6 +4,14 @@
 
 No unreleased changes yet.
 
+## 0.6.8 - 2026-10-13
+
+- Fix #172: fall back to exclusive `wx` lock claims where exFAT/FAT or other volumes reject `fs.link()`, including the reported `EISDIR` error.
+- Preserve live-owner exclusion, dead-owner cleanup elections, crash-safe state updates and fail-closed corrupted locks.
+- Exercise simulated unsupported hard-link errors across independent workers, merged writes, recovered dead owners and unexpected errors.
+- Pair the new release with independently installed Goal 1.3.49 and require Windows/Linux and native OpenCode 2 release gates.
+- The reported physical Windows exFAT case still needs re-testing on its actual disk.
+
 ## 0.6.7 - 2026-10-09
 
 - Recover the native Loop+Goal coexistence canary's cold Windows server bootstrap with bounded read-only session polling and distinguish server startup hangs from actual autonomous-ownership conflicts.
