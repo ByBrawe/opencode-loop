@@ -68,6 +68,19 @@ async function readStateProcessOwner(file) {
       await delay(10 * (attempt + 1))
     }
   }
+  // An exclusive-file fallback publishes an empty lock briefly before
+  // writing its owner. Allow a bounded read retry; stale empty locks still
+  // fail closed rather than being taken over.
+  if (raw.length === 0) {
+    for (let attempt = 0; attempt < 8 && raw.length === 0; attempt++) {
+      await delay(10 * (attempt + 1))
+      try { raw = await fs.readFile(file, "utf8") }
+      catch (error) {
+        if (error?.code === "ENOENT") return null
+        throw error
+      }
+    }
+  }
   let owner
   try { owner = JSON.parse(raw) }
   catch { throw stateLockError("invalid_owner", `corrupt lock metadata at ${file}`) }
@@ -91,11 +104,31 @@ async function removeStateProcessFile(file) {
   }
 }
 
+// Keep atomic hard links on capable volumes. FAT/exFAT and some remote volumes
+// reject them, so fall back to exclusive creation (O_EXCL) without overwriting
+// any existing live lock or stale-owner cleanup election.
 async function claimStateProcessLock(candidate, canonical) {
   for (let attempt = 0; ; attempt++) {
     try { await fs.link(candidate, canonical); return true }
     catch (error) {
       if (error?.code === "EEXIST") return false
+      if (["EISDIR", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EPERM", "EACCES"].includes(error?.code)) {
+        const contents = await fs.readFile(candidate)
+        let handle
+        try { handle = await fs.open(canonical, "wx", 0o600) }
+        catch (failure) {
+          if (failure?.code === "EEXIST") return false
+          throw failure
+        }
+        try { await handle.writeFile(contents) }
+        catch (failure) {
+          await handle.close().catch(() => {})
+          await removeStateProcessFile(canonical).catch(() => {})
+          throw failure
+        }
+        await handle.close()
+        return true
+      }
       if (process.platform !== "win32" || !["EPERM", "EACCES", "EBUSY"].includes(error?.code) || attempt >= 5) throw error
       await delay(10 * (attempt + 1))
     }
