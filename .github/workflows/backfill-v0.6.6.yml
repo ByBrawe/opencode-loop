@@ -1,9 +1,5 @@
 name: Backfill immutable v0.6.6 release
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/backfill-v0.6.6.yml
   workflow_dispatch:
 
 permissions:
