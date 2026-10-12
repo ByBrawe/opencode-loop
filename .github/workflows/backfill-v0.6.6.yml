@@ -1,0 +1,80 @@
+name: Backfill immutable v0.6.6 release
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/backfill-v0.6.6.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-backfill:
+    if: github.repository == 'ByBrawe/opencode-loop' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify npm source and create missing immutable tag only
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          target=ca1ac0c8d63fc5754b5e0c9d54c04bc004f1ffba
+          git cat-file -e "$target^{commit}"
+          git merge-base --is-ancestor "$target" "$GITHUB_SHA"
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict'
+          const repo = 'ByBrawe/opencode-loop'
+          const target = 'ca1ac0c8d63fc5754b5e0c9d54c04bc004f1ffba'
+          const registry = await fetch('https://registry.npmjs.org/%40bybrawe%2Fopencode-loop/0.6.6', { signal: AbortSignal.timeout(20000) })
+          assert.ok(registry.ok, 'published npm 0.6.6 is unavailable')
+          const pkg = await registry.json()
+          assert.equal(pkg.name, '@bybrawe/opencode-loop')
+          assert.equal(pkg.version, '0.6.6')
+          assert.equal(pkg.gitHead, target, 'npm immutable 0.6.6 belongs to a different source')
+
+          const base = 'https://api.github.com/repos/' + repo
+          const headers = { Authorization: 'Bearer ' + process.env.GH_TOKEN, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' }
+          let response = await fetch(base + '/git/ref/tags/v0.6.6', { headers, signal: AbortSignal.timeout(20000) })
+          if (response.status === 404) {
+            const created = await fetch(base + '/git/refs', { method: 'POST', headers, body: JSON.stringify({ ref: 'refs/tags/v0.6.6', sha: target }), signal: AbortSignal.timeout(20000) })
+            if (created.status !== 201) {
+              const error = await created.json().catch(() => ({}))
+              throw new Error('immutable v0.6.6 tag creation failed HTTP ' + created.status + ': ' + String(error.message ?? 'no diagnostic'))
+            }
+            response = await fetch(base + '/git/ref/tags/v0.6.6', { headers, signal: AbortSignal.timeout(20000) })
+          }
+          assert.ok(response.ok, 'immutable tag is not readable')
+          let object = (await response.json()).object
+          if (object.type === 'tag') {
+            const ref = await fetch(base + '/git/tags/' + object.sha, { headers, signal: AbortSignal.timeout(20000) })
+            assert.ok(ref.ok)
+            object = (await ref.json()).object
+          }
+          assert.equal(object.type, 'commit')
+          assert.equal(object.sha, target, 'pre-existing v0.6.6 tag points to another immutable commit; refusing to move')
+          console.log('IMMUTABLE_V0_6_6_TAG_VERIFIED', target)
+          JS
+      - name: Create missing GitHub release from exact v0.6.6 contents
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          target=ca1ac0c8d63fc5754b5e0c9d54c04bc004f1ffba
+          if gh release view v0.6.6 >/dev/null 2>&1; then
+            echo 'v0.6.6 release already present; preserving immutable artifact'
+          else
+            git archive --format=zip --output=opencode-loop.zip "$target"
+            git show "$target:examples/OPENCODE2-0.6.6.md" > old-release-notes.md
+            gh release create v0.6.6 opencode-loop.zip --title v0.6.6 --notes-file old-release-notes.md --verify-tag
+          fi
+          gh release view v0.6.6 --json tagName --jq .tagName | grep -Fx v0.6.6
+          echo HISTORICAL_RELEASE_V0_6_6_PASS
