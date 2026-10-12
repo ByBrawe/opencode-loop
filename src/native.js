@@ -613,7 +613,7 @@ async function readStateProcessOwner(file) {
     }
   }
   if (raw.length === 0) {
-    for (let attempt = 0; attempt < 8 && raw.length === 0; attempt++) {
+    for (let attempt = 0;attempt < 8 && raw.length === 0; attempt++) {
       await delay(10 * (attempt + 1));
       try {
         raw = await fs.readFile(file, "utf8");

@@ -612,6 +612,18 @@ async function readStateProcessOwner(file) {
       await delay(10 * (attempt + 1));
     }
   }
+  if (raw.length === 0) {
+    for (let attempt = 0;attempt < 8 && raw.length === 0; attempt++) {
+      await delay(10 * (attempt + 1));
+      try {
+        raw = await fs.readFile(file, "utf8");
+      } catch (error) {
+        if (error?.code === "ENOENT")
+          return null;
+        throw error;
+      }
+    }
+  }
   let owner;
   try {
     owner = JSON.parse(raw);
@@ -652,6 +664,26 @@ async function claimStateProcessLock(candidate, canonical) {
     } catch (error) {
       if (error?.code === "EEXIST")
         return false;
+      if (["EISDIR", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EPERM", "EACCES"].includes(error?.code)) {
+        const contents = await fs.readFile(candidate);
+        let handle;
+        try {
+          handle = await fs.open(canonical, "wx", 384);
+        } catch (failure) {
+          if (failure?.code === "EEXIST")
+            return false;
+          throw failure;
+        }
+        try {
+          await handle.writeFile(contents);
+        } catch (failure) {
+          await handle.close().catch(() => {});
+          await removeStateProcessFile(canonical).catch(() => {});
+          throw failure;
+        }
+        await handle.close();
+        return true;
+      }
       if (process.platform !== "win32" || !["EPERM", "EACCES", "EBUSY"].includes(error?.code) || attempt >= 5)
         throw error;
       await delay(10 * (attempt + 1));
