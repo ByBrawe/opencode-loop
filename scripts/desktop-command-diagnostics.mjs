@@ -33,6 +33,11 @@ function localUrl(raw) {
   return url.origin
 }
 
+// Service metadata is untrusted; reject multiline/control-character version labels.
+function safeVersion(value) {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9.+_-]{0,39}$/.test(value) ? value : undefined
+}
+
 function presentPins(raw) {
   const result = {}
   for (const name of packageNames) {
@@ -117,7 +122,7 @@ export async function diagnose({
     }
     url = info?.url
     password = info?.password
-    version = typeof info?.version === "string" ? info.version : undefined
+    version = safeVersion(info?.version)
     pid = Number.isInteger(info?.pid) ? info.pid : undefined
   }
   const origin = localUrl(url)
@@ -146,7 +151,9 @@ export async function diagnose({
       output.service.status = "stale-service-registration"
       return output
     }
-    if (typeof info.json.version === "string") output.service.actualVersion = info.json.version
+    if (safeVersion(info.json.version)) output.service.actualVersion = safeVersion(info.json.version)
+    if (version && output.service.actualVersion && version !== output.service.actualVersion)
+      output.service.versionMismatch = true
   }
   const list = await catalog(fetchImpl, origin, headers)
   if (list.error) {
@@ -211,7 +218,10 @@ export async function runDesktopDiagnosticCli(args = process.argv.slice(2), opti
     console.log("Global config: " + result.config.directory)
     for (const kind of packageNames)
       console.log("Configured " + kind + " spec: " + (result.config.pins[kind].join(", ") || "not found (text scan)"))
-    console.log("Local service: " + result.service.status + (result.service.registeredVersion ? " (" + result.service.registeredVersion + ")" : ""))
+    console.log("Local service: " + result.service.status
+      + (result.service.actualVersion ? " (live " + result.service.actualVersion + ")" : result.service.registeredVersion ? " (registered " + result.service.registeredVersion + ")" : ""))
+    if (result.service.versionMismatch)
+      console.log("Version mismatch: service.json registration and live /api/info disagree; verify the service identity before diagnosing Desktop.")
     if (result.service.commands)
       console.log("Server /loop: " + result.service.commands.loop + " | /goal: " + result.service.commands.goal)
     if (result.comparison) {

@@ -6,7 +6,7 @@ reinstalling the legacy Loop `/loop-goal*` commands or copying `goal.md`.
 
 ## Why this distinction matters
 
-OpenCode 2.0.22's Desktop composer populates the slash list from its active
+OpenCode 2.0.29's Desktop composer populates the slash list from its active
 **location server** via `data.location.command.list({ directory: sdk().directory })`.
 Both plugins register native server commands using `ctx.command.transform`.
 A TUI showing both is evidence of its own host registration, **not proof that
@@ -20,9 +20,11 @@ appear **when the Desktop's own location command registry contains them**.
 
 Authoritative upstream references:
 
-- [Desktop composer v2.0.22](https://github.com/anomalyco/opencode/blob/v2.0.22/packages/app/src/composer/model.ts)
-- [Desktop background service v2.0.22](https://github.com/anomalyco/opencode/blob/v2.0.22/packages/desktop/src/main/service/background-service.ts)
-- [Server command registry v2.0.22](https://github.com/anomalyco/opencode/blob/v2.0.22/packages/core/src/command.ts)
+- [Desktop composer v2.0.29](https://github.com/anomalyco/opencode/blob/v2.0.29/packages/app/src/composer/model.ts)
+- [Reactive client command refresh v2.0.29](https://github.com/anomalyco/opencode/blob/v2.0.29/packages/client/src/solid/data.ts)
+- [Desktop server sync v2.0.29](https://github.com/anomalyco/opencode/blob/v2.0.29/packages/app/src/runtime/server/sync.tsx)
+- [Native server command registry v2.0.29](https://github.com/anomalyco/opencode/blob/v2.0.29/packages/core/src/command.ts)
+- [GUI extension root v2.0.29](https://github.com/anomalyco/opencode/blob/v2.0.29/packages/app/src/runtime/extension/root.tsx)
 - [Desktop/TUI slash parity issue #49803](https://github.com/anomalyco/opencode/issues/49803)
 - [Desktop plugin UI surface request #43132](https://github.com/anomalyco/opencode/issues/43132)
 
@@ -35,7 +37,10 @@ On Loop versions that include `--desktop-diagnostics`, run this in PowerShell
 npx -y @bybrawe/opencode-loop@latest --desktop-diagnostics --workspace (Get-Location).Path
 ```
 
-The command does **not** reinstall either plugin. It scans only the presence of
+The command does **not** reinstall either plugin. Its output also compares
+the safe live version from `/api/info` with the local `service.json` version;
+a mismatch flags stale registration or a different process, **not proof of the
+Desktop-connected server's version**. It scans only the presence of
 package references in known global config files (not the secrets), and probes the
 locally registered OpenCode service at `~/.local/state/opencode/service.json`,
 without disclosing its password or full response. It refuses a non-loopback
@@ -127,14 +132,51 @@ whether Desktop itself shows `/loop` and `/goal` after a full quit/reopen.
 Redact host credentials and user tokens from logs.
 
 
-## Possible command catalog refresh gap in 2.0.22
+## Verified OpenCode V2.0.29 command-refresh contract (2026-10-15)
 
-OpenCode's native command service publishes `command.updated` when a plugin's
-`command.transform` changes definitions. In v2.0.22,
-`packages/app/src/runtime/server/sync.tsx` queues project refresh for
-`config.updated` and `agent.updated`, but does not explicitly do the same
-for `command.updated`. A native plugin arriving **after** the composer loaded
-its command catalog can leave Desktop suggestions stale. This is an upstream
-hypothesis, **not** confirmation of the user's particular Windows problem;
-compare the connected server `GET /api/command` catalog first. Do not turn
-the dedicated Goal and Loop native commands into prompt-template bridges.
+A source-level audit of **tag v2.0.29** corrects the older 2.0.22 hypothesis
+below: `packages/client/src/solid/data.ts` **already handles location-scoped
+`command.updated`** events by invalidating and re-fetching
+`data.location.command`. The Desktop composer in `packages/app/src/composer/model.ts`
+consumes precisely that reactive catalog. The app's
+`packages/app/src/runtime/server/sync.tsx` does **not** separately queue
+`command.updated`, but that is **not by itself evidence of a cache bug**.
+Adding another unconditional refresh could duplicate requests.
+
+The source still ignores **locationless** `command.updated` in the client
+data-layer path, but the native location-owned command service publishes
+updates through its location bus. We have **no captured Desktop event trace**
+proving that missing location is occurring in this incident. The old
+`ByBrawe/opencode` fork patch `0d7e938` is an unmerged investigative
+candidate, **not** a verified fix; do not apply it based solely on the absence
+of an event handler in `server/sync.tsx`.
+
+There is now a built-in GUI extension host in V2, but its
+`runtime/extension/root.tsx` explicitly loads **built-in renderer definitions
+only** as of v2.0.29; third-party `.ocdx` GUI renderers are not shipped yet.
+Do **not** assume a package's `./tui` sidebar runs in Desktop. Conversely,
+Loop and Goal register **server-owned commands** using
+`ctx.command.transform`; the Desktop should list them if the **actual
+Desktop-connected** server's `GET /api/command` for its selected directory
+contains them. These are distinct capabilities.
+
+The practical branch point remains:
+
+1. If the Desktop-connected `GET /api/command` lacks either command, compare
+   its project directory, actual backend version, and plugin activation with
+   the TUI. A local-service probe alone cannot identify a remote, WSL, or
+   Desktop-private sidecar server.
+2. If that **same** Desktop-connected endpoint lists both commands while the
+   Desktop composer does not, capture a redacted GUI sync repro and file it
+   upstream. Do not submit blind duplicate command-refresh patches or install
+   fake Markdown command templates that would mask native execution.
+3. OpenCode dev merged [#55710](https://github.com/anomalyco/opencode/pull/55710)
+   on 15 October to launch **Open in → PowerShell** in the actual project folder.
+   This commit is **not part of v2.0.29** and does **not** itself repair slash
+   suggestions. Until a subsequent release contains it, open the exact
+   `code-repo` directory manually in PowerShell/Desktop.
+
+**Scope:** This is source and automated native host evidence, not a confirmed
+reproduction of the user's Windows Desktop window. Neither an OpenCode 2
+upgrade nor this diagnostic should be reported as a verified GUI fix without
+that exact app/backend/connection test.

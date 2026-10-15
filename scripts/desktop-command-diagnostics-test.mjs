@@ -19,7 +19,7 @@ test("Windows Desktop native catalog probe checks both commands but never return
   const server = createServer((req, res) => {
     calls.push({ url: req.url, directory: req.headers["x-opencode-directory"], auth: req.headers.authorization })
     res.setHeader("Content-Type", "application/json")
-    if (req.url === "/api/info") return res.end(JSON.stringify({ pid: process.pid, version: "2.0.22" }))
+    if (req.url === "/api/info") return res.end(JSON.stringify({ pid: process.pid, version: "2.0.29" }))
     if (req.url === "/api/command") {
       const native = req.headers["x-opencode-directory"] === desktopWorkspace
         ? [{ name: "init" }] : [{ name: "loop" }, { name: "goal" }, { name: "loop-help" }]
@@ -39,10 +39,13 @@ test("Windows Desktop native catalog probe checks both commands but never return
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
     const url = "http://127.0.0.1:" + server.address().port
     await writeFile(path.join(state, "service.json"), JSON.stringify({
-      url, pid: process.pid, version: "2.0.22", password,
+      url, pid: process.pid, version: "2.0.29", password,
     }))
     const result = await diagnose({ home, workspace, env: {} })
     assert.equal(result.service.status, "ready")
+    assert.equal(result.service.actualVersion, "2.0.29")
+    assert.equal(result.service.registeredVersion, "2.0.29")
+    assert.equal(result.service.versionMismatch, undefined)
     assert.deepEqual(result.service.commands, { loop: true, goal: true, count: 3 })
     assert.deepEqual(result.config.pins.loop, ["@bybrawe/opencode-loop@0.6.6"])
     assert.deepEqual(result.config.pins.goal, ["@bybrawe/opencode-goal@1.3.47"])
@@ -62,6 +65,16 @@ test("Windows Desktop native catalog probe checks both commands but never return
     assert.ok(!JSON.stringify(compared).includes(password), "comparison never exposes credentials")
     const same = await diagnose({ home, workspace, compareWorkspace: workspace, env: {} })
     assert.equal(same.comparison, undefined, "identical workspace needs no redundant catalog probe")
+    await writeFile(path.join(state, "service.json"), JSON.stringify({
+      url, pid: process.pid, version: "2.0.22", password,
+    }))
+    const versionMismatch = await diagnose({ home, workspace, env: {} })
+    assert.equal(versionMismatch.service.status, "ready", "version mismatch is diagnostic, not proof of bad commands")
+    assert.equal(versionMismatch.service.actualVersion, "2.0.29")
+    assert.equal(versionMismatch.service.registeredVersion, "2.0.22")
+    assert.equal(versionMismatch.service.versionMismatch, true)
+    assert.deepEqual(versionMismatch.service.commands, { loop: true, goal: true, count: 3 })
+    assert.ok(!JSON.stringify(versionMismatch).includes(password), "do not leak authentication on version mismatch")
     const bad = await diagnose({
       home, workspace, env: {}, server: "https://example.com", fetchImpl: () => { throw new Error("must not contact remote") },
     })
