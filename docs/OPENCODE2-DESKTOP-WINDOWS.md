@@ -70,6 +70,46 @@ or auth headers into issues or chat. The auto-discovered service may still be a
 different server than the Desktop window's selected remote; the result is
 diagnostic evidence, not proof of a GUI bug.
 
+
+## Compare an explicit second local backend (main-only diagnostic)
+
+On OpenCode 2.0.30 Windows, the background service uses port `45278`
+**by default** ([upstream #55547](https://github.com/anomalyco/opencode/pull/55547)).
+That port is a **candidate**, not proof of which host the Desktop window chose.
+The `main` branch diagnostic now supports a second read-only localhost
+backend comparison, using the *same requested workspace* for both catalogs:
+
+```powershell
+# Run the local Loop repository's main-branch script, not npm 0.6.8.
+node scripts/install-with-goals.mjs --desktop-diagnostics --workspace (Get-Location).Path --compare-server http://127.0.0.1:45278 --json
+```
+
+Use this command only from a checkout of `ByBrawe/opencode-loop`. Once the
+feature is published, the installed `opencode-loop --desktop-diagnostics`
+entry may be used instead. The published `0.6.8` installer does **not**
+implement `--compare-server`.
+
+The primary probe uses the existing local `service.json` registration; the
+second URL is **always explicit and restricted to loopback**. The registered
+service password is **never forwarded to a different endpoint**. For an
+authenticated explicit second host, set `OPENCODE_PASSWORD` only in your own
+PowerShell environment; do not post its value or response headers. Redirects
+are refused, even when the destination is localhost.
+
+A result such as `primary /loop: true /goal: true` and
+`compared /loop: false /goal: false` proves that those two local **servers**
+publish different command catalogs for the **same selected directory**.
+It still does **not** prove the Desktop window uses the second URL: confirm
+Desktop's local/remote/WSL connection first. Missing registration credentials,
+a 401 response, an unloaded plugin, or another directory can also produce a
+different result. No prompt is submitted and neither installer runs.
+
+OpenCode 2.0.30 also includes [#55710](https://github.com/anomalyco/opencode/pull/55710),
+which opens PowerShell in the chosen project directory on Windows. This
+reduces the chance of comparing `blog-seo` with `blog-seo/code-repo`,
+but does **not** implement third-party GUI TUI slots or automatically fix
+missing native slash commands.
+
 ## Diagnostic checklist (Windows)
 
 1. Keep both packages **independently installed**. Verify that the individual

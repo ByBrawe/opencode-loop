@@ -103,3 +103,78 @@ test("installer desktop diagnosis is read-only and does not invoke Loop or Goal 
     assert.ok(!result.stdout.includes("Installed/updated"), "installer must not run in diagnosis mode")
   } finally { await rm(home, { recursive: true, force: true }) }
 })
+
+
+test("secondary localhost backend comparison detects missing native commands without leaking registration authentication", async () => {
+  const home = await mkdtemp(path.join(tmpdir(), "loop-desktop-second-backend-"))
+  const workspace = path.join(home, "my project")
+  const state = path.join(home, ".local", "state", "opencode")
+  const primaryCalls = [], desktopCalls = []
+  const localSecret = "primary-service-password-not-for-desktop"
+  const externalSecret = "explicit-desktop-probe-password"
+  const reply = (res, payload) => {
+    res.setHeader("Content-Type", "application/json")
+    res.end(JSON.stringify(payload))
+  }
+  const primary = createServer((req, res) => {
+    primaryCalls.push({ directory: req.headers["x-opencode-directory"], auth: req.headers.authorization })
+    if (req.url === "/api/info") return reply(res, { pid: process.pid, version: "2.0.29" })
+    if (req.url === "/api/command") return reply(res, [{ name: "loop" }, { name: "goal" }])
+    res.writeHead(404).end("{}")
+  })
+  const desktop = createServer((req, res) => {
+    desktopCalls.push({ directory: req.headers["x-opencode-directory"], auth: req.headers.authorization })
+    if (req.url === "/api/info") return reply(res, { pid: process.pid + 99, version: "2.0.30" })
+    if (req.url === "/api/command") return reply(res, [{ name: "init" }])
+    res.writeHead(404).end("{}")
+  })
+  try {
+    await mkdir(state, { recursive: true })
+    await mkdir(workspace, { recursive: true })
+    await Promise.all([primary, desktop].map(s => new Promise(resolve => s.listen(0, "127.0.0.1", resolve))))
+    const primaryURL = "http://127.0.0.1:" + primary.address().port
+    const desktopURL = "http://127.0.0.1:" + desktop.address().port
+    await writeFile(path.join(state, "service.json"), JSON.stringify({
+      url: primaryURL, pid: process.pid, version: "2.0.29", password: localSecret,
+    }))
+
+    const result = await diagnose({ home, workspace, env: {}, compareServer: desktopURL })
+    assert.equal(result.service.status, "ready")
+    assert.deepEqual(result.service.commands, { loop: true, goal: true, count: 2 })
+    assert.equal(result.serverComparison.status, "ready")
+    assert.equal(result.serverComparison.actualVersion, "2.0.30")
+    assert.deepEqual(result.serverComparison.commands, { loop: false, goal: false, count: 1 })
+    assert.equal(result.serverComparison.matchesPrimary, false)
+    assert.ok(primaryCalls.every(call => call.auth === "Basic " + Buffer.from("opencode:" + localSecret).toString("base64")))
+    assert.ok(desktopCalls.every(call => call.auth === undefined), "never forward service.json password to another localhost server")
+    assert.ok(desktopCalls.every(call => call.directory === workspace), "compare the exact same selected project")
+    assert.ok(!JSON.stringify(result).includes(localSecret))
+    assert.ok(!JSON.stringify(result).includes(externalSecret))
+
+    const before = desktopCalls.length
+    const authorized = await diagnose({
+      home, workspace, env: { OPENCODE_PASSWORD: externalSecret }, compareServer: desktopURL,
+    })
+    assert.equal(authorized.serverComparison.status, "ready")
+    assert.ok(desktopCalls.slice(before).every(call =>
+      call.auth === "Basic " + Buffer.from("opencode:" + externalSecret).toString("base64")))
+    assert.ok(!JSON.stringify(authorized).includes(externalSecret))
+
+    const remoteCalls = desktopCalls.length
+    const rejected = await diagnose({
+      home, workspace, env: {}, compareServer: "https://not-local.example.com",
+    })
+    assert.equal(rejected.serverComparison.status, "refused-nonlocal-or-invalid-url")
+    assert.equal(desktopCalls.length, remoteCalls, "refused remote target must not be fetched")
+    const withoutRegistration = await diagnose({
+      home, workspace, env: {}, serviceFile: path.join(home, "missing-service.json"),
+      compareServer: desktopURL,
+    })
+    assert.equal(withoutRegistration.service.status, "registration-not-found")
+    assert.equal(withoutRegistration.serverComparison.status, "ready", "compare even if primary registration is missing")
+    assert.equal(withoutRegistration.serverComparison.matchesPrimary, undefined)
+  } finally {
+    await Promise.all([primary, desktop].map(s => new Promise(resolve => s.close(resolve))))
+    await rm(home, { recursive: true, force: true })
+  }
+})

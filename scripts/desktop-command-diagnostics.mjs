@@ -76,6 +76,8 @@ async function request(fetchImpl, base, pathname, headers) {
     const response = await fetchImpl(base + pathname, {
       method: "GET",
       headers,
+      // Credentials and location headers must never follow a server redirect.
+      redirect: "error",
       signal: AbortSignal.timeout(5_000),
     })
     if (![200, 201].includes(response.status)) return { status: response.status }
@@ -92,7 +94,7 @@ async function catalog(fetchImpl, origin, headers) {
   return response
 }
 
-export async function diagnose({
+async function diagnoseOne({
   env = process.env, home = homedir(), workspace = process.cwd(),
   compareWorkspace, server, serviceFile, fetchImpl = fetch,
 } = {}) {
@@ -190,27 +192,59 @@ export async function diagnose({
   return output
 }
 
+// Compare a caller-supplied *local* Desktop backend with the regular service.
+// Do not forward the service.json password to a different server: diagnoseOne
+// authenticates explicit endpoints using only the caller's environment.
+export async function diagnose({ compareServer, ...options } = {}) {
+  const output = await diagnoseOne(options)
+  if (compareServer === undefined) return output
+
+  if (typeof compareServer !== "string" || !localUrl(compareServer)) {
+    output.serverComparison = { status: "refused-nonlocal-or-invalid-url" }
+    return output
+  }
+
+  const compared = await diagnoseOne({
+    ...options,
+    server: compareServer,
+    compareWorkspace: undefined,
+  })
+  const service = compared.service
+  output.serverComparison = {
+    status: service.status,
+    ...(service.host ? { host: service.host } : {}),
+    ...(service.actualVersion ? { actualVersion: service.actualVersion } : {}),
+    ...(service.commands ? { commands: service.commands } : {}),
+    ...(service.commands && output.service.commands ? {
+      matchesPrimary: service.commands.loop === output.service.commands.loop
+        && service.commands.goal === output.service.commands.goal,
+    } : {}),
+  }
+  return output
+}
+
 export async function runDesktopDiagnosticCli(args = process.argv.slice(2), options = {}) {
-  let workspace = process.cwd(), compareWorkspace, server, json = false
+  let workspace = process.cwd(), compareWorkspace, server, compareServer, json = false
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
     if (arg === "--help" || arg === "-h") {
-      console.log("Usage: opencode-loop --desktop-diagnostics [--workspace PATH] [--compare-workspace PATH] [--server LOCAL_URL] [--json]")
+      console.log("Usage: opencode-loop --desktop-diagnostics [--workspace PATH] [--compare-workspace PATH] [--server LOCAL_URL] [--compare-server LOCAL_URL] [--json]")
       console.log("Read-only check of both native /loop and /goal registrations; never prints credentials.")
       return 0
     }
     if (arg === "--json") { json = true; continue }
-    if (arg === "--workspace" || arg === "--compare-workspace" || arg === "--server") {
+    if (arg === "--workspace" || arg === "--compare-workspace" || arg === "--server" || arg === "--compare-server") {
       if (!args[i + 1]) { console.error("Missing value for " + arg); return 2 }
       if (arg === "--workspace") workspace = args[++i]
       else if (arg === "--compare-workspace") compareWorkspace = args[++i]
+      else if (arg === "--compare-server") compareServer = args[++i]
       else server = args[++i]
       continue
     }
     console.error("Unknown Desktop diagnostic option: " + arg)
     return 2
   }
-  const result = await diagnose({ ...options, workspace, compareWorkspace, server })
+  const result = await diagnose({ ...options, workspace, compareWorkspace, server, compareServer })
   if (json) console.log(JSON.stringify(result, null, 2))
   else {
     console.log("OpenCode Desktop native command diagnosis (read-only)")
@@ -232,9 +266,19 @@ export async function runDesktopDiagnosticCli(args = process.argv.slice(2), opti
         console.log("Same native command visibility across directories: " + result.comparison.matchesPrimary)
       }
     }
+    if (result.serverComparison) {
+      const compared = result.serverComparison
+      console.log("Compared local backend: " + compared.status
+        + (compared.actualVersion ? " (live " + compared.actualVersion + ")" : "")
+        + (compared.host ? " at " + compared.host : ""))
+      if (compared.commands)
+        console.log("Compared backend /loop: " + compared.commands.loop + " | /goal: " + compared.commands.goal)
+      if (compared.matchesPrimary !== undefined)
+        console.log("Same native command visibility across backends: " + compared.matchesPrimary)
+    }
     if (!result.service.commands)
       console.log("No confirmed local server catalog. Desktop may use a different connection or service.")
-    console.log("This checks one local service and directory; it cannot prove which connection Desktop currently uses.")
+    console.log("These are local backend probes, not proof of the connection selected by the Desktop window.")
   }
   return 0
 }
