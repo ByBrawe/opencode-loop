@@ -3310,7 +3310,9 @@ var OpenCodeLoopNativePlugin = Object.freeze({
         throw new Error("Native Loop is disposed");
       return prompt({
         ...request,
-        text: `${DISPLAY_START}\n${String(request.text)}\n${DISPLAY_END}`,
+        text: `${DISPLAY_START}
+${String(request.text)}
+${DISPLAY_END}`,
         metadata: { ...request.metadata, [DISPLAY_METADATA_KEY]: true },
         delivery: "steer",
         resume: false
