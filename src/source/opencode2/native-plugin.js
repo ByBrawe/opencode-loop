@@ -7,7 +7,6 @@ import { registerOpenCode2LoopCommands, OPENCODE_LOOP_V2_PRESET_NAMES, commandAr
 import { readSmallTextFile, appendLoopLog } from "../core/process.js"
 import { stateDir } from "../core/state.js"
 import { initializeProgressFile } from "../core/progress.js"
-import { DISPLAY_METADATA_KEY, DISPLAY_START, DISPLAY_END, filterLoopDisplayHook } from "./display-report.js"
 
 const HELP = `OpenCode Loop: native OpenCode 2 runtime
 /loop 0s <task> --max-runs 3
@@ -51,21 +50,6 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
     const registrations = []
     const lifecycleAbort = new AbortController()
     const prompt = (request) => ctx.session.prompt({ ...request, delivery: request.delivery || "queue", metadata: { ...request.metadata, opencode_loop_v2: true } })
-    // Only modern hosts with all model/context hooks may publish isolated
-    // reports. Older hosts retain their existing queued status behavior.
-    let isolatedDisplay = typeof ctx.session.wait === "function"
-    const display = async (request) => {
-      if (!isolatedDisplay) return prompt({ ...request, resume: false })
-      await ctx.session.wait({ sessionID: request.sessionID })
-      if (closed) throw new Error("Native Loop is disposed")
-      return prompt({
-        ...request,
-        text: `${DISPLAY_START}\n${String(request.text)}\n${DISPLAY_END}`,
-        metadata: { ...request.metadata, [DISPLAY_METADATA_KEY]: true },
-        delivery: "steer",
-        resume: false,
-      })
-    }
     const shellHost = createNativeShellHost({
       directory,
       onTerminal: (event) => runtime.onEvent(event),
@@ -75,7 +59,6 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
       directory,
       scopeAllowed: (scope) => ownsSession(scope.sessionID),
       prompt,
-      display,
       command: typeof ctx.session.command === "function" ? (request) => ctx.session.command(request) : undefined,
       wait: typeof ctx.session.wait === "function" ? (request) => ctx.session.wait(request) : undefined,
       // Current V2 exposes public session.compact; older hosts may not.
@@ -117,7 +100,7 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
       if (closed) throw new Error("Native Loop is disposed")
       if (name === "loop-init") {
         const output = await initializeProgressFile(directory, argumentsText)
-        await display({ sessionID, text: output.created ? `Created ${output.file}.` : `${output.file} already exists; preserved unchanged.` })
+        await prompt({ sessionID, text: output.created ? `Created ${output.file}.` : `${output.file} already exists; preserved unchanged.`, resume: false })
         return { handled: true, accepted: true, ...output }
       }
       if (["loop-help", "loop-doctor", "loop-logs"].includes(name)) {
@@ -126,7 +109,7 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
           : name === "loop-doctor"
             ? `Native OpenCode Loop\nHost: ${ctx.app?.version || "unknown"}\nDirectory: ${directory}\nPrompt hooks: enabled\nCompaction ownership: native host\nDelivery: durable queue\nScheduled timers: ${runtime.scheduledCount()}\nUse /loop-status for paused/admitted job state.`
             : HELP
-        await display({ sessionID, text })
+        await prompt({ sessionID, text, resume: false })
         return { handled: true, accepted: true }
       }
       const event = { kind: "command", action: "executed", directory, sessionID, name, arguments: argumentsText }
@@ -137,17 +120,6 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
       return result
     }
     try {
-      if (isolatedDisplay) {
-        for (const name of ["context", "compaction", "generate", "title"]) {
-          try {
-            registrations.push(await ctx.session.hook(name, (event) => filterLoopDisplayHook(event, name === "title")))
-          } catch {
-            isolatedDisplay = false
-            await appendLoopLog(directory, "v2-display-isolation-unavailable", { hook: name }).catch(() => {})
-            break
-          }
-        }
-      }
       registrations.push(await ctx.session.hook("prompt", async (event) => {
         if (closed || event.metadata?.opencode_loop_v2 === true || !await ownsSession(event.sessionID)) return
         if (closed) return

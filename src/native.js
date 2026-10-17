@@ -2283,7 +2283,7 @@ ${await policy.buildPrompt(scope.directory, job)}`, delivery: "queue", metadata:
     if (event.name === "loop-status" || event.name === "loop-export") {
       const status = formatOpenCode2LoopStatus(state, now());
       const text = event.name === "loop-export" ? JSON.stringify(state, null, 2) : status.text;
-      await (options.display || options.prompt)({ sessionID: scope.sessionID, text, resume: false, metadata: { opencode_loop_v2: true } });
+      await options.prompt({ sessionID: scope.sessionID, text, resume: false, metadata: { opencode_loop_v2: true } });
       return result({ accepted: true, status });
     }
     if (!["loop-now", "loop-pause", "loop-resume", "loop-stop", "loop-remove", "loop-clear"].includes(event.name))
@@ -3199,61 +3199,6 @@ async function initializeProgressFile(directory, argumentsText = "") {
   }
 }
 
-// src/source/opencode2/display-report.js
-var DISPLAY_METADATA_KEY = "opencode_loop_display_only";
-var DISPLAY_START = "[OpenCode Loop display-only report]";
-var DISPLAY_END = "[End OpenCode Loop display-only report]";
-var DISPLAY_BLOCK = /\[OpenCode Loop display-only report\][\s\S]*?\[End OpenCode Loop display-only report\]/g;
-function withoutLoopDisplayReports(messages) {
-  if (!Array.isArray(messages))
-    return messages;
-  let changed = false;
-  const output = [];
-  for (const message of messages) {
-    if (message?.role !== "user") {
-      output.push(message);
-      continue;
-    }
-    if (message.metadata?.[DISPLAY_METADATA_KEY] === true) {
-      changed = true;
-      continue;
-    }
-    if (!Array.isArray(message.content)) {
-      output.push(message);
-      continue;
-    }
-    let altered = false;
-    const content = message.content.flatMap((part) => {
-      if (part?.type !== "text" || typeof part.text !== "string")
-        return [part];
-      const text = part.text.replace(DISPLAY_BLOCK, "");
-      if (text === part.text)
-        return [part];
-      altered = true;
-      return text.trim() ? [{ ...part, text }] : [];
-    });
-    if (!altered) {
-      output.push(message);
-      continue;
-    }
-    changed = true;
-    if (content.length)
-      output.push({ ...message, content });
-  }
-  return changed ? output : messages;
-}
-function filterLoopDisplayHook(event, title = false) {
-  if (!Array.isArray(event?.messages))
-    return;
-  const clean = withoutLoopDisplayReports(event.messages);
-  if (clean === event.messages)
-    return;
-  event.messages = clean;
-  if (title && !clean.some((message) => Array.isArray(message.content) && message.content.some((part) => part?.type === "text" && typeof part.text === "string" && part.text.trim()))) {
-    event.result = "";
-  }
-}
-
 // src/source/opencode2/native-plugin.js
 var HELP = `OpenCode Loop: native OpenCode 2 runtime
 /loop 0s <task> --max-runs 3
@@ -3301,23 +3246,6 @@ var OpenCodeLoopNativePlugin = Object.freeze({
     const registrations = [];
     const lifecycleAbort = new AbortController;
     const prompt = (request) => ctx.session.prompt({ ...request, delivery: request.delivery || "queue", metadata: { ...request.metadata, opencode_loop_v2: true } });
-    let isolatedDisplay = typeof ctx.session.wait === "function";
-    const display = async (request) => {
-      if (!isolatedDisplay)
-        return prompt({ ...request, resume: false });
-      await ctx.session.wait({ sessionID: request.sessionID });
-      if (closed)
-        throw new Error("Native Loop is disposed");
-      return prompt({
-        ...request,
-        text: `${DISPLAY_START}
-${String(request.text)}
-${DISPLAY_END}`,
-        metadata: { ...request.metadata, [DISPLAY_METADATA_KEY]: true },
-        delivery: "steer",
-        resume: false
-      });
-    };
     const shellHost = createNativeShellHost({
       directory,
       onTerminal: (event) => runtime.onEvent(event),
@@ -3329,7 +3257,6 @@ ${DISPLAY_END}`,
       directory,
       scopeAllowed: (scope) => ownsSession(scope.sessionID),
       prompt,
-      display,
       command: typeof ctx.session.command === "function" ? (request) => ctx.session.command(request) : undefined,
       wait: typeof ctx.session.wait === "function" ? (request) => ctx.session.wait(request) : undefined,
       compact: typeof ctx.session.compact === "function" ? (request) => ctx.session.compact(request) : undefined,
@@ -3387,7 +3314,7 @@ ${DISPLAY_END}`,
         throw new Error("Native Loop is disposed");
       if (name === "loop-init") {
         const output = await initializeProgressFile(directory, argumentsText);
-        await display({ sessionID, text: output.created ? `Created ${output.file}.` : `${output.file} already exists; preserved unchanged.` });
+        await prompt({ sessionID, text: output.created ? `Created ${output.file}.` : `${output.file} already exists; preserved unchanged.`, resume: false });
         return { handled: true, accepted: true, ...output };
       }
       if (["loop-help", "loop-doctor", "loop-logs"].includes(name)) {
@@ -3401,7 +3328,7 @@ Compaction ownership: native host
 Delivery: durable queue
 Scheduled timers: ${runtime.scheduledCount()}
 Use /loop-status for paused/admitted job state.` : HELP;
-        await display({ sessionID, text });
+        await prompt({ sessionID, text, resume: false });
         return { handled: true, accepted: true };
       }
       const event = { kind: "command", action: "executed", directory, sessionID, name, arguments: argumentsText };
@@ -3414,17 +3341,6 @@ Use /loop-status for paused/admitted job state.` : HELP;
       return result;
     }
     try {
-      if (isolatedDisplay) {
-        for (const name of ["context", "compaction", "generate", "title"]) {
-          try {
-            registrations.push(await ctx.session.hook(name, (event) => filterLoopDisplayHook(event, name === "title")));
-          } catch {
-            isolatedDisplay = false;
-            await appendLoopLog(directory, "v2-display-isolation-unavailable", { hook: name }).catch(() => {});
-            break;
-          }
-        }
-      }
       registrations.push(await ctx.session.hook("prompt", async (event) => {
         if (closed || event.metadata?.opencode_loop_v2 === true || !await ownsSession(event.sessionID))
           return;
