@@ -325,7 +325,7 @@ export function createNativeLoopRuntime(options = {}) {
     if (event.name === "loop-status" || event.name === "loop-export") {
       const status = formatOpenCode2LoopStatus(state, now())
       const text = event.name === "loop-export" ? JSON.stringify(state, null, 2) : status.text
-      await options.prompt({ sessionID: scope.sessionID, text, resume: false, metadata: { opencode_loop_v2: true } })
+      await (options.display || options.prompt)({ sessionID: scope.sessionID, text, resume: false, metadata: { opencode_loop_v2: true } })
       return result({ accepted: true, status })
     }
     if (!["loop-now", "loop-pause", "loop-resume", "loop-stop", "loop-remove", "loop-clear"].includes(event.name)) return { handled: false }

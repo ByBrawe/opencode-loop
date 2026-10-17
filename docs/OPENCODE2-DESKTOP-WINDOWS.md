@@ -180,3 +180,22 @@ The practical branch point remains:
 reproduction of the user's Windows Desktop window. Neither an OpenCode 2
 upgrade nor this diagnostic should be reported as a verified GUI fix without
 that exact app/backend/connection test.
+
+## Model-free read-only Loop command reports (Quota 5.x pattern)
+
+On the **main branch**, the native reporting commands `/loop-status`,
+`/loop-export`, `/loop-help`, `/loop-doctor`, `/loop-logs` and `/loop-init`
+use the display-only message approach demonstrated by
+[opencode-quota](https://github.com/slkiser/opencode-quota/blob/main/src/plugin.ts).
+After the session is idle, a marked report is admitted with `resume: false`
+and `delivery: "steer"`. Context, compaction, generate and title hooks
+exclude only these tagged Loop reports from later model input. They do not
+change normal user messages or Goal's host-owned continuation authority.
+
+On old hosts lacking `session.wait` or the required hooks, the previous
+queued-report path is retained; do not claim model isolation there.
+
+**This is output parity, not discovery parity.** It does not create fake
+Markdown slash commands or repair a missing Desktop command catalog.
+First inspect the exact Desktop-connected backend and workspace using
+read-only `/api/command` diagnostics. Main-only until published and verified.
