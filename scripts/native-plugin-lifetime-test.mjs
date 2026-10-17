@@ -156,3 +156,24 @@ test("native /loop-help reflects public V2 compaction rather than obsolete unsup
     await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
   }
 })
+
+test("native /daemon commands remain local and stop when unloaded", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "loop-v2-daemon-controls-"))
+  const host = fixture(directory, { captureCommands: true })
+  let dispose
+  try {
+    dispose = await plugin.setup(host.ctx)
+    const command = host.commands.get("daemon")
+    assert.equal(typeof command, "function")
+    for (const [argumentsText, text] of [["status", "Daemon: stopped"], ["start", "Daemon: running"],
+      ["auto on", "Autostart: on"], ["stop", "Daemon: stopped"]]) {
+      await command({ sessionID: "ses_daemon", arguments: argumentsText })
+      assert.match(host.prompts.at(-1).text, new RegExp(text))
+    }
+    assert.ok(host.prompts.every((prompt) => prompt.resume === false), "never invoke a model for controls")
+  } finally {
+    host.end()
+    await dispose?.()
+    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+  }
+})

@@ -7,6 +7,7 @@ import { registerOpenCode2LoopCommands, OPENCODE_LOOP_V2_PRESET_NAMES, commandAr
 import { readSmallTextFile, appendLoopLog } from "../core/process.js"
 import { stateDir } from "../core/state.js"
 import { initializeProgressFile } from "../core/progress.js"
+import { acquireDaemonController } from "./daemon-controller.js"
 
 const HELP = `OpenCode Loop: native OpenCode 2 runtime
 /loop 0s <task> --max-runs 3
@@ -19,6 +20,7 @@ const HELP = `OpenCode Loop: native OpenCode 2 runtime
 Presets: /loop-dev, /loop-testfix, /loop-progress, /loop-safe-dev, /loop-ask, /loop-prompt, /loop-command, /loop-cmd, /loop-shell, /loop-compact.
 /loop-init [progress.md] creates a missing project-local progress file without overwriting existing data.
 Controls: /loop-now, /loop-pause, /loop-resume, /loop-stop, /loop-remove, /loop-clear, /loop-status, /loop-export.
+Embedded read-only Goal pulse: /daemon start|stop|restart|status|auto on|auto off|pulse on|pulse off.
 Preflight, postrun, notifications, stop files, completion markers, runtime/failure/run limits, branches and checkpoints are supported.
 Scheduled shell commands run as bounded local child processes managed by Loop; OpenCode 2's ctx.shell surface is a hook API, not a shell-execution method.
 Manual /loop-compact, --compact and --compact-every use public session.compact when the V2 host exposes it. Loop matches the admitted manual compaction inputID and waits for host completion; older hosts without this capability reject the job before creation. Automatic compaction stays host-owned.
@@ -47,6 +49,7 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
       directory, workspaceID: ctx.location?.workspaceID,
       getSession: (input) => ctx.session.get(input),
     })
+    const daemon = await acquireDaemonController(directory)
     const registrations = []
     const lifecycleAbort = new AbortController()
     const prompt = (request) => ctx.session.prompt({ ...request, delivery: request.delivery || "queue", metadata: { ...request.metadata, opencode_loop_v2: true } })
@@ -83,7 +86,7 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
         // cannot wake an async generator blocked on a public server stream.
         const stopped = bridge.dispose("native-plugin-disposed").catch((error) => { errors.push(error) })
         lifecycleAbort.abort()
-        for (const action of [() => runtime.dispose(), () => shellHost.dispose()]) {
+        for (const action of [() => runtime.dispose(), () => shellHost.dispose(), () => daemon.release()]) {
           try { await action() } catch (error) { errors.push(error) }
         }
         await stopped
@@ -98,6 +101,11 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
       if (closed) throw new Error("Native Loop is disposed")
       if (!await ownsSession(sessionID)) throw new Error("Native Loop cannot resolve this session in the plugin location; use its own project/worktree.")
       if (closed) throw new Error("Native Loop is disposed")
+      if (name === "daemon") {
+        const text = await daemon.handle(argumentsText)
+        await prompt({ sessionID, text, resume: false })
+        return { handled: true, accepted: true }
+      }
       if (name === "loop-init") {
         const output = await initializeProgressFile(directory, argumentsText)
         await prompt({ sessionID, text: output.created ? `Created ${output.file}.` : `${output.file} already exists; preserved unchanged.`, resume: false })
