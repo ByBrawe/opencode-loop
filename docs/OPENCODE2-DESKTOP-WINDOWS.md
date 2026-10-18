@@ -96,6 +96,21 @@ authenticated explicit second host, set `OPENCODE_PASSWORD` only in your own
 PowerShell environment; do not post its value or response headers. Redirects
 are refused, even when the destination is localhost.
 
+You can also supply `--compare-workspace` in the same invocation to
+compare a **two-server × two-project** matrix, without changing any OpenCode
+configuration:
+
+```powershell
+node scripts/install-with-goals.mjs --desktop-diagnostics --workspace (Get-Location).Path --compare-workspace (Split-Path (Get-Location).Path -Parent) --compare-server http://127.0.0.1:45278 --json
+```
+
+Each backend is queried for **both** explicit locations. The secondary
+backend receives neither the password stored in the first backend's
+`service.json` nor its PID assertion. If CLI project's commands exist only
+on the first server, investigate the Desktop server and its plugin setup. If
+commands change by project location on either server, investigate the selected
+directory and local configuration first.
+
 A result such as `primary /loop: true /goal: true` and
 `compared /loop: false /goal: false` proves that those two local **servers**
 publish different command catalogs for the **same selected directory**.

@@ -207,7 +207,8 @@ export async function diagnose({ compareServer, ...options } = {}) {
   const compared = await diagnoseOne({
     ...options,
     server: compareServer,
-    compareWorkspace: undefined,
+    // Compare both project locations on BOTH backend connections.
+    // The second backend never receives the primary registration secret.
   })
   const service = compared.service
   output.serverComparison = {
@@ -215,6 +216,7 @@ export async function diagnose({ compareServer, ...options } = {}) {
     ...(service.host ? { host: service.host } : {}),
     ...(service.actualVersion ? { actualVersion: service.actualVersion } : {}),
     ...(service.commands ? { commands: service.commands } : {}),
+    ...(compared.comparison ? { comparison: compared.comparison } : {}),
     ...(service.commands && output.service.commands ? {
       matchesPrimary: service.commands.loop === output.service.commands.loop
         && service.commands.goal === output.service.commands.goal,
@@ -275,6 +277,11 @@ export async function runDesktopDiagnosticCli(args = process.argv.slice(2), opti
         console.log("Compared backend /loop: " + compared.commands.loop + " | /goal: " + compared.commands.goal)
       if (compared.matchesPrimary !== undefined)
         console.log("Same native command visibility across backends: " + compared.matchesPrimary)
+      if (compared.comparison) {
+        console.log("Compared backend second workspace catalog: " + compared.comparison.status)
+        if (compared.comparison.commands)
+          console.log("Compared backend second workspace /loop: " + compared.comparison.commands.loop + " | /goal: " + compared.comparison.commands.goal)
+      }
     }
     if (!result.service.commands)
       console.log("No confirmed local server catalog. Desktop may use a different connection or service.")

@@ -108,6 +108,7 @@ test("installer desktop diagnosis is read-only and does not invoke Loop or Goal 
 test("secondary localhost backend comparison detects missing native commands without leaking registration authentication", async () => {
   const home = await mkdtemp(path.join(tmpdir(), "loop-desktop-second-backend-"))
   const workspace = path.join(home, "my project")
+  const desktopWorkspace = path.join(home, "parent shown in Desktop")
   const state = path.join(home, ".local", "state", "opencode")
   const primaryCalls = [], desktopCalls = []
   const localSecret = "primary-service-password-not-for-desktop"
@@ -119,18 +120,19 @@ test("secondary localhost backend comparison detects missing native commands wit
   const primary = createServer((req, res) => {
     primaryCalls.push({ directory: req.headers["x-opencode-directory"], auth: req.headers.authorization })
     if (req.url === "/api/info") return reply(res, { pid: process.pid, version: "2.0.29" })
-    if (req.url === "/api/command") return reply(res, [{ name: "loop" }, { name: "goal" }])
+    if (req.url === "/api/command") return reply(res, req.headers["x-opencode-directory"] === desktopWorkspace ? [{ name: "init" }] : [{ name: "loop" }, { name: "goal" }])
     res.writeHead(404).end("{}")
   })
   const desktop = createServer((req, res) => {
     desktopCalls.push({ directory: req.headers["x-opencode-directory"], auth: req.headers.authorization })
     if (req.url === "/api/info") return reply(res, { pid: process.pid + 99, version: "2.0.30" })
-    if (req.url === "/api/command") return reply(res, [{ name: "init" }])
+    if (req.url === "/api/command") return reply(res, req.headers["x-opencode-directory"] === desktopWorkspace ? [{ name: "goal" }] : [{ name: "init" }])
     res.writeHead(404).end("{}")
   })
   try {
     await mkdir(state, { recursive: true })
     await mkdir(workspace, { recursive: true })
+    await mkdir(desktopWorkspace, { recursive: true })
     await Promise.all([primary, desktop].map(s => new Promise(resolve => s.listen(0, "127.0.0.1", resolve))))
     const primaryURL = "http://127.0.0.1:" + primary.address().port
     const desktopURL = "http://127.0.0.1:" + desktop.address().port
@@ -138,16 +140,21 @@ test("secondary localhost backend comparison detects missing native commands wit
       url: primaryURL, pid: process.pid, version: "2.0.29", password: localSecret,
     }))
 
-    const result = await diagnose({ home, workspace, env: {}, compareServer: desktopURL })
+    const result = await diagnose({ home, workspace, compareWorkspace: desktopWorkspace, env: {}, compareServer: desktopURL })
     assert.equal(result.service.status, "ready")
     assert.deepEqual(result.service.commands, { loop: true, goal: true, count: 2 })
     assert.equal(result.serverComparison.status, "ready")
     assert.equal(result.serverComparison.actualVersion, "2.0.30")
     assert.deepEqual(result.serverComparison.commands, { loop: false, goal: false, count: 1 })
     assert.equal(result.serverComparison.matchesPrimary, false)
+    assert.deepEqual(result.comparison.commands, { loop: false, goal: false, count: 1 })
+    assert.deepEqual(result.serverComparison.comparison.commands, { loop: false, goal: true, count: 1 })
+    assert.equal(result.serverComparison.comparison.matchesPrimary, false)
+    assert.ok(primaryCalls.some(call => call.directory === desktopWorkspace))
+    assert.ok(desktopCalls.some(call => call.directory === desktopWorkspace))
     assert.ok(primaryCalls.every(call => call.auth === "Basic " + Buffer.from("opencode:" + localSecret).toString("base64")))
     assert.ok(desktopCalls.every(call => call.auth === undefined), "never forward service.json password to another localhost server")
-    assert.ok(desktopCalls.every(call => call.directory === workspace), "compare the exact same selected project")
+    assert.ok(desktopCalls.every(call => [workspace, desktopWorkspace].includes(call.directory)), "both servers must receive only the two selected project directories")
     assert.ok(!JSON.stringify(result).includes(localSecret))
     assert.ok(!JSON.stringify(result).includes(externalSecret))
 
