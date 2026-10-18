@@ -8,9 +8,9 @@ import { fileURLToPath } from "node:url"
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const npmCLI = process.env.npm_execpath
 assert.ok(npmCLI, "run this through npm run package:smoke")
-function run(command, args, cwd) {
+function run(command, args, cwd, timeout = 180_000) {
   const result = spawnSync(command, args, {
-    cwd, encoding: "utf8", timeout: 180_000, maxBuffer: 8 * 1024 * 1024,
+    cwd, encoding: "utf8", timeout, maxBuffer: 8 * 1024 * 1024,
     windowsHide: true,
     env: { ...process.env, npm_config_fetch_retries: "1", npm_config_fetch_timeout: "90000" },
   })
@@ -30,14 +30,21 @@ try {
   await writeFile(path.join(consumer, "package.json"), JSON.stringify({ private: true, type: "module" }))
   const packedTarball = path.join(temp, packed[0].filename)
   const installArgs = ["install", "--ignore-scripts", "--omit=dev", "--omit=peer", "--no-audit", "--no-fund"]
+  const strictInstall = process.env.OPENCODE_PACKAGE_SMOKE_REQUIRE_INSTALL === "1"
+  // A cache-only npm install should finish quickly. On Windows, a cache miss
+  // sometimes blocks inside npm for the entire 180-second subprocess deadline.
+  // Bound the best-effort offline attempt; strict opt-in keeps the full gate.
+  const offlineTimeout = process.platform === "win32" && !strictInstall ? 30_000 : 180_000
   try {
     // npm ci populated this job's npm cache from the lockfile. A cache-only
     // install remains an exact, clean npm consumer when all metadata is present.
-    run(process.execPath, [npmCLI, ...installArgs, "--offline", packedTarball], consumer)
+    run(process.execPath, [npmCLI, ...installArgs, "--offline", packedTarball], consumer, offlineTimeout)
     console.log("Clean tarball npm install from local cache PASS")
   } catch (error) {
-    if (!/ENOTCACHED|cache mode is .only-if-cached./i.test(String(error))) throw error
-    if (process.platform !== "win32" || process.env.OPENCODE_PACKAGE_SMOKE_REQUIRE_INSTALL === "1") {
+    const cacheMissing = /ENOTCACHED|cache mode is .only-if-cached./i.test(String(error))
+    const windowsOfflineTimeout = process.platform === "win32" && !strictInstall && error?.cause?.code === "ETIMEDOUT"
+    if (!cacheMissing && !windowsOfflineTimeout) throw error
+    if (process.platform !== "win32" || strictInstall) {
       console.warn("Offline cache incomplete: performing strict bounded online npm consumer install")
       run(process.execPath, [npmCLI, ...installArgs, "--prefer-offline", packedTarball], consumer)
     } else {
@@ -46,6 +53,9 @@ try {
       // archive and isolated V2 imports on Windows, using the already-verified
       // npm-ci dependency tree. Linux continues to gate a real clean npm install.
       // This is intentionally NOT labelled a successful Windows npm install.
+      // An interrupted npm process may have left a partial consumer tree.
+      // Never combine that unverified tree with the deterministic archive test.
+      await rm(path.join(consumer, "node_modules"), { recursive: true, force: true, maxRetries: 8, retryDelay: 150 })
       const packageRoot = path.join(consumer, "node_modules", "@bybrawe", "opencode-loop")
       await mkdir(packageRoot, { recursive: true })
       run("tar", ["-xzf", packedTarball, "-C", packageRoot, "--strip-components=1"], temp)
@@ -56,7 +66,9 @@ try {
         path.join(scope, "plugin"),
         "junction",
       )
-      console.warn("Windows npm cache lacks package metadata; testing packed archive with preinstalled dependency tree (not a clean npm install)")
+      console.warn(windowsOfflineTimeout
+        ? "Windows offline npm install exceeded 30s; checking the production archive with pinned CI dependencies (NOT a clean npm install)"
+        : "Windows npm cache lacks package metadata; checking the production archive with pinned CI dependencies (NOT a clean npm install)")
     }
   }
   console.log(run(process.execPath, [path.join(root, "scripts/native-entry-test.mjs"), consumer], root).trim())
