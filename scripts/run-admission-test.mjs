@@ -3,6 +3,7 @@ import path from "node:path"
 import os from "node:os"
 import { mkdtemp, writeFile, rm } from "node:fs/promises"
 import { createRunAdmissionRuntime } from "../src/source/runtime/run-admission.js"
+import { inspectTaskChecklist } from "../src/source/runtime/checklist-completion.js"
 
 assert.throws(() => createRunAdmissionRuntime({}), /untilReached/)
 assert.throws(() => createRunAdmissionRuntime({ untilReached: async () => false }), /scheduleDueWork/)
@@ -156,6 +157,13 @@ try {
   assert.equal((await runtime.admitJob(project, {}, "session-verify", verifyState, verifyJob)).admitted, true,
     "failed host verification cannot imply completion")
   verifyJob.lastVerifyCode = 0
+  assert.equal((await runtime.admitJob(project, {}, "session-verify", verifyState, verifyJob)).admitted, true,
+    "successful verify without recorded checklist fingerprint is not authoritative")
+  verifyJob.lastVerifyChecklistDigest = (await inspectTaskChecklist(project, "TASK.md")).digest
+  await writeFile(path.join(project, "TASK.md"), "- [x] code\n- [x] plan\n- [x] later task\n")
+  assert.equal((await runtime.admitJob(project, {}, "session-verify", verifyState, verifyJob)).admitted, true,
+    "verification for older checklist bytes cannot certify newly changed work")
+  verifyJob.lastVerifyChecklistDigest = (await inspectTaskChecklist(project, "TASK.md")).digest
   assert.equal((await runtime.admitJob(project, {}, "session-verify", verifyState, verifyJob)).reason, "checklist_complete")
 
   const missingJob = { id: "missing-checklist", enabled: true, progressFile: "MISSING.md", untilChecklistComplete: true }
