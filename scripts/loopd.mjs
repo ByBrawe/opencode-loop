@@ -185,7 +185,7 @@ async function listSessions(host, project, limit) {
   // project PWD to agree with process.cwd() and the native session location.
   const result = await run(host.binary, argv, project, {
     capture: true, timeoutMs: 15_000,
-    ...(host.major === 2 ? { env: { ...process.env, PWD: fs.realpathSync.native(project) } } : {}),
+    ...(host.major === 2 ? { env: { ...process.env, PWD: process.platform === "win32" ? project : fs.realpathSync.native(project) } } : {}),
   })
   if (result.code !== 0 || result.timedOut) throw new Error("OpenCode session list failed; refusing to guess a session")
   return projectSessions(result.stdout, project, host.major === 2)
@@ -288,7 +288,7 @@ async function daemon(options = {}) {
     // Keep native runs project-bound and non-interactive without changing V1.
     const result = await run(host.binary, runArgs, project, {
       timeoutMs, closeStdin: host.major === 2,
-      ...(host.major === 2 ? { env: { ...process.env, PWD: fs.realpathSync.native(project) } } : {}),
+      ...(host.major === 2 ? { env: { ...process.env, PWD: process.platform === "win32" ? project : fs.realpathSync.native(project) } } : {}),
     })
     const code = result.timedOut ? 124 : result.code
     const moreRunsRemain = maxRuns === 0 || count < maxRuns
