@@ -25,15 +25,23 @@ const serverEntries = loop ? [`${pkg.name}/server`, url("src/source/server.js")]
 function probe(mode) {
   const stub = "globalThis.__legacyModuleLoads = (globalThis.__legacyModuleLoads || 0) + 1; export default async (...args) => { if (args[0]?.failure) throw args[0].failure; return { args }; }"
   const loader = `
-    const blocked = ${JSON.stringify(blocked)};
-    const legacyEntries = ${JSON.stringify(legacyEntries)};
+    import { realpathSync } from "node:fs";
+    import { fileURLToPath } from "node:url";
+    const physical = (url) => {
+      if (!url.startsWith("file:")) return url;
+      const name = realpathSync.native(fileURLToPath(url));
+      return process.platform === "win32" ? name.toLowerCase() : name;
+    };
+    const blocked = new Set(${JSON.stringify(blocked)}.map(physical));
+    const legacyEntries = new Set(${JSON.stringify(legacyEntries)}.map(physical));
     export async function resolve(specifier, context, nextResolve) {
       if (specifier.startsWith("@opencode-ai/")) throw new Error("V2_LEGACY_IMPORT: " + specifier);
       const result = await nextResolve(specifier, context);
-      if (${JSON.stringify(mode)} === "delegate" && legacyEntries.includes(result.url)) {
+      const actual = physical(result.url);
+      if (${JSON.stringify(mode)} === "delegate" && legacyEntries.has(actual)) {
         return { url: ${JSON.stringify(`data:text/javascript,${encodeURIComponent(stub)}`)}, shortCircuit: true };
       }
-      if (blocked.includes(result.url)) throw new Error("V2_LEGACY_IMPORT: " + result.url);
+      if (blocked.has(actual)) throw new Error("V2_LEGACY_IMPORT: " + result.url);
       return result;
     }
   `
