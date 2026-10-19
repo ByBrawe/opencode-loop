@@ -1,6 +1,6 @@
 # OpenCode Loop
 
-## Native OpenCode 2 (0.6.8)
+## Native OpenCode 2 (0.6.9)
 
 The npm and V2 entrypoints use the official `@opencode/plugin` `Plugin.define()` contract. The installer now registers the exact `@bybrawe/opencode-loop` package in OpenCode's plural `plugins` configuration instead of copying a loose global plugin directory. OpenCode therefore resolves `@opencode/plugin` from Loop's own production dependency graph; explicit `--legacy-v1` remains a separate compatibility path.
 
@@ -17,7 +17,7 @@ Prompt/command timers, watch and stop conditions, verification, preflight/postru
 
 OpenCode Loop adds `/loop`, scheduled prompt/command/shell jobs, compact scheduling, verification/checkpoints, and the `opencode-loopd` background daemon.
 
-> **Current stable release: `0.6.8`.**
+> **Release candidate: `0.6.9` (publishes only after verified release gates). Last published stable release: `0.6.8`.**
 
 ## Install or update
 
@@ -143,9 +143,9 @@ Create a starter progress file first if needed:
 /loop-init
 ```
 
-### Stop when a Markdown checklist is complete (unreleased)
+### Stop when a Markdown checklist is complete (0.6.9)
 
-The native V2 source on this branch supports an **opt-in, host-checked** completion guard. It is **not part of the published 0.6.8 npm package** until a verified release ships:
+OpenCode Loop 0.6.9 adds an **opt-in, host-checked** completion guard. It is **not part of 0.6.8**. Install 0.6.9 only after its npm release passes the verification gates:
 
 ```text
 /loop --progress-file TASK.md --until-checklist-complete --verify "npm test" finish the tasks in TASK.md
