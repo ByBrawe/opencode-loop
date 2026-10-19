@@ -76,7 +76,7 @@ try {
   let calls = await readLog(fakeOpenCode.log)
   let runCalls = calls.filter((item) => item.args[0] === "run")
   assert.equal(runCalls.length, 1)
-  assert.equal(path.resolve(runCalls[0].cwd), path.resolve(project))
+  assert.equal(await fs.realpath(runCalls[0].cwd), await fs.realpath(project), "daemon and selected project refer to the same physical directory")
   assert.deepEqual(runCalls[0].args, [
     "run", "--title", runCalls[0].args[2],
     "--model", "opencode/nemotron-3-ultra-free",
