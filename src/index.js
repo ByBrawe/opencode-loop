@@ -141,6 +141,7 @@ function parseLoopArgs(raw, defaults = {}) {
     until: defaults.until,
     stopFile: defaults.stopFile,
     progressFile: defaults.progressFile,
+    untilChecklistComplete: defaults.untilChecklistComplete ?? false,
     promptFile: defaults.promptFile,
     includeFiles: Array.isArray(defaults.includeFiles) ? [...defaults.includeFiles] : [],
     watchPaths: Array.isArray(defaults.watchPaths) ? [...defaults.watchPaths] : [],
@@ -221,6 +222,9 @@ function parseLoopArgs(raw, defaults = {}) {
   [found, rest] = takeFlag(rest, "--pause-on-verify-fail");
   if (found)
     job.pauseOnVerifyFail = true;
+  [found, rest] = takeFlag(rest, "--until-checklist-complete");
+  if (found)
+    job.untilChecklistComplete = true;
   [found, rest] = takeFlag(rest, "--dry-run");
   if (found)
     job.dryRun = true;
@@ -369,6 +373,8 @@ function parseLoopArgs(raw, defaults = {}) {
     job.maxNoProgress = job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS;
   }
   job.lastRunAt = job.immediate ? 0 : now();
+  if (job.untilChecklistComplete && !job.progressFile)
+    return { ok: false, error: "--until-checklist-complete requires --progress-file <project.md>" };
   if (!job.action && !job.promptFile && !job.goalFile)
     return { ok: false, error: "Missing action. Example: /loop 0s continue from progress.md, /loop-goal ship the feature, or /loop 0s --prompt-file loop-prompt.md" };
   return { ok: true, job };
@@ -1445,6 +1451,8 @@ function decoratePrompt(job) {
     additions.push(continuation);
   if (job.progressFile)
     additions.push(`Use ${job.progressFile} as the main progress/TODO state file. Read it before choosing the next task and update it after work.`);
+  if (job.untilChecklistComplete)
+    additions.push("When all actual Markdown tasks in the configured progress file are checked, stop creating new work and report results. Loop will make the stopping decision itself from the project file at a safe host boundary; do not attempt to invoke /loop-clear as assistant text.");
   if (job.lastVerifyFailure)
     additions.push("Previous verify command failed. Fix this before moving on. Failure summary: " + String(job.lastVerifyFailure).slice(0, 1200));
   if (job.askNever)
@@ -3748,7 +3756,127 @@ exit=` + postrun.code + `
 }
 
 // src/source/runtime/run-admission.js
+import path10 from "path";
+
+// src/source/runtime/checklist-completion.js
+import { promises as fs8, constants } from "fs";
 import path9 from "path";
+var MAX_CHECKLIST_BYTES = 256000;
+var EXCLUDED_PROJECT_DIRS = new Set([".opencode", ".git", "node_modules"]);
+function unavailable(reason) {
+  return { status: "unavailable", reason, total: 0, pending: 0 };
+}
+function summarizeTaskChecklist(markdown) {
+  let total = 0;
+  let pending = 0;
+  let fence = null;
+  let comment = false;
+  for (const original of String(markdown || "").replace(/^\uFEFF/, "").split(/\r?\n/)) {
+    let line = "";
+    let offset = 0;
+    while (offset < original.length) {
+      if (comment) {
+        const end = original.indexOf("-->", offset);
+        if (end < 0)
+          break;
+        comment = false;
+        offset = end + 3;
+      } else {
+        const start = original.indexOf("<!--", offset);
+        if (start < 0) {
+          line += original.slice(offset);
+          break;
+        }
+        line += original.slice(offset, start);
+        comment = true;
+        offset = start + 4;
+      }
+    }
+    const trimmed = line.trimStart();
+    const indentation = line.length - trimmed.length;
+    const marker = trimmed.charAt(0);
+    let markerSize = 0;
+    if (marker === "~" || marker.charCodeAt(0) === 96) {
+      while (trimmed.charAt(markerSize) === marker)
+        markerSize++;
+    }
+    if (fence) {
+      if (indentation <= 3 && markerSize >= fence.length && marker === fence.marker && !trimmed.slice(markerSize).trim())
+        fence = null;
+      continue;
+    }
+    if (indentation <= 3 && markerSize >= 3) {
+      fence = { marker, length: markerSize };
+      continue;
+    }
+    if (/^\s*>/.test(line))
+      continue;
+    const match = line.match(/^\s{0,24}[-+*]\s+\[([ xX])\](?:\s|$)/);
+    if (!match)
+      continue;
+    total++;
+    if (match[1] === " ")
+      pending++;
+  }
+  return {
+    status: total === 0 ? "unavailable" : pending === 0 ? "complete" : "pending",
+    reason: total === 0 ? "no-task-checkboxes" : "",
+    total,
+    pending
+  };
+}
+async function inspectTaskChecklist(directory, progressFile) {
+  const name = String(progressFile || "").trim();
+  if (!name || name.includes("\x00"))
+    return unavailable("missing-progress-file");
+  if (path9.isAbsolute(name) || path9.win32.isAbsolute(name))
+    return unavailable("absolute-path");
+  const root = path9.resolve(directory);
+  const target = path9.resolve(root, name);
+  const relative = path9.relative(root, target);
+  if (!relative || relative === ".." || relative.startsWith(".." + path9.sep) || path9.isAbsolute(relative)) {
+    return unavailable("outside-project");
+  }
+  const parts = relative.split(path9.sep);
+  if (parts.some((part) => EXCLUDED_PROJECT_DIRS.has(part.toLowerCase())))
+    return unavailable("control-plane-path");
+  try {
+    const rootInfo = await fs8.lstat(root);
+    if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink())
+      return unavailable("unsafe-project-root");
+    let current = root;
+    for (let index = 0;index < parts.length; index++) {
+      current = path9.join(current, parts[index]);
+      const info = await fs8.lstat(current);
+      if (info.isSymbolicLink())
+        return unavailable("symlink-path");
+      if (index < parts.length - 1 && !info.isDirectory())
+        return unavailable("invalid-parent");
+      if (index === parts.length - 1 && (!info.isFile() || info.size > MAX_CHECKLIST_BYTES)) {
+        return unavailable(!info.isFile() ? "not-regular-file" : "file-too-large");
+      }
+    }
+    const handle = await fs8.open(target, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
+    try {
+      const info = await handle.stat();
+      if (!info.isFile() || info.size > MAX_CHECKLIST_BYTES) {
+        return unavailable(!info.isFile() ? "not-regular-file" : "file-too-large");
+      }
+      const content = await handle.readFile({ encoding: "utf8" });
+      const after = await fs8.lstat(target);
+      if (!after.isFile() || after.isSymbolicLink() || after.dev !== info.dev || after.ino !== info.ino) {
+        return unavailable("file-changed-during-read");
+      }
+      return summarizeTaskChecklist(content);
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    return unavailable(error?.code === "ENOENT" ? "file-missing" : error?.code === "ELOOP" ? "symlink-path" : "file-unreadable");
+  }
+}
+
+// src/source/runtime/run-admission.js
 function requireFunction9(value, label) {
   if (typeof value !== "function")
     throw new TypeError(`createRunAdmissionRuntime requires ${label}`);
@@ -3786,11 +3914,29 @@ function createRunAdmissionRuntime(options = {}) {
     if (job.maxRuntimeMs > 0 && now2() - Date.parse(job.createdAt || new Date().toISOString()) >= job.maxRuntimeMs) {
       return await stopAndRemove(directory, client, sessionID, state, job, "max_runtime_reached", `Loop stopped by --max-runtime: ${job.name || job.id}`, "max-runtime");
     }
-    if (job.stopFile && await pathExists2(path9.resolve(directory, job.stopFile))) {
+    if (job.stopFile && await pathExists2(path10.resolve(directory, job.stopFile))) {
       return await stopAndRemove(directory, client, sessionID, state, job, "stop_file", "Loop stopped by --stop-file: " + job.stopFile);
     }
     if (await untilReached(directory, job)) {
       return await stopAndRemove(directory, client, sessionID, state, job, "until_reached", `Loop stopped by --until: ${job.until}`);
+    }
+    if (job.untilChecklistComplete) {
+      const checklist = await inspectTaskChecklist(directory, job.progressFile);
+      job.checklistStatus = { status: checklist.status, total: checklist.total, pending: checklist.pending };
+      if (checklist.status === "unavailable") {
+        job.paused = true;
+        job.pauseReason = "checklist-unavailable";
+        job.lastChecklistError = checklist.reason;
+        await writeState2(directory, sessionID, state);
+        await notifyJob2(directory, job, "checklist_unavailable");
+        await toast2(client, "Loop paused: checklist " + job.progressFile + " could not be validated (" + checklist.reason + ").", "warning");
+        await reschedule(directory, client, sessionID);
+        return { admitted: false, reason: "checklist_unavailable" };
+      }
+      delete job.lastChecklistError;
+      if (checklist.status === "complete" && (!job.verifyCommand || job.lastVerifyAt > 0 && job.lastVerifyCode === 0)) {
+        return await stopAndRemove(directory, client, sessionID, state, job, "checklist_complete", "Loop stopped: " + job.progressFile + " checklist completed.", "checklist-complete");
+      }
     }
     if (job.preflightCommand) {
       if (job.safe && dangerousShell2(job.preflightCommand)) {
