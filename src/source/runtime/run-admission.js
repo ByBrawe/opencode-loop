@@ -4,6 +4,7 @@ import { pathExists as defaultPathExists, writeState as defaultWriteState } from
 import { appendLoopLog as defaultAppendLoopLog, runShellCommand as defaultRunShellCommand, notifyJob as defaultNotifyJob } from "../core/process.js"
 import { toast as defaultToast } from "../opencode/host.js"
 import { dangerousShell as defaultDangerousShell } from "./job-workspace.js"
+import { inspectTaskChecklist } from "./checklist-completion.js"
 import { dueJobs as sharedDueJobs } from "./schedule-policy.js"
 
 function requireFunction(value, label) {
@@ -80,6 +81,30 @@ export function createRunAdmissionRuntime(options = {}) {
         "until_reached",
         `Loop stopped by --until: ${job.until}`,
       )
+    }
+
+    if (job.untilChecklistComplete) {
+      const checklist = await inspectTaskChecklist(directory, job.progressFile)
+      job.checklistStatus = { status: checklist.status, total: checklist.total, pending: checklist.pending }
+      if (checklist.status === "unavailable") {
+        job.paused = true
+        job.pauseReason = "checklist-unavailable"
+        job.lastChecklistError = checklist.reason
+        await writeState(directory, sessionID, state)
+        await notifyJob(directory, job, "checklist_unavailable")
+        await toast(client, "Loop paused: checklist " + job.progressFile + " could not be validated (" + checklist.reason + ").", "warning")
+        await reschedule(directory, client, sessionID)
+        return { admitted: false, reason: "checklist_unavailable" }
+      }
+      delete job.lastChecklistError
+      if (checklist.status === "complete" && (!job.verifyCommand || (job.lastVerifyAt > 0 && job.lastVerifyCode === 0))) {
+        return await stopAndRemove(
+          directory, client, sessionID, state, job,
+          "checklist_complete",
+          "Loop stopped: " + job.progressFile + " checklist completed.",
+          "checklist-complete",
+        )
+      }
     }
 
     if (job.preflightCommand) {
