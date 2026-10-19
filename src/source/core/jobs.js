@@ -58,6 +58,7 @@ export function decoratePrompt(job) {
   const continuation = continuationProjectInstruction(job.action)
   if (continuation) additions.push(continuation)
   if (job.progressFile) additions.push(`Use ${job.progressFile} as the main progress/TODO state file. Read it before choosing the next task and update it after work.`)
+  if (job.untilChecklistComplete) additions.push("When all actual Markdown tasks in the configured progress file are checked, stop creating new work and report results. Loop will make the stopping decision itself from the project file at a safe host boundary; do not attempt to invoke /loop-clear as assistant text.")
   if (job.lastVerifyFailure) additions.push("Previous verify command failed. Fix this before moving on. Failure summary: " + String(job.lastVerifyFailure).slice(0, 1200))
   if (job.askNever) additions.push("Do not ask the user questions. Make reasonable assumptions and continue. Only write a short BLOCKED note if truly blocked.")
   if (job.safe) additions.push("Safety rules: do not run destructive commands such as git reset, git clean, rm -rf, del /s, rmdir /s, force push, production deploys, production migrations, terraform destroy, or deleting user data. If such an action seems needed, write a BLOCKED note instead.")

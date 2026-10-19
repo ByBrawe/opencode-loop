@@ -149,6 +149,7 @@ function parseLoopArgs(raw, defaults = {}) {
     until: defaults.until,
     stopFile: defaults.stopFile,
     progressFile: defaults.progressFile,
+    untilChecklistComplete: defaults.untilChecklistComplete ?? false,
     promptFile: defaults.promptFile,
     includeFiles: Array.isArray(defaults.includeFiles) ? [...defaults.includeFiles] : [],
     watchPaths: Array.isArray(defaults.watchPaths) ? [...defaults.watchPaths] : [],
@@ -229,6 +230,9 @@ function parseLoopArgs(raw, defaults = {}) {
   [found, rest] = takeFlag(rest, "--pause-on-verify-fail");
   if (found)
     job.pauseOnVerifyFail = true;
+  [found, rest] = takeFlag(rest, "--until-checklist-complete");
+  if (found)
+    job.untilChecklistComplete = true;
   [found, rest] = takeFlag(rest, "--dry-run");
   if (found)
     job.dryRun = true;
@@ -377,6 +381,8 @@ function parseLoopArgs(raw, defaults = {}) {
     job.maxNoProgress = job.maxNoProgress ?? DEFAULT_GOAL_MAX_NO_PROGRESS;
   }
   job.lastRunAt = job.immediate ? 0 : now();
+  if (job.untilChecklistComplete && !job.progressFile)
+    return { ok: false, error: "--until-checklist-complete requires --progress-file <project.md>" };
   if (!job.action && !job.promptFile && !job.goalFile)
     return { ok: false, error: "Missing action. Example: /loop 0s continue from progress.md, /loop-goal ship the feature, or /loop 0s --prompt-file loop-prompt.md" };
   return { ok: true, job };
@@ -490,6 +496,8 @@ function decoratePrompt(job) {
     additions.push(continuation);
   if (job.progressFile)
     additions.push(`Use ${job.progressFile} as the main progress/TODO state file. Read it before choosing the next task and update it after work.`);
+  if (job.untilChecklistComplete)
+    additions.push("When all actual Markdown tasks in the configured progress file are checked, stop creating new work and report results. Loop will make the stopping decision itself from the project file at a safe host boundary; do not attempt to invoke /loop-clear as assistant text.");
   if (job.lastVerifyFailure)
     additions.push("Previous verify command failed. Fix this before moving on. Failure summary: " + String(job.lastVerifyFailure).slice(0, 1200));
   if (job.askNever)
@@ -1357,7 +1365,7 @@ var init_job_workspace = __esm(() => {
 });
 
 // src/source/opencode2/native-plugin.js
-import path9 from "path";
+import path10 from "path";
 
 // src/source/opencode2/session-location.js
 import path from "path";
@@ -1774,7 +1782,11 @@ function formatOpenCode2LoopStatus(state, current = Date.now()) {
       job.askNever ? "ask-never" : undefined,
       job.noOverlap ? "no-overlap" : undefined,
       job.checkpointOnly ? "checkpoint-only" : undefined,
-      job.gitCheckpoint ? "git-checkpoint" : undefined
+      job.gitCheckpoint ? "git-checkpoint" : undefined,
+      job.untilChecklistComplete ? "checklist-stop:" + (job.progressFile || "missing-file") : undefined,
+      job.pauseReason ? "reason:" + job.pauseReason : undefined,
+      job.lastChecklistError ? "checklist-error:" + job.lastChecklistError : undefined,
+      !job.maxRuns && !job.maxRuntimeMs && !job.until && !job.stopFile && !job.untilChecklistComplete ? "unlimited" : undefined
     ].filter(Boolean).join(",");
     return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${jobLabel(job)} | runs=${job.runCount || 0} | failures=${job.failureCount || 0} | due in ${durationToText(dueIn)} | ${flags}`;
   }) : ["No active loop jobs."];
@@ -1782,7 +1794,8 @@ function formatOpenCode2LoopStatus(state, current = Date.now()) {
     jobs,
     text: `OpenCode loop status:
 ${lines.join(`
-`)}`
+`)}${jobs.length ? `
+Host controls: run /loop-stop <name-or-id> or /loop-clear to stop jobs; asking the model to print those commands does not execute them.` : ""}`
   });
 }
 
@@ -1790,7 +1803,128 @@ ${lines.join(`
 init_process();
 init_job_workspace();
 import { stat } from "fs/promises";
+import path8 from "path";
+
+// src/source/runtime/checklist-completion.js
+import { promises as fs4, constants } from "fs";
 import path7 from "path";
+import { createHash as createHash2 } from "crypto";
+var MAX_CHECKLIST_BYTES = 256000;
+var EXCLUDED_PROJECT_DIRS = new Set([".opencode", ".git", "node_modules"]);
+function unavailable(reason) {
+  return { status: "unavailable", reason, total: 0, pending: 0 };
+}
+function summarizeTaskChecklist(markdown) {
+  let total = 0;
+  let pending = 0;
+  let fence = null;
+  let comment = false;
+  for (const original of String(markdown || "").replace(/^\uFEFF/, "").split(/\r?\n/)) {
+    let line = "";
+    let offset = 0;
+    while (offset < original.length) {
+      if (comment) {
+        const end = original.indexOf("-->", offset);
+        if (end < 0)
+          break;
+        comment = false;
+        offset = end + 3;
+      } else {
+        const start = original.indexOf("<!--", offset);
+        if (start < 0) {
+          line += original.slice(offset);
+          break;
+        }
+        line += original.slice(offset, start);
+        comment = true;
+        offset = start + 4;
+      }
+    }
+    const trimmed = line.trimStart();
+    const indentation = line.length - trimmed.length;
+    const marker = trimmed.charAt(0);
+    let markerSize = 0;
+    if (marker === "~" || marker.charCodeAt(0) === 96) {
+      while (trimmed.charAt(markerSize) === marker)
+        markerSize++;
+    }
+    if (fence) {
+      if (indentation <= 3 && markerSize >= fence.length && marker === fence.marker && !trimmed.slice(markerSize).trim())
+        fence = null;
+      continue;
+    }
+    if (indentation <= 3 && markerSize >= 3) {
+      fence = { marker, length: markerSize };
+      continue;
+    }
+    if (/^\s*>/.test(line))
+      continue;
+    const match = line.match(/^\s{0,24}[-+*]\s+\[([ xX])\](?:\s|$)/);
+    if (!match)
+      continue;
+    total++;
+    if (match[1] === " ")
+      pending++;
+  }
+  return {
+    status: total === 0 ? "unavailable" : pending === 0 ? "complete" : "pending",
+    reason: total === 0 ? "no-task-checkboxes" : "",
+    total,
+    pending
+  };
+}
+async function inspectTaskChecklist(directory, progressFile) {
+  const name = String(progressFile || "").trim();
+  if (!name || name.includes("\x00"))
+    return unavailable("missing-progress-file");
+  if (path7.isAbsolute(name) || path7.win32.isAbsolute(name))
+    return unavailable("absolute-path");
+  const root = path7.resolve(directory);
+  const target = path7.resolve(root, name);
+  const relative = path7.relative(root, target);
+  if (!relative || relative === ".." || relative.startsWith(".." + path7.sep) || path7.isAbsolute(relative)) {
+    return unavailable("outside-project");
+  }
+  const parts = relative.split(path7.sep);
+  if (parts.some((part) => EXCLUDED_PROJECT_DIRS.has(part.toLowerCase())))
+    return unavailable("control-plane-path");
+  try {
+    const rootInfo = await fs4.lstat(root);
+    if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink())
+      return unavailable("unsafe-project-root");
+    let current = root;
+    for (let index = 0;index < parts.length; index++) {
+      current = path7.join(current, parts[index]);
+      const info = await fs4.lstat(current);
+      if (info.isSymbolicLink())
+        return unavailable("symlink-path");
+      if (index < parts.length - 1 && !info.isDirectory())
+        return unavailable("invalid-parent");
+      if (index === parts.length - 1 && (!info.isFile() || info.size > MAX_CHECKLIST_BYTES)) {
+        return unavailable(!info.isFile() ? "not-regular-file" : "file-too-large");
+      }
+    }
+    const handle = await fs4.open(target, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
+    try {
+      const info = await handle.stat();
+      if (!info.isFile() || info.size > MAX_CHECKLIST_BYTES) {
+        return unavailable(!info.isFile() ? "not-regular-file" : "file-too-large");
+      }
+      const content = await handle.readFile({ encoding: "utf8" });
+      const after = await fs4.lstat(target);
+      if (!after.isFile() || after.isSymbolicLink() || after.dev !== info.dev || after.ino !== info.ino) {
+        return unavailable("file-changed-during-read");
+      }
+      return { ...summarizeTaskChecklist(content), digest: createHash2("sha256").update(content).digest("hex") };
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    return unavailable(error?.code === "ENOENT" ? "file-missing" : error?.code === "ELOOP" ? "symlink-path" : "file-unreadable");
+  }
+}
+
+// src/source/opencode2/native-policy.js
 function createNativeJobPolicy(options = {}) {
   const now = options.now || Date.now;
   const run = options.runShellCommand || runShellCommand;
@@ -1824,7 +1958,7 @@ function createNativeJobPolicy(options = {}) {
     }
     if (job.stopFile) {
       try {
-        await stat(path7.resolve(scope.directory, job.stopFile));
+        await stat(path8.resolve(scope.directory, job.stopFile));
         job.enabled = false;
         return pause(job, "stop-file");
       } catch (error) {
@@ -1835,6 +1969,20 @@ function createNativeJobPolicy(options = {}) {
     if (await workspace.untilReached(scope.directory, job)) {
       job.enabled = false;
       return pause(job, "until-reached");
+    }
+    if (job.untilChecklistComplete) {
+      const checklist = await inspectTaskChecklist(scope.directory, job.progressFile);
+      job.checklistStatus = { status: checklist.status, total: checklist.total, pending: checklist.pending };
+      if (checklist.status === "unavailable") {
+        job.lastChecklistError = checklist.reason;
+        return pause(job, "checklist-unavailable");
+      }
+      delete job.lastChecklistError;
+      if (checklist.status === "complete" && (!job.verifyCommand || job.lastVerifyAt > 0 && job.lastVerifyCode === 0 && job.lastVerifyChecklistDigest === checklist.digest)) {
+        job.enabled = false;
+        job.checklistCompletedAt = now();
+        return pause(job, "checklist-complete");
+      }
     }
     return true;
   }
@@ -1868,12 +2016,20 @@ function createNativeJobPolicy(options = {}) {
       job.lastVerifyOutput = `${result.stdout || ""}
 ${result.stderr || ""}`.trim().slice(-8000);
       if (result.code !== 0) {
+        delete job.lastVerifyChecklistDigest;
         job.failureCount = (job.failureCount || 0) + 1;
         if (result.blocked || job.pauseOnVerifyFail || job.maxFailures > 0 && job.failureCount >= job.maxFailures)
           pause(job, "verification-failed");
         return;
       }
       job.failureCount = 0;
+      if (job.untilChecklistComplete) {
+        const verified = await inspectTaskChecklist(scope.directory, job.progressFile);
+        if (verified.status !== "unavailable")
+          job.lastVerifyChecklistDigest = verified.digest;
+        else
+          delete job.lastVerifyChecklistDigest;
+      }
     }
     if (!isCurrent())
       return;
@@ -2001,6 +2157,8 @@ function createNativeLoopRuntime(options = {}) {
         continue;
       if (job.watchPaths?.length || job.stopFile || job.until)
         delay = Math.min(delay, 1000);
+      if (job.untilChecklistComplete)
+        delay = Math.min(delay, 5000);
       const due = dueAt(job);
       if (due > now())
         delay = Math.min(delay, due - now());
@@ -3144,8 +3302,8 @@ init_process();
 init_state();
 
 // src/source/core/progress.js
-import { promises as fs4 } from "fs";
-import path8 from "path";
+import { promises as fs5 } from "fs";
+import path9 from "path";
 var DEFAULT_PROGRESS_MD = `# Progress
 
 ## Current Goal
@@ -3173,24 +3331,24 @@ Describe the current project goal here.
 - None.
 `;
 function inside(root, candidate) {
-  const relative = path8.relative(root, candidate);
-  return relative !== ".." && !relative.startsWith(`..${path8.sep}`) && !path8.isAbsolute(relative);
+  const relative = path9.relative(root, candidate);
+  return relative !== ".." && !relative.startsWith(`..${path9.sep}`) && !path9.isAbsolute(relative);
 }
 async function initializeProgressFile(directory, argumentsText = "") {
-  const root = await fs4.realpath(directory);
+  const root = await fs5.realpath(directory);
   const target = String(argumentsText || "").trim() || "progress.md";
-  const file = path8.resolve(root, target);
-  const relative = path8.relative(root, file);
+  const file = path9.resolve(root, target);
+  const relative = path9.relative(root, file);
   if (!relative || !inside(root, file))
     throw new Error("Progress file must be inside the project");
-  if ([".git", ".opencode"].includes(relative.split(path8.sep)[0].toLowerCase())) {
+  if ([".git", ".opencode"].includes(relative.split(path9.sep)[0].toLowerCase())) {
     throw new Error("Progress file cannot replace a control-plane path");
   }
-  const parent = await fs4.realpath(path8.dirname(file));
+  const parent = await fs5.realpath(path9.dirname(file));
   if (!inside(root, parent))
     throw new Error("Progress file must remain inside the project; symlink escape refused");
   try {
-    await fs4.writeFile(file, DEFAULT_PROGRESS_MD, { encoding: "utf8", flag: "wx" });
+    await fs5.writeFile(file, DEFAULT_PROGRESS_MD, { encoding: "utf8", flag: "wx" });
     return { created: true, file: relative };
   } catch (error) {
     if (error?.code === "EEXIST")
@@ -3205,6 +3363,7 @@ var HELP = `OpenCode Loop: native OpenCode 2 runtime
 /loop 5m <task> --verify "npm test" --pause-on-verify-fail
 /loop --watch progress.md <task>
 /loop 0s <task> --prompt-file instructions.md --include-file progress.md
+/loop 0s <task> --progress-file TASK.md --until-checklist-complete --verify "npm test"
 /loop 0s <task> --compact-every 3
 /loop 5m --shell npm test
 /loop 15m --compact /compact
@@ -3212,6 +3371,8 @@ Presets: /loop-dev, /loop-testfix, /loop-progress, /loop-safe-dev, /loop-ask, /l
 /loop-init [progress.md] creates a missing project-local progress file without overwriting existing data.
 Controls: /loop-now, /loop-pause, /loop-resume, /loop-stop, /loop-remove, /loop-clear, /loop-status, /loop-export.
 Preflight, postrun, notifications, stop files, completion markers, runtime/failure/run limits, branches and checkpoints are supported.
+--progress-file alone is context, not a stop condition. --until-checklist-complete is an explicit host-verified stop condition; missing/unsafe/no-task files pause for review, and --verify must have passed before stopping.
+Invoke /loop-stop or /loop-clear as native USER commands. Having an assistant print the slash command does not execute it.
 Scheduled shell commands run as bounded local child processes managed by Loop; OpenCode 2's ctx.shell surface is a hook API, not a shell-execution method.
 Manual /loop-compact, --compact and --compact-every use public session.compact when the V2 host exposes it. Loop matches the admitted manual compaction inputID and waits for host completion; older hosts without this capability reject the job before creation. Automatic compaction stays host-owned.
 An unfinished dedicated Goal reserves its session; Loop will not override it.
@@ -3318,7 +3479,7 @@ var OpenCodeLoopNativePlugin = Object.freeze({
         return { handled: true, accepted: true, ...output };
       }
       if (["loop-help", "loop-doctor", "loop-logs"].includes(name)) {
-        const text = name === "loop-logs" ? (await readSmallTextFile(path9.join(stateDir(directory), "loop.log"), 2000000)).split(`
+        const text = name === "loop-logs" ? (await readSmallTextFile(path10.join(stateDir(directory), "loop.log"), 2000000)).split(`
 `).slice(-60).join(`
 `) || "No Loop log entries." : name === "loop-doctor" ? `Native OpenCode Loop
 Host: ${ctx.app?.version || "unknown"}

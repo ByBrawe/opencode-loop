@@ -1,6 +1,9 @@
 import assert from "node:assert/strict"
 import path from "node:path"
+import os from "node:os"
+import { mkdtemp, writeFile, rm } from "node:fs/promises"
 import { createRunAdmissionRuntime } from "../src/source/runtime/run-admission.js"
+import { inspectTaskChecklist } from "../src/source/runtime/checklist-completion.js"
 
 assert.throws(() => createRunAdmissionRuntime({}), /untilReached/)
 assert.throws(() => createRunAdmissionRuntime({ untilReached: async () => false }), /scheduleDueWork/)
@@ -129,5 +132,49 @@ assert.deepEqual(admittedResult, { admitted: true, job: admitted, runNowRequeste
 assert.equal(admitted.paused, undefined)
 assert.equal(admitted.runNowRequestedAt, clock)
 assert.equal(logs.findLast((entry) => entry[1] === "preflight")?.[2].code, 0)
+
+const project = await mkdtemp(path.join(os.tmpdir(), "loop-admission-checklist-"))
+try {
+  await writeFile(path.join(project, "TASK.md"), "- [ ] code\n- [x] plan\n")
+  const checklistJob = { id: "checklist-job", enabled: true, progressFile: "TASK.md", untilChecklistComplete: true }
+  const checklistState = { jobs: [checklistJob] }
+  assert.equal((await runtime.admitJob(project, {}, "session-checklist", checklistState, checklistJob)).admitted, true)
+  assert.deepEqual(checklistJob.checklistStatus, { status: "pending", total: 2, pending: 1 })
+
+  await writeFile(path.join(project, "TASK.md"), "- [x] code\n- [x] plan\n")
+  assert.deepEqual(await runtime.admitJob(project, {}, "session-checklist", checklistState, checklistJob),
+    { admitted: false, reason: "checklist_complete" })
+  assert.equal(checklistState.jobs.length, 0)
+  assert.equal(notifications.at(-1)[2], "checklist_complete")
+
+  const verifyJob = { id: "verify-checklist", enabled: true, progressFile: "TASK.md",
+    untilChecklistComplete: true, verifyCommand: "npm test" }
+  const verifyState = { jobs: [verifyJob] }
+  assert.equal((await runtime.admitJob(project, {}, "session-verify", verifyState, verifyJob)).admitted, true,
+    "unchecked host verification cannot imply completion")
+  verifyJob.lastVerifyCode = 1
+  verifyJob.lastVerifyAt = clock
+  assert.equal((await runtime.admitJob(project, {}, "session-verify", verifyState, verifyJob)).admitted, true,
+    "failed host verification cannot imply completion")
+  verifyJob.lastVerifyCode = 0
+  assert.equal((await runtime.admitJob(project, {}, "session-verify", verifyState, verifyJob)).admitted, true,
+    "successful verify without recorded checklist fingerprint is not authoritative")
+  verifyJob.lastVerifyChecklistDigest = (await inspectTaskChecklist(project, "TASK.md")).digest
+  await writeFile(path.join(project, "TASK.md"), "- [x] code\n- [x] plan\n- [x] later task\n")
+  assert.equal((await runtime.admitJob(project, {}, "session-verify", verifyState, verifyJob)).admitted, true,
+    "verification for older checklist bytes cannot certify newly changed work")
+  verifyJob.lastVerifyChecklistDigest = (await inspectTaskChecklist(project, "TASK.md")).digest
+  assert.equal((await runtime.admitJob(project, {}, "session-verify", verifyState, verifyJob)).reason, "checklist_complete")
+
+  const missingJob = { id: "missing-checklist", enabled: true, progressFile: "MISSING.md", untilChecklistComplete: true }
+  const missingState = { jobs: [missingJob] }
+  const missing = await runtime.admitJob(project, {}, "session-missing", missingState, missingJob)
+  assert.deepEqual(missing, { admitted: false, reason: "checklist_unavailable" })
+  assert.equal(missingJob.paused, true)
+  assert.equal(missingJob.lastChecklistError, "file-missing")
+  assert.equal(missingState.jobs.length, 1, "preserve job for explicit recovery")
+} finally {
+  await rm(project, { force: true, recursive: true })
+}
 
 console.log("run admission runtime tests passed")

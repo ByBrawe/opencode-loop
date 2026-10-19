@@ -28,6 +28,10 @@ export function formatOpenCode2LoopStatus(state, current = Date.now()) {
           job.noOverlap ? "no-overlap" : undefined,
           job.checkpointOnly ? "checkpoint-only" : undefined,
           job.gitCheckpoint ? "git-checkpoint" : undefined,
+          job.untilChecklistComplete ? "checklist-stop:" + (job.progressFile || "missing-file") : undefined,
+          job.pauseReason ? "reason:" + job.pauseReason : undefined,
+          job.lastChecklistError ? "checklist-error:" + job.lastChecklistError : undefined,
+          !job.maxRuns && !job.maxRuntimeMs && !job.until && !job.stopFile && !job.untilChecklistComplete ? "unlimited" : undefined,
         ].filter(Boolean).join(",")
         return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${jobLabel(job)} | runs=${job.runCount || 0} | failures=${job.failureCount || 0} | due in ${durationToText(dueIn)} | ${flags}`
       })
@@ -35,6 +39,6 @@ export function formatOpenCode2LoopStatus(state, current = Date.now()) {
 
   return Object.freeze({
     jobs,
-    text: `OpenCode loop status:\n${lines.join("\n")}`,
+    text: `OpenCode loop status:\n${lines.join("\n")}${jobs.length ? "\nHost controls: run /loop-stop <name-or-id> or /loop-clear to stop jobs; asking the model to print those commands does not execute them." : ""}`,
   })
 }

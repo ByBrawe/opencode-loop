@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises"
 import path from "node:path"
 import { runShellCommand, appendLoopLog } from "../core/process.js"
 import { createJobWorkspaceRuntime, dangerousShell } from "../runtime/job-workspace.js"
+import { inspectTaskChecklist } from "../runtime/checklist-completion.js"
 
 export function createNativeJobPolicy(options = {}) {
   const now = options.now || Date.now
@@ -44,6 +45,20 @@ export function createNativeJobPolicy(options = {}) {
       job.enabled = false
       return pause(job, "until-reached")
     }
+    if (job.untilChecklistComplete) {
+      const checklist = await inspectTaskChecklist(scope.directory, job.progressFile)
+      job.checklistStatus = { status: checklist.status, total: checklist.total, pending: checklist.pending }
+      if (checklist.status === "unavailable") {
+        job.lastChecklistError = checklist.reason
+        return pause(job, "checklist-unavailable")
+      }
+      delete job.lastChecklistError
+      if (checklist.status === "complete" && (!job.verifyCommand || (job.lastVerifyAt > 0 && job.lastVerifyCode === 0 && job.lastVerifyChecklistDigest === checklist.digest))) {
+        job.enabled = false
+        job.checklistCompletedAt = now()
+        return pause(job, "checklist-complete")
+      }
+    }
     return true
   }
 
@@ -71,11 +86,17 @@ export function createNativeJobPolicy(options = {}) {
       job.lastVerifyAt = now()
       job.lastVerifyOutput = `${result.stdout || ""}\n${result.stderr || ""}`.trim().slice(-8000)
       if (result.code !== 0) {
+        delete job.lastVerifyChecklistDigest
         job.failureCount = (job.failureCount || 0) + 1
         if (result.blocked || job.pauseOnVerifyFail || (job.maxFailures > 0 && job.failureCount >= job.maxFailures)) pause(job, "verification-failed")
         return
       }
       job.failureCount = 0
+      if (job.untilChecklistComplete) {
+        const verified = await inspectTaskChecklist(scope.directory, job.progressFile)
+        if (verified.status !== "unavailable") job.lastVerifyChecklistDigest = verified.digest
+        else delete job.lastVerifyChecklistDigest
+      }
     }
     if (!isCurrent()) return
     if (job.postrunCommand) {

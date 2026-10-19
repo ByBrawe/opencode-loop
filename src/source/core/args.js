@@ -135,6 +135,7 @@ export function parseLoopArgs(raw, defaults = {}) {
     until: defaults.until,
     stopFile: defaults.stopFile,
     progressFile: defaults.progressFile,
+    untilChecklistComplete: defaults.untilChecklistComplete ?? false,
     promptFile: defaults.promptFile,
     includeFiles: Array.isArray(defaults.includeFiles) ? [...defaults.includeFiles] : [],
     watchPaths: Array.isArray(defaults.watchPaths) ? [...defaults.watchPaths] : [],
@@ -197,6 +198,7 @@ export function parseLoopArgs(raw, defaults = {}) {
   ;[found, rest] = takeFlag(rest, "--git-checkpoint"); if (found) job.gitCheckpoint = true
   ;[found, rest] = takeFlag(rest, "--checkpoint-only"); if (found) job.checkpointOnly = true
   ;[found, rest] = takeFlag(rest, "--pause-on-verify-fail"); if (found) job.pauseOnVerifyFail = true
+  ;[found, rest] = takeFlag(rest, "--until-checklist-complete"); if (found) job.untilChecklistComplete = true
   ;[found, rest] = takeFlag(rest, "--dry-run"); if (found) job.dryRun = true
   ;[found, rest] = takeFlag(rest, "--multi"); if (found) job.multi = true
   ;[found, rest] = takeFlag(rest, "--replace"); if (found) job.multi = false
@@ -276,6 +278,7 @@ export function parseLoopArgs(raw, defaults = {}) {
   }
   job.lastRunAt = job.immediate ? 0 : now()
 
+  if (job.untilChecklistComplete && !job.progressFile) return { ok: false, error: "--until-checklist-complete requires --progress-file <project.md>" }
   if (!job.action && !job.promptFile && !job.goalFile) return { ok: false, error: "Missing action. Example: /loop 0s continue from progress.md, /loop-goal ship the feature, or /loop 0s --prompt-file loop-prompt.md" }
   return { ok: true, job }
 }

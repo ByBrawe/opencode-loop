@@ -47,6 +47,67 @@ async function test(name, run, extra) {
   finally { await f.close() }
 }
 
+await test("explicit checklist stop prevents the next V2 model turn", async (f) => {
+  await writeFile(path.join(f.directory, "TASK.md"), "- [ ] implement\n- [x] setup\n")
+  const added = await f.add("0s --progress-file TASK.md --until-checklist-complete implement --max-runs 3")
+  assert.equal(added.accepted, true)
+  await f.wake()
+  assert.equal(f.prompts.length, 1)
+  await writeFile(path.join(f.directory, "TASK.md"), "- [x] implement\n- [x] setup\n")
+  await f.complete()
+  const job = (await f.state()).jobs[0]
+  assert.equal(f.prompts.length, 1, "no redundant model prompt after host checks TASK.md")
+  assert.equal(job.enabled, false)
+  assert.equal(job.paused, true)
+  assert.equal(job.pauseReason, "checklist-complete")
+  assert.deepEqual(job.checklistStatus, { status: "complete", total: 2, pending: 0 })
+})
+
+await test("explicit checklist refuses missing project file instead of spending tokens", async (f) => {
+  assert.equal((await f.add("0s --progress-file MISSING.md --until-checklist-complete implement")).accepted, true)
+  await f.wake()
+  const job = (await f.state()).jobs[0]
+  assert.equal(f.prompts.length, 0)
+  assert.equal(job.paused, true)
+  assert.equal(job.pauseReason, "checklist-unavailable")
+  assert.equal(job.lastChecklistError, "file-missing")
+})
+
+await test("an already-complete checklist still requires host verification when requested", async (f) => {
+  await writeFile(path.join(f.directory, "TASK.md"), "- [x] done\n")
+  await f.add('0s --progress-file TASK.md --until-checklist-complete --verify "npm test" check work --max-runs 2')
+  await f.wake()
+  assert.equal(f.prompts.length, 1, "unobserved verify must not pass by default")
+  await f.complete()
+  const job = (await f.state()).jobs[0]
+  assert.equal(f.hooks.length, 1)
+  assert.equal(f.hooks[0], "npm test")
+  assert.equal(f.prompts.length, 1, "observed verify pass stops before another turn")
+  assert.equal(job.enabled, false)
+  assert.equal(job.pauseReason, "checklist-complete")
+  assert.equal(job.lastVerifyCode, 0)
+})
+
+await test("progress-file without opt-in still follows existing finite or infinite semantics", async (f) => {
+  await writeFile(path.join(f.directory, "TASK.md"), "- [x] all done\n")
+  await f.add("0s --progress-file TASK.md task --max-runs 1")
+  await f.wake()
+  assert.equal(f.prompts.length, 1)
+  assert.equal((await f.state()).jobs[0].untilChecklistComplete, false)
+})
+
+await test("native checklist flag requires explicit progress file and status reveals stop controls", async (f) => {
+  const rejected = await f.add("0s --until-checklist-complete implement")
+  assert.equal(rejected.accepted, false)
+  assert.match(rejected.error, /--progress-file/)
+  await writeFile(path.join(f.directory, "TASK.md"), "- [ ] todo\n")
+  await f.add("0s --progress-file TASK.md --until-checklist-complete implement --max-runs 3")
+  const status = await f.control("loop-status")
+  assert.match(status.status.text, /checklist-stop:TASK\.md/)
+  assert.match(status.status.text, /\/loop-stop/)
+  assert.match(status.status.text, /\/loop-clear/)
+})
+
 await test("one durable prompt under concurrent idle notifications", async (f) => {
   assert.equal((await f.add("0s keep working --max-runs 2")).accepted, true)
   await Promise.all(Array.from({ length: 12 }, () => f.wake()))
