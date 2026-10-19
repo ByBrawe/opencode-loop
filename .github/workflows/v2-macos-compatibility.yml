@@ -70,6 +70,7 @@ jobs:
       - name: Verify macOS real OpenCode 2 Loop+Goal lifecycle
         env:
           OPENCODE2_NATIVE_REQUIRED: '1'
+          OPENCODE2_MACOS_NATIVE_CANARY: '1'
           OPENCODE2_CURRENT_COMMAND_FIELDS: '1'
           OPENCODE2_NATIVE_COMPACT_CANARY: '1'
         run: node scripts/opencode2-loop-canary.mjs
