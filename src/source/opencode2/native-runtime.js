@@ -81,6 +81,7 @@ export function createNativeLoopRuntime(options = {}) {
     for (const job of state.jobs || []) {
       if (!eligible(job) || job.v2Run || blocked(job).length) continue
       if (job.watchPaths?.length || job.stopFile || job.until) delay = Math.min(delay, 1000)
+      if (job.untilChecklistComplete) delay = Math.min(delay, 5000)
       const due = dueAt(job)
       if (due > now()) delay = Math.min(delay, due - now())
       // A zero-delay deferred preset still needs a first idle-safe wake after
