@@ -39,6 +39,6 @@ export function formatOpenCode2LoopStatus(state, current = Date.now()) {
 
   return Object.freeze({
     jobs,
-    text: `OpenCode loop status:\n${lines.join("\n")}\nHost controls: run /loop-stop <name-or-id> or /loop-clear to stop jobs; asking the model to print those commands does not execute them.`,
+    text: `OpenCode loop status:\n${lines.join("\n")}${jobs.length ? "\nHost controls: run /loop-stop <name-or-id> or /loop-clear to stop jobs; asking the model to print those commands does not execute them." : ""}`,
   })
 }
