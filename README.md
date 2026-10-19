@@ -139,6 +139,18 @@ Create a starter progress file first if needed:
 /loop-init
 ```
 
+### Stop when a Markdown checklist is complete (unreleased)
+
+The native V2 source on this branch supports an **opt-in, host-checked** completion guard. It is **not part of the published 0.6.8 npm package** until a verified release ships:
+
+```text
+/loop --progress-file TASK.md --until-checklist-complete --verify "npm test" finish the tasks in TASK.md
+```
+
+On a safe idle/scheduling boundary, Loop reads `TASK.md` as a regular project file. If it has at least one Markdown checkbox and all actionable boxes are checked, Loop stops scheduling further turns. If `--verify` is configured, Loop also requires a previously observed successful host verification. Empty/missing/oversized/unsafe/symlink/control-plane files pause for review rather than being called finished; code-fenced and quoted checkbox examples do not count.
+
+**Without `--until-checklist-complete`, `--progress-file` only supplies context** and normal unlimited loops stay unlimited. The host/user controls `/loop-stop` and `/loop-clear` directly; having a model print those names is not an actual command invocation. Follow [#174](https://github.com/ByBrawe/opencode-loop/issues/174) and [#175](https://github.com/ByBrawe/opencode-loop/issues/175).
+
 ### Repeat every 5 minutes
 
 ```text
