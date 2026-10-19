@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { readFileSync } from "node:fs"
+import { readFileSync, realpathSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
@@ -11,7 +11,9 @@ assert.ok(process.argv.length <= 3, "expected at most one consumer directory")
 const loop = pkg.name === "@bybrawe/opencode-loop"
 const cwd = process.argv[2] ? path.resolve(process.argv[2]) : root
 const packageRoot = process.argv[2] ? path.join(cwd, "node_modules", ...pkg.name.split("/")) : root
-const url = (relative) => pathToFileURL(path.join(packageRoot, relative)).href
+// Node resolves ESM file URLs to real paths on macOS, where /var aliases /private/var.
+// Guard and delegated V1 entry identities must use the same canonical URLs as the loader.
+const url = (relative) => pathToFileURL(realpathSync.native(path.join(packageRoot, relative))).href
 const legacyEntries = loop ? [url("src/v1.js"), url("src/source/v1.js")] : [url("dist/legacy-v1.js")]
 const blocked = loop
   ? [...legacyEntries, url("src/index.js"), url("src/source/legacy-v1.js")]
@@ -23,15 +25,23 @@ const serverEntries = loop ? [`${pkg.name}/server`, url("src/source/server.js")]
 function probe(mode) {
   const stub = "globalThis.__legacyModuleLoads = (globalThis.__legacyModuleLoads || 0) + 1; export default async (...args) => { if (args[0]?.failure) throw args[0].failure; return { args }; }"
   const loader = `
-    const blocked = ${JSON.stringify(blocked)};
-    const legacyEntries = ${JSON.stringify(legacyEntries)};
+    import { realpathSync } from "node:fs";
+    import { fileURLToPath } from "node:url";
+    const physical = (url) => {
+      if (!url.startsWith("file:")) return url;
+      const name = realpathSync.native(fileURLToPath(url));
+      return process.platform === "win32" ? name.toLowerCase() : name;
+    };
+    const blocked = new Set(${JSON.stringify(blocked)}.map(physical));
+    const legacyEntries = new Set(${JSON.stringify(legacyEntries)}.map(physical));
     export async function resolve(specifier, context, nextResolve) {
       if (specifier.startsWith("@opencode-ai/")) throw new Error("V2_LEGACY_IMPORT: " + specifier);
       const result = await nextResolve(specifier, context);
-      if (${JSON.stringify(mode)} === "delegate" && legacyEntries.includes(result.url)) {
+      const actual = physical(result.url);
+      if (${JSON.stringify(mode)} === "delegate" && legacyEntries.has(actual)) {
         return { url: ${JSON.stringify(`data:text/javascript,${encodeURIComponent(stub)}`)}, shortCircuit: true };
       }
-      if (blocked.includes(result.url)) throw new Error("V2_LEGACY_IMPORT: " + result.url);
+      if (blocked.has(actual)) throw new Error("V2_LEGACY_IMPORT: " + result.url);
       return result;
     }
   `

@@ -1,7 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises"
+import { mkdtemp, mkdir, writeFile, readFile, realpath, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -47,9 +47,12 @@ process.stdin.resume();
     assert.equal(result.code, 0, `${mode}: ${result.stdout}\n${result.stderr}`)
     const calls = (await readFile(log, "utf8")).trim().split(/\r?\n/).map(JSON.parse)
     if (mode === "pwd") {
+      // macOS /var/folders is an alias of /private/var/folders; the V2 host
+      // compares project PWD with the physical cwd, not the original alias.
+      const canonical = process.platform === "win32" ? project : await realpath(project)
       for (const call of calls.filter(call => ["session", "run"].includes(call.args[0]))) {
-        assert.equal(call.pwd, project, "native lookup and run must use the selected project, not the caller's PWD")
-        assert.equal(call.cwd, project)
+        assert.equal(call.pwd, canonical, "native lookup and run must use the canonical selected project, not the caller's PWD")
+        assert.equal(call.cwd, canonical)
       }
     }
     if (mode === "stdin") assert.match(result.stdout, /INPUT=\r?\n/)

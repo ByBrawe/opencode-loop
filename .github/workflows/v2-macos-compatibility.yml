@@ -1,0 +1,76 @@
+name: macOS OpenCode 2 Compatibility
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'scripts/**'
+      - 'package*.json'
+      - '.github/workflows/v2-macos-compatibility.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'scripts/**'
+      - 'package*.json'
+      - '.github/workflows/v2-macos-compatibility.yml'
+  schedule:
+    - cron: '37 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-native-consumer:
+    name: macOS native V2 source and real-host checks
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.4.2'
+      - name: Capture real runner platform
+        shell: bash
+        run: |
+          echo "OS=$(sw_vers -productVersion)"
+          echo "ARCH=$(uname -m)"
+          echo "NODE=$(node --version)"
+          echo "BUN=$(bun --version)"
+      - run: npm ci
+      - run: npm run build:plugin
+      - name: Ensure shipped bundles match source on macOS
+        run: git diff --exit-code -- src/index.js src/server.js src/native.js
+      - run: npm run check
+      - run: npm test
+      - run: npm run package:smoke
+      - name: Install moving native OpenCode 2 and separately published Goal
+        shell: bash
+        run: |
+          host="$RUNNER_TEMP/opencode2-macos-host"
+          npm install --prefix "$host" --package-lock=false @opencode/cli@latest @bybrawe/opencode-goal@latest
+          bin="$host/node_modules/.bin/opencode2"
+          if [ ! -x "$bin" ]; then bin="$host/node_modules/.bin/opencode"; fi
+          test -x "$bin"
+          goal_entry="$host/node_modules/@bybrawe/opencode-goal/dist/server.js"
+          test -f "$goal_entry"
+          goal_url="$(node --input-type=module -e 'import { pathToFileURL } from "node:url"; console.log(pathToFileURL(process.argv[1]).href)' "$goal_entry")"
+          echo "OPENCODE2_BINARY=$bin" >> "$GITHUB_ENV"
+          echo "OPENCODE_GOAL_V2_PLUGIN_URL=$goal_url" >> "$GITHUB_ENV"
+          node -e 'console.log("Host @opencode/cli", require(process.argv[1]).version)' "$host/node_modules/@opencode/cli/package.json"
+          node -e 'console.log("Goal", require(process.argv[1]).version)' "$host/node_modules/@bybrawe/opencode-goal/package.json"
+          "$bin" --version
+      - name: Verify macOS real OpenCode 2 Loop+Goal lifecycle
+        env:
+          OPENCODE2_NATIVE_REQUIRED: '1'
+          OPENCODE2_MACOS_NATIVE_CANARY: '1'
+          OPENCODE2_CURRENT_COMMAND_FIELDS: '1'
+          OPENCODE2_NATIVE_COMPACT_CANARY: '1'
+        run: node scripts/opencode2-loop-canary.mjs

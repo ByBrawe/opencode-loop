@@ -224,7 +224,8 @@ function commandNames(payload) {
 }
 
 async function main() {
-  assert.equal(process.platform, "linux", "the real OpenCode 2 Loop canary is intentionally Ubuntu-only")
+  const supported = process.platform === "linux" || (process.platform === "darwin" && process.env.OPENCODE2_MACOS_NATIVE_CANARY === "1")
+  assert.ok(supported, "real OpenCode 2 canary supports Linux or explicitly opted-in macOS CI only")
 
   const workspace = await mkdtemp(path.join(os.tmpdir(), "opencode-loop-v2-e2e-"))
   const home = path.join(workspace, ".home")
