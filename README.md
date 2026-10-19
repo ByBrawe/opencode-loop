@@ -127,11 +127,15 @@ This is an **unlimited idle loop** by default. When the assistant finishes and t
 
 For very short continuation prompts such as `continue`, `keep going`, or `devam et`, Loop adds project-continuation guidance: treat the turn as continuation of the current repository/conversation, inspect relevant files/TODO/progress/git state as needed, find the next unfinished step, avoid redoing completed work, and verify meaningful changes when practical.
 
-For project work, a strong default is:
+For project work, a continuation loop with an explicit progress file is:
 
 ```text
 /loop --safe --ask-never --progress-file progress.md devam et
 ```
+
+**Important:** `--progress-file` supplies project context only; it is **not** a completion or stop condition. Checking every `- [ ]` task as `- [x]` in `progress.md` or `TASK.md` will **not automatically stop** an ordinary idle loop. This distinction is tracked in [#174](https://github.com/ByBrawe/opencode-loop/issues/174) following a [user report](https://www.reddit.com/r/opencode/comments/1vzchjo/i_need_help_with_opencode/). For unattended tasks that must stop, combine the progress file with a **host-observed** stop criterion such as `--max-runs`, `--max-runtime`, `--stop-file` or an explicit `--until` marker. If you want checklist-completion stop, that opt-in feature is **not shipped yet**; do not assume the progress file implements it.
+
+The **user**, not an AI-generated chat response, must invoke `/loop-stop` or `/loop-clear` as a native control command. Asking the model to type `/loop-clear` in conversation does not reliably execute that command. Use `/loop-status` to inspect current jobs and `/loop-stop` or `/loop-clear` to stop them. See [#175](https://github.com/ByBrawe/opencode-loop/issues/175) for improvements to host-owned stop UX.
 
 Create a starter progress file first if needed:
 
@@ -473,13 +477,9 @@ For unattended work, avoid permanently allowing every shell command. Grant routi
 @bybrawe/opencode-loop
 ```
 
-Stable package peer range:
+Native OpenCode 2 is the default supported package path for `0.6.8`. The production dependency is pinned to `@opencode/plugin@2.0.22`; the explicit legacy V1 compatibility path retains `@opencode-ai/plugin >=1.4.0 <2`. Do **not** mistake the legacy V1 peer range for the V2 runtime API version.
 
-```text
-@opencode-ai/plugin >=1.4.0 <2
-```
-
-The repository contains experimental OpenCode 2 work, but the stable package does not claim full OpenCode 2 parity.
+Automated release gates cover native V2 packages, Windows/Linux regressions and real OpenCode 2 host command registration/coexistence with the separately installed Goal plugin. **Windows Desktop GUI slash-command discovery is not yet proven equivalent to CLI TUI**; see [#169](https://github.com/ByBrawe/opencode-loop/issues/169) and the [diagnostic guide](docs/OPENCODE2-DESKTOP-WINDOWS.md). Platform gaps are tracked in [#177](https://github.com/ByBrawe/opencode-loop/issues/177).
 
 See [docs/SCHEDULING.md](./docs/SCHEDULING.md) for the scheduling contract and [CHANGELOG.md](./CHANGELOG.md) for release history.
 
