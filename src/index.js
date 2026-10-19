@@ -3633,134 +3633,10 @@ async function applyTerminalContinuationGuard(directory, client, sessionID, job,
   return { job, terminal: true, pausedNow, waitingUser: false, waitingUserPausedNow: false, text };
 }
 
-// src/source/runtime/run-finalization.js
-function requireFunction8(value, label) {
-  if (typeof value !== "function")
-    throw new TypeError(`createRunFinalizationRuntime requires ${label}`);
-  return value;
-}
-function createRunFinalizationRuntime(options = {}) {
-  const runGoalChecks = requireFunction8(options.runGoalChecks, "runGoalChecks");
-  const applyGoalNoProgressGuard = requireFunction8(options.applyGoalNoProgressGuard, "applyGoalNoProgressGuard");
-  const createCheckpoint = requireFunction8(options.createCheckpoint, "createCheckpoint");
-  const scheduleDueWork = requireFunction8(options.scheduleDueWork, "scheduleDueWork");
-  const now2 = typeof options.now === "function" ? options.now : now;
-  const writeState2 = typeof options.writeState === "function" ? options.writeState : writeState;
-  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
-  const runShellCommand2 = typeof options.runShellCommand === "function" ? options.runShellCommand : runShellCommand;
-  const notifyJob2 = typeof options.notifyJob === "function" ? options.notifyJob : notifyJob;
-  const toast2 = typeof options.toast === "function" ? options.toast : toast;
-  const writeGoalReport2 = typeof options.writeGoalReport === "function" ? options.writeGoalReport : writeGoalReport;
-  const dangerousShell2 = typeof options.dangerousShell === "function" ? options.dangerousShell : dangerousShell;
-  const applyTerminalContinuationGuard2 = typeof options.applyTerminalContinuationGuard === "function" ? options.applyTerminalContinuationGuard : applyTerminalContinuationGuard;
-  async function finalizeJob(directory, client, sessionID, state, job, previousJob) {
-    if (job.infrastructureFailureCount) {
-      job.infrastructureFailureCount = 0;
-      job.lastInfrastructureFailure = "";
-      job.lastInfrastructureError = "";
-      job.lastInfrastructureFailureAt = 0;
-    }
-    if (job.verifyCommand) {
-      const verify = await runShellCommand2(job.verifyCommand, directory, job.timeoutMs || 300000);
-      job.lastVerifyAt = now2();
-      job.lastVerifyCode = verify.code;
-      if (verify.code === 0) {
-        job.failureCount = 0;
-        job.lastVerifyFailure = "";
-        await toast2(client, "Loop verify passed: " + job.verifyCommand, "success");
-      } else {
-        job.failureCount = (job.failureCount || 0) + 1;
-        job.lastVerifyFailure = (job.verifyCommand + `
-exit=` + verify.code + `
-` + verify.stdout + `
-` + verify.stderr).slice(0, 4000);
-        await toast2(client, "Loop verify failed: " + job.verifyCommand, "warning");
-        if (job.pauseOnVerifyFail || job.maxFailures > 0 && job.failureCount >= job.maxFailures) {
-          job.paused = true;
-          await notifyJob2(directory, job, "verify_failed");
-        }
-      }
-      await appendLoopLog2(directory, "verify", {
-        sessionID,
-        job: job.name || job.id,
-        command: job.verifyCommand,
-        code: verify.code,
-        failures: job.failureCount || 0
-      });
-    }
-    if (job.postrunCommand) {
-      if (job.safe && dangerousShell2(job.postrunCommand)) {
-        await appendLoopLog2(directory, "postrun-blocked", {
-          sessionID,
-          job: job.name || job.id,
-          command: job.postrunCommand
-        });
-      } else {
-        const postrun = await runShellCommand2(job.postrunCommand, directory, job.timeoutMs || 300000);
-        job.lastPostrunCode = postrun.code;
-        job.lastPostrunAt = now2();
-        if (postrun.code !== 0) {
-          job.failureCount = (job.failureCount || 0) + 1;
-          job.lastPostrunFailure = (job.postrunCommand + `
-exit=` + postrun.code + `
-` + postrun.stdout + `
-` + postrun.stderr).slice(0, 4000);
-          if (job.maxFailures > 0 && job.failureCount >= job.maxFailures) {
-            job.paused = true;
-            await notifyJob2(directory, job, "postrun_failed");
-          }
-        }
-        await appendLoopLog2(directory, "postrun", {
-          sessionID,
-          job: job.name || job.id,
-          command: job.postrunCommand,
-          code: postrun.code
-        });
-      }
-    }
-    if (isGoalJob(job)) {
-      job = await runGoalChecks(directory, sessionID, job, client);
-      job = await applyGoalNoProgressGuard(directory, client, sessionID, job, previousJob);
-    }
-    const terminal = await applyTerminalContinuationGuard2(directory, client, sessionID, job);
-    job = terminal.job;
-    if (terminal.waitingUserPausedNow) {
-      await appendLoopLog2(directory, "waiting-user", {
-        sessionID,
-        job: job.name || job.id,
-        count: job.waitingUserCount,
-        summary: String(terminal.text || "").slice(0, 1000)
-      });
-      await notifyJob2(directory, job, "waiting_user");
-      await toast2(client, "Loop paused: autonomous continuation is waiting for explicit user approval, access, or action.", "warning");
-    }
-    if (terminal.pausedNow) {
-      await appendLoopLog2(directory, "terminal-no-work", {
-        sessionID,
-        job: job.name || job.id,
-        count: job.terminalNoWorkCount,
-        summary: String(terminal.text || "").slice(0, 1000)
-      });
-      await notifyJob2(directory, job, "terminal_no_work");
-      await toast2(client, "Loop paused: completion-bounded task reported complete with no work remaining twice.", "success");
-    }
-    state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate).filter((candidate) => candidate.enabled !== false || isGoalJob(candidate));
-    await writeState2(directory, sessionID, state);
-    if (isGoalJob(job))
-      await writeGoalReport2(directory, sessionID, job);
-    await createCheckpoint(directory, sessionID, job, client);
-    await scheduleDueWork(directory, client, sessionID);
-    return job;
-  }
-  return { finalizeJob };
-}
-
-// src/source/runtime/run-admission.js
-import path10 from "path";
-
 // src/source/runtime/checklist-completion.js
 import { promises as fs8, constants } from "fs";
 import path9 from "path";
+import { createHash } from "crypto";
 var MAX_CHECKLIST_BYTES = 256000;
 var EXCLUDED_PROJECT_DIRS = new Set([".opencode", ".git", "node_modules"]);
 function unavailable(reason) {
@@ -3867,7 +3743,7 @@ async function inspectTaskChecklist(directory, progressFile) {
       if (!after.isFile() || after.isSymbolicLink() || after.dev !== info.dev || after.ino !== info.ino) {
         return unavailable("file-changed-during-read");
       }
-      return summarizeTaskChecklist(content);
+      return { ...summarizeTaskChecklist(content), digest: createHash("sha256").update(content).digest("hex") };
     } finally {
       await handle.close();
     }
@@ -3876,7 +3752,138 @@ async function inspectTaskChecklist(directory, progressFile) {
   }
 }
 
+// src/source/runtime/run-finalization.js
+function requireFunction8(value, label) {
+  if (typeof value !== "function")
+    throw new TypeError(`createRunFinalizationRuntime requires ${label}`);
+  return value;
+}
+function createRunFinalizationRuntime(options = {}) {
+  const runGoalChecks = requireFunction8(options.runGoalChecks, "runGoalChecks");
+  const applyGoalNoProgressGuard = requireFunction8(options.applyGoalNoProgressGuard, "applyGoalNoProgressGuard");
+  const createCheckpoint = requireFunction8(options.createCheckpoint, "createCheckpoint");
+  const scheduleDueWork = requireFunction8(options.scheduleDueWork, "scheduleDueWork");
+  const now2 = typeof options.now === "function" ? options.now : now;
+  const writeState2 = typeof options.writeState === "function" ? options.writeState : writeState;
+  const appendLoopLog2 = typeof options.appendLoopLog === "function" ? options.appendLoopLog : appendLoopLog;
+  const runShellCommand2 = typeof options.runShellCommand === "function" ? options.runShellCommand : runShellCommand;
+  const notifyJob2 = typeof options.notifyJob === "function" ? options.notifyJob : notifyJob;
+  const toast2 = typeof options.toast === "function" ? options.toast : toast;
+  const writeGoalReport2 = typeof options.writeGoalReport === "function" ? options.writeGoalReport : writeGoalReport;
+  const dangerousShell2 = typeof options.dangerousShell === "function" ? options.dangerousShell : dangerousShell;
+  const applyTerminalContinuationGuard2 = typeof options.applyTerminalContinuationGuard === "function" ? options.applyTerminalContinuationGuard : applyTerminalContinuationGuard;
+  async function finalizeJob(directory, client, sessionID, state, job, previousJob) {
+    if (job.infrastructureFailureCount) {
+      job.infrastructureFailureCount = 0;
+      job.lastInfrastructureFailure = "";
+      job.lastInfrastructureError = "";
+      job.lastInfrastructureFailureAt = 0;
+    }
+    if (job.verifyCommand) {
+      const verify = await runShellCommand2(job.verifyCommand, directory, job.timeoutMs || 300000);
+      job.lastVerifyAt = now2();
+      job.lastVerifyCode = verify.code;
+      if (verify.code === 0) {
+        job.failureCount = 0;
+        job.lastVerifyFailure = "";
+        if (job.untilChecklistComplete) {
+          const inspected = await inspectTaskChecklist(directory, job.progressFile);
+          if (inspected.status !== "unavailable")
+            job.lastVerifyChecklistDigest = inspected.digest;
+          else
+            delete job.lastVerifyChecklistDigest;
+        }
+        await toast2(client, "Loop verify passed: " + job.verifyCommand, "success");
+      } else {
+        delete job.lastVerifyChecklistDigest;
+        job.failureCount = (job.failureCount || 0) + 1;
+        job.lastVerifyFailure = (job.verifyCommand + `
+exit=` + verify.code + `
+` + verify.stdout + `
+` + verify.stderr).slice(0, 4000);
+        await toast2(client, "Loop verify failed: " + job.verifyCommand, "warning");
+        if (job.pauseOnVerifyFail || job.maxFailures > 0 && job.failureCount >= job.maxFailures) {
+          job.paused = true;
+          await notifyJob2(directory, job, "verify_failed");
+        }
+      }
+      await appendLoopLog2(directory, "verify", {
+        sessionID,
+        job: job.name || job.id,
+        command: job.verifyCommand,
+        code: verify.code,
+        failures: job.failureCount || 0
+      });
+    }
+    if (job.postrunCommand) {
+      if (job.safe && dangerousShell2(job.postrunCommand)) {
+        await appendLoopLog2(directory, "postrun-blocked", {
+          sessionID,
+          job: job.name || job.id,
+          command: job.postrunCommand
+        });
+      } else {
+        const postrun = await runShellCommand2(job.postrunCommand, directory, job.timeoutMs || 300000);
+        job.lastPostrunCode = postrun.code;
+        job.lastPostrunAt = now2();
+        if (postrun.code !== 0) {
+          job.failureCount = (job.failureCount || 0) + 1;
+          job.lastPostrunFailure = (job.postrunCommand + `
+exit=` + postrun.code + `
+` + postrun.stdout + `
+` + postrun.stderr).slice(0, 4000);
+          if (job.maxFailures > 0 && job.failureCount >= job.maxFailures) {
+            job.paused = true;
+            await notifyJob2(directory, job, "postrun_failed");
+          }
+        }
+        await appendLoopLog2(directory, "postrun", {
+          sessionID,
+          job: job.name || job.id,
+          command: job.postrunCommand,
+          code: postrun.code
+        });
+      }
+    }
+    if (isGoalJob(job)) {
+      job = await runGoalChecks(directory, sessionID, job, client);
+      job = await applyGoalNoProgressGuard(directory, client, sessionID, job, previousJob);
+    }
+    const terminal = await applyTerminalContinuationGuard2(directory, client, sessionID, job);
+    job = terminal.job;
+    if (terminal.waitingUserPausedNow) {
+      await appendLoopLog2(directory, "waiting-user", {
+        sessionID,
+        job: job.name || job.id,
+        count: job.waitingUserCount,
+        summary: String(terminal.text || "").slice(0, 1000)
+      });
+      await notifyJob2(directory, job, "waiting_user");
+      await toast2(client, "Loop paused: autonomous continuation is waiting for explicit user approval, access, or action.", "warning");
+    }
+    if (terminal.pausedNow) {
+      await appendLoopLog2(directory, "terminal-no-work", {
+        sessionID,
+        job: job.name || job.id,
+        count: job.terminalNoWorkCount,
+        summary: String(terminal.text || "").slice(0, 1000)
+      });
+      await notifyJob2(directory, job, "terminal_no_work");
+      await toast2(client, "Loop paused: completion-bounded task reported complete with no work remaining twice.", "success");
+    }
+    state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate).filter((candidate) => candidate.enabled !== false || isGoalJob(candidate));
+    await writeState2(directory, sessionID, state);
+    if (isGoalJob(job))
+      await writeGoalReport2(directory, sessionID, job);
+    await createCheckpoint(directory, sessionID, job, client);
+    await scheduleDueWork(directory, client, sessionID);
+    return job;
+  }
+  return { finalizeJob };
+}
+
 // src/source/runtime/run-admission.js
+import path10 from "path";
 function requireFunction9(value, label) {
   if (typeof value !== "function")
     throw new TypeError(`createRunAdmissionRuntime requires ${label}`);
@@ -3934,7 +3941,7 @@ function createRunAdmissionRuntime(options = {}) {
         return { admitted: false, reason: "checklist_unavailable" };
       }
       delete job.lastChecklistError;
-      if (checklist.status === "complete" && (!job.verifyCommand || job.lastVerifyAt > 0 && job.lastVerifyCode === 0)) {
+      if (checklist.status === "complete" && (!job.verifyCommand || job.lastVerifyAt > 0 && job.lastVerifyCode === 0 && job.lastVerifyChecklistDigest === checklist.digest)) {
         return await stopAndRemove(directory, client, sessionID, state, job, "checklist_complete", "Loop stopped: " + job.progressFile + " checklist completed.", "checklist-complete");
       }
     }

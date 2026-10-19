@@ -1794,8 +1794,8 @@ function formatOpenCode2LoopStatus(state, current = Date.now()) {
     jobs,
     text: `OpenCode loop status:
 ${lines.join(`
-`)}
-Host controls: run /loop-stop <name-or-id> or /loop-clear to stop jobs; asking the model to print those commands does not execute them.`
+`)}${jobs.length ? `
+Host controls: run /loop-stop <name-or-id> or /loop-clear to stop jobs; asking the model to print those commands does not execute them.` : ""}`
   });
 }
 
@@ -1808,6 +1808,7 @@ import path8 from "path";
 // src/source/runtime/checklist-completion.js
 import { promises as fs4, constants } from "fs";
 import path7 from "path";
+import { createHash as createHash2 } from "crypto";
 var MAX_CHECKLIST_BYTES = 256000;
 var EXCLUDED_PROJECT_DIRS = new Set([".opencode", ".git", "node_modules"]);
 function unavailable(reason) {
@@ -1914,7 +1915,7 @@ async function inspectTaskChecklist(directory, progressFile) {
       if (!after.isFile() || after.isSymbolicLink() || after.dev !== info.dev || after.ino !== info.ino) {
         return unavailable("file-changed-during-read");
       }
-      return summarizeTaskChecklist(content);
+      return { ...summarizeTaskChecklist(content), digest: createHash2("sha256").update(content).digest("hex") };
     } finally {
       await handle.close();
     }
@@ -1977,7 +1978,7 @@ function createNativeJobPolicy(options = {}) {
         return pause(job, "checklist-unavailable");
       }
       delete job.lastChecklistError;
-      if (checklist.status === "complete" && (!job.verifyCommand || job.lastVerifyAt > 0 && job.lastVerifyCode === 0)) {
+      if (checklist.status === "complete" && (!job.verifyCommand || job.lastVerifyAt > 0 && job.lastVerifyCode === 0 && job.lastVerifyChecklistDigest === checklist.digest)) {
         job.enabled = false;
         job.checklistCompletedAt = now();
         return pause(job, "checklist-complete");
@@ -2015,12 +2016,20 @@ function createNativeJobPolicy(options = {}) {
       job.lastVerifyOutput = `${result.stdout || ""}
 ${result.stderr || ""}`.trim().slice(-8000);
       if (result.code !== 0) {
+        delete job.lastVerifyChecklistDigest;
         job.failureCount = (job.failureCount || 0) + 1;
         if (result.blocked || job.pauseOnVerifyFail || job.maxFailures > 0 && job.failureCount >= job.maxFailures)
           pause(job, "verification-failed");
         return;
       }
       job.failureCount = 0;
+      if (job.untilChecklistComplete) {
+        const verified = await inspectTaskChecklist(scope.directory, job.progressFile);
+        if (verified.status !== "unavailable")
+          job.lastVerifyChecklistDigest = verified.digest;
+        else
+          delete job.lastVerifyChecklistDigest;
+      }
     }
     if (!isCurrent())
       return;
