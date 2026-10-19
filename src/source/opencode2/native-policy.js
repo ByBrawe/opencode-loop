@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises"
 import path from "node:path"
 import { runShellCommand, appendLoopLog } from "../core/process.js"
 import { createJobWorkspaceRuntime, dangerousShell } from "../runtime/job-workspace.js"
+import { inspectTaskChecklist } from "../runtime/checklist-completion.js"
 
 export function createNativeJobPolicy(options = {}) {
   const now = options.now || Date.now
@@ -43,6 +44,20 @@ export function createNativeJobPolicy(options = {}) {
     if (await workspace.untilReached(scope.directory, job)) {
       job.enabled = false
       return pause(job, "until-reached")
+    }
+    if (job.untilChecklistComplete) {
+      const checklist = await inspectTaskChecklist(scope.directory, job.progressFile)
+      job.checklistStatus = { status: checklist.status, total: checklist.total, pending: checklist.pending }
+      if (checklist.status === "unavailable") {
+        job.lastChecklistError = checklist.reason
+        return pause(job, "checklist-unavailable")
+      }
+      delete job.lastChecklistError
+      if (checklist.status === "complete" && (!job.verifyCommand || (job.lastVerifyAt > 0 && job.lastVerifyCode === 0))) {
+        job.enabled = false
+        job.checklistCompletedAt = now()
+        return pause(job, "checklist-complete")
+      }
     }
     return true
   }
