@@ -97,7 +97,7 @@ export function createRunAdmissionRuntime(options = {}) {
         return { admitted: false, reason: "checklist_unavailable" }
       }
       delete job.lastChecklistError
-      if (checklist.status === "complete" && (!job.verifyCommand || (job.lastVerifyAt > 0 && job.lastVerifyCode === 0))) {
+      if (checklist.status === "complete" && (!job.verifyCommand || (job.lastVerifyAt > 0 && job.lastVerifyCode === 0 && job.lastVerifyChecklistDigest === checklist.digest))) {
         return await stopAndRemove(
           directory, client, sessionID, state, job,
           "checklist_complete",
