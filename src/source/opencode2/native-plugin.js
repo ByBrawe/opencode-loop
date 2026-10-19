@@ -13,6 +13,7 @@ const HELP = `OpenCode Loop: native OpenCode 2 runtime
 /loop 5m <task> --verify "npm test" --pause-on-verify-fail
 /loop --watch progress.md <task>
 /loop 0s <task> --prompt-file instructions.md --include-file progress.md
+/loop 0s <task> --progress-file TASK.md --until-checklist-complete --verify "npm test"
 /loop 0s <task> --compact-every 3
 /loop 5m --shell npm test
 /loop 15m --compact /compact
@@ -20,6 +21,8 @@ Presets: /loop-dev, /loop-testfix, /loop-progress, /loop-safe-dev, /loop-ask, /l
 /loop-init [progress.md] creates a missing project-local progress file without overwriting existing data.
 Controls: /loop-now, /loop-pause, /loop-resume, /loop-stop, /loop-remove, /loop-clear, /loop-status, /loop-export.
 Preflight, postrun, notifications, stop files, completion markers, runtime/failure/run limits, branches and checkpoints are supported.
+--progress-file alone is context, not a stop condition. --until-checklist-complete is an explicit host-verified stop condition; missing/unsafe/no-task files pause for review, and --verify must have passed before stopping.
+Invoke /loop-stop or /loop-clear as native USER commands. Having an assistant print the slash command does not execute it.
 Scheduled shell commands run as bounded local child processes managed by Loop; OpenCode 2's ctx.shell surface is a hook API, not a shell-execution method.
 Manual /loop-compact, --compact and --compact-every use public session.compact when the V2 host exposes it. Loop matches the admitted manual compaction inputID and waits for host completion; older hosts without this capability reject the job before creation. Automatic compaction stays host-owned.
 An unfinished dedicated Goal reserves its session; Loop will not override it.
