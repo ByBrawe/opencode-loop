@@ -330,6 +330,20 @@ If the desired contract is to stop when the project is demonstrably complete, ma
 /loop --safe --ask-never --progress-file progress.md devam et bitene kadar; projeyi bitir
 ```
 
+## Opt-in checklist completion guard (unreleased on main)
+
+The native V2 code under development adds `--until-checklist-complete` when `--progress-file` names the user-owned project Markdown checklist:
+
+```text
+/loop --progress-file TASK.md --until-checklist-complete --verify "npm test" finish remaining tasks
+```
+
+`--progress-file` **alone** is not a completion condition, and ordinary idle loops remain intentionally unlimited. With the opt-in flag, the host checks real Markdown task boxes on safe idle/admission boundaries, ignoring quoted and code-fenced examples. At least one task must exist, and every task must be `[x]`/`[X]`. If `--verify` is configured, a successful host-observed verification must also exist. Missing, unsafe, unreadable, control-plane or oversized files pause instead of claiming success. See [#174](https://github.com/ByBrawe/opencode-loop/issues/174).
+
+Users can stop any job directly with `/loop-stop` or `/loop-clear`. An assistant simply printing those strings in chat does **not** execute the host-native slash command; see [#175](https://github.com/ByBrawe/opencode-loop/issues/175).
+
+This feature is **not shipped in npm 0.6.8**; verify the release notes of a later version before relying on it.
+
 ## Stopping and limits
 
 Idle loops are intentionally unlimited by default. Bound them when needed:
