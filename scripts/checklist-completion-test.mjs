@@ -4,6 +4,8 @@ import os from "node:os"
 import path from "node:path"
 import { parseLoopArgs } from "../src/source/core/args.js"
 import { summarizeTaskChecklist, inspectTaskChecklist } from "../src/source/runtime/checklist-completion.js"
+import { formatOpenCode2LoopStatus } from "../src/source/opencode2/status.js"
+import { createNativeJobPolicy } from "../src/source/opencode2/native-policy.js"
 
 let checks = 0
 function expectSummary(input, status, total, pending) {
@@ -33,6 +35,8 @@ assert.equal(args.job.progressFile, "TASK.md")
 assert.equal(parseLoopArgs("0s --until-checklist-complete task").ok, false)
 assert.equal(parseLoopArgs("0s --progress-file TASK.md task").job.untilChecklistComplete, false)
 checks += 5
+assert.equal(formatOpenCode2LoopStatus({ jobs: [] }).text, "OpenCode loop status:\nNo active loop jobs.")
+checks++
 
 const root = await mkdtemp(path.join(os.tmpdir(), "loop-checklist-"))
 try {
@@ -43,6 +47,22 @@ try {
   await writeFile(path.join(root, "TASK.md"), "- [X] one\n- [x] two\n")
   state = await inspectTaskChecklist(root, "TASK.md")
   assert.equal(state.status, "complete")
+  assert.match(state.digest, /^[0-9a-f]{64}$/)
+  checks++
+  const verifiedHash = state.digest
+  const policy = createNativeJobPolicy()
+  const job = { id: "verify", untilChecklistComplete: true, progressFile: "TASK.md",
+    verifyCommand: "npm test", lastVerifyCode: 0, lastVerifyAt: 10, lastVerifyChecklistDigest: verifiedHash }
+  await writeFile(path.join(root, "TASK.md"), "- [X] one\n- [x] two\n- [x] three\n")
+  assert.equal(await policy.checkStop({ directory: root }, job), true,
+    "stale digest must not complete a modified checklist")
+  assert.equal(job.enabled, undefined)
+  assert.equal(job.paused, undefined)
+  checks++
+  job.lastVerifyChecklistDigest = (await inspectTaskChecklist(root, "TASK.md")).digest
+  assert.equal(await policy.checkStop({ directory: root }, job), false)
+  assert.equal(job.paused, true)
+  assert.equal(job.pauseReason, "checklist-complete")
   checks++
   await mkdir(path.join(root, "plans"))
   await writeFile(path.join(root, "plans", "tasks.md"), " - [x] done\n")
