@@ -400,6 +400,23 @@ Test/fix loop:
 /loop --name testfix --ask-never --safe --verify "npm test" --max-failures 3 Continue from progress.md. If tests fail, analyze the failure, fix it, and run the tests again.
 ```
 
+
+### Native OpenCode 2 embedded Goal monitor (opt-in)
+
+On native OpenCode 2 hosts, the following commands control an **embedded read-only Goal stall monitor**, scoped to the plugin's project and server lifecycle. This is distinct from the standalone `opencode-loopd` CLI, which remains available for explicit unattended model iterations.
+
+```text
+/daemon status
+/daemon start
+/daemon stop
+/daemon restart
+/daemon auto on
+/daemon auto off
+/daemon pulse on
+/daemon pulse off
+```
+
+Monitoring is **off by default**. `auto on` starts now and stores a per-project preference to restart the monitor on the next OpenCode server/plugin launch. `auto off` only disables future automatic startup; `stop` also disables autostart. The lock prevents another server instance from concurrently monitoring the same project; unknown lock owners fail closed. The monitor emits a diagnostic alert for stalled **dedicated** Goal state; it never resumes a Goal, authorizes tools, runs a shell command or creates autonomous model work. A separate scheduled Loop job still requires explicit `/loop` admission. No Windows service, OS startup task or OpenCode binary replacement is needed.
 ## Background daemon
 
 The normal `/loop` plugin is session-bound. `opencode-loopd` pins one exact OpenCode session for daemon iterations and can keep scheduling outside the normal interactive Loop timer lifecycle.

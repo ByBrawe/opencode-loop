@@ -1,15 +1,19 @@
 // @bun
-var __esm = (fn, res, err) => () => {
-  if (fn)
-    try {
-      res = fn(fn = 0);
-    } catch (e) {
-      err = [e];
-    }
-  if (err)
-    throw err[0];
-  return res;
+var __defProp = Object.defineProperty;
+var __returnValue = (v) => v;
+function __exportSetter(name, newValue) {
+  this[name] = __returnValue.bind(null, newValue);
+}
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, {
+      get: all[name],
+      enumerable: true,
+      configurable: true,
+      set: __exportSetter.bind(all, name)
+    });
 };
+var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
 
 // src/source/core/args.js
 function now() {
@@ -1168,6 +1172,11 @@ var init_goal_runtime = __esm(() => {
 });
 
 // src/source/runtime/job-workspace.js
+var exports_job_workspace = {};
+__export(exports_job_workspace, {
+  dangerousShell: () => dangerousShell,
+  createJobWorkspaceRuntime: () => createJobWorkspaceRuntime
+});
 import { promises as fs3 } from "fs";
 import path6 from "path";
 function requireFunction(value, name) {
@@ -1357,7 +1366,7 @@ var init_job_workspace = __esm(() => {
 });
 
 // src/source/opencode2/native-plugin.js
-import path9 from "path";
+import path11 from "path";
 
 // src/source/opencode2/session-location.js
 import path from "path";
@@ -1631,6 +1640,10 @@ var OPENCODE_LOOP_V2_PRESET_NAMES = Object.freeze([
   "loop-shell"
 ]);
 var OPENCODE_LOOP_V2_COMMANDS = Object.freeze({
+  daemon: Object.freeze({
+    description: "Control embedded read-only Goal monitor: /daemon status|start|stop|restart|auto on|auto off|pulse on|pulse off.",
+    template: "OpenCode Loop daemon control handled locally. Reply exactly: OK."
+  }),
   loop: Object.freeze({
     description: "Start an OpenCode auto-continue loop. Usage: /loop 5m <task>",
     template: "OpenCode Loop local command handled. Reply exactly: OK."
@@ -1792,7 +1805,7 @@ init_job_workspace();
 import { stat } from "fs/promises";
 import path7 from "path";
 function createNativeJobPolicy(options = {}) {
-  const now = options.now || Date.now;
+  const now2 = options.now || Date.now;
   const run = options.runShellCommand || runShellCommand;
   const workspace = options.workspace || createJobWorkspaceRuntime({ toast: async () => {} });
   function pause(job, reason, failed = false) {
@@ -1818,7 +1831,7 @@ function createNativeJobPolicy(options = {}) {
   }
   async function checkStop(scope, job) {
     const created = Date.parse(job.createdAt);
-    if (job.maxRuntimeMs > 0 && Number.isFinite(created) && now() - created >= job.maxRuntimeMs) {
+    if (job.maxRuntimeMs > 0 && Number.isFinite(created) && now2() - created >= job.maxRuntimeMs) {
       job.enabled = false;
       return pause(job, "max-runtime");
     }
@@ -1864,7 +1877,7 @@ function createNativeJobPolicy(options = {}) {
     if (job.verifyCommand) {
       const result = await shell(scope, job, job.verifyCommand, "verify");
       job.lastVerifyCode = result.code;
-      job.lastVerifyAt = now();
+      job.lastVerifyAt = now2();
       job.lastVerifyOutput = `${result.stdout || ""}
 ${result.stderr || ""}`.trim().slice(-8000);
       if (result.code !== 0) {
@@ -1915,10 +1928,10 @@ var id = () => `msg_loop_${randomUUID2().replaceAll("-", "")}`;
 function createNativeLoopRuntime(options = {}) {
   if (typeof options.prompt !== "function")
     throw new TypeError("Native Loop requires prompt()");
-  const now = options.now || Date.now;
+  const now2 = options.now || Date.now;
   const setTimer = options.setTimer || setTimeout;
   const clearTimer = options.clearTimer || clearTimeout;
-  const policy = createNativeJobPolicy({ ...options, now });
+  const policy = createNativeJobPolicy({ ...options, now: now2 });
   const scopes = new Map;
   let disposed = false;
   function scopeFor(event) {
@@ -1963,14 +1976,14 @@ function createNativeLoopRuntime(options = {}) {
   function eligible(job) {
     return job.enabled !== false && !job.paused && !(job.maxRuns > 0 && (job.runCount || 0) >= job.maxRuns);
   }
-  function dueAt(job) {
+  function dueAt2(job) {
     if (job.runNowRequestedAt > 0)
-      return now();
+      return now2();
     if (job.watchPaths?.length && !job.watchTriggered)
       return Infinity;
     if (job.lastRunAt > 0)
       return job.lastRunAt + Math.max(0, job.intervalMs || 0);
-    return job.immediate === false ? Date.parse(job.createdAt) + Math.max(0, job.intervalMs || 0) : now();
+    return job.immediate === false ? Date.parse(job.createdAt) + Math.max(0, job.intervalMs || 0) : now2();
   }
   function blocked(job) {
     const kind = actionKind(job.action, job);
@@ -1995,26 +2008,26 @@ function createNativeLoopRuntime(options = {}) {
     const state = await read(scope);
     if (!current(scope) || scope.busy || scope.active || scope.compaction)
       return;
-    let delay = Infinity;
+    let delay2 = Infinity;
     for (const job of state.jobs || []) {
       if (!eligible(job) || job.v2Run || blocked(job).length)
         continue;
       if (job.watchPaths?.length || job.stopFile || job.until)
-        delay = Math.min(delay, 1000);
-      const due = dueAt(job);
-      if (due > now())
-        delay = Math.min(delay, due - now());
+        delay2 = Math.min(delay2, 1000);
+      const due = dueAt2(job);
+      if (due > now2())
+        delay2 = Math.min(delay2, due - now2());
       else if (job.immediate === false && !(job.lastRunAt > 0))
-        delay = Math.min(delay, 1);
+        delay2 = Math.min(delay2, 1);
       if (job.maxRuntimeMs > 0)
-        delay = Math.min(delay, Math.max(1, Date.parse(job.createdAt) + job.maxRuntimeMs - now()));
+        delay2 = Math.min(delay2, Math.max(1, Date.parse(job.createdAt) + job.maxRuntimeMs - now2()));
     }
-    if (!Number.isFinite(delay))
+    if (!Number.isFinite(delay2))
       return;
     scope.timer = setTimer(() => {
       delete scope.timer;
       return enqueue(scope, () => advance(scope)).catch(report);
-    }, Math.max(1, Math.min(delay, 2147483647)));
+    }, Math.max(1, Math.min(delay2, 2147483647)));
     scope.timer?.unref?.();
   }
   async function note(scope, name, detail = {}) {
@@ -2068,13 +2081,13 @@ function createNativeLoopRuntime(options = {}) {
     const job = (state.jobs || []).find((entry) => entry.id === run.jobID);
     if (job?.v2Run?.id === run.id) {
       if (["compact", "cadence"].includes(run.kind)) {
-        job.lastCompactAt = now();
+        job.lastCompactAt = now2();
         job.lastCompactRunCount = job.runCount || 0;
       } else if (!job.paused && !run.foreground) {
         await policy.finish(scope, job, () => current(scope) && scope.active === run && !run.foreground);
       }
       delete job.v2Run;
-      job.lastCompletedAt = now();
+      job.lastCompletedAt = now2();
       await save(scope, state);
       if (job.paused || job.enabled === false)
         await policy.notify(scope, job, job.pauseReason || "completed");
@@ -2108,8 +2121,8 @@ ${await policy.buildPrompt(scope.directory, job)}`, delivery: "queue", metadata:
       return result({ dryRun: true, request });
     }
     if (kind === "shell" && job.safe) {
-      await Promise.resolve().then(() => init_job_workspace());
-      if (dangerousShell(request.command)) {
+      const { dangerousShell: dangerousShell2 } = await Promise.resolve().then(() => (init_job_workspace(), exports_job_workspace));
+      if (dangerousShell2(request.command)) {
         policy.pause(job, "unsafe-shell", true);
         await save(scope, state);
         return result({ reason: "unsafe-shell" });
@@ -2119,7 +2132,7 @@ ${await policy.buildPrompt(scope.directory, job)}`, delivery: "queue", metadata:
       id: request.id || id(),
       jobID: job.id,
       kind,
-      createdAt: now(),
+      createdAt: now2(),
       delivered: false,
       previous: { runCount: job.runCount || 0, lastRunAt: job.lastRunAt || 0, enabled: job.enabled }
     };
@@ -2151,7 +2164,7 @@ ${await policy.buildPrompt(scope.directory, job)}`, delivery: "queue", metadata:
       run.shellID = kind === "shell" ? response?.id || response?.shell?.id || request.id : undefined;
       if (kind !== "cadence") {
         job.runCount = (job.runCount || 0) + 1;
-        job.lastRunAt = now();
+        job.lastRunAt = now2();
         if (job.maxRuns > 0 && job.runCount >= job.maxRuns)
           job.enabled = false;
       }
@@ -2225,7 +2238,7 @@ ${await policy.buildPrompt(scope.directory, job)}`, delivery: "queue", metadata:
         await policy.notify(scope, job, job.pauseReason);
         return advance(scope);
       }
-      if (dueAt(job) > now())
+      if (dueAt2(job) > now2())
         continue;
       if (!await policy.prepare(scope, job, safe)) {
         if (job.paused || job.enabled === false) {
@@ -2236,7 +2249,7 @@ ${await policy.buildPrompt(scope.directory, job)}`, delivery: "queue", metadata:
         return result({ reason: job.pauseReason || "foreground-or-compaction" });
       }
       const kind = actionKind(job.action, job);
-      const cadence = kind !== "compact" && job.runCount > 0 && (job.compactEveryRuns > 0 && job.runCount - (job.lastCompactRunCount || 0) >= job.compactEveryRuns || job.compactEveryMs > 0 && now() - (job.lastCompactAt || Date.parse(job.createdAt)) >= job.compactEveryMs);
+      const cadence = kind !== "compact" && job.runCount > 0 && (job.compactEveryRuns > 0 && job.runCount - (job.lastCompactRunCount || 0) >= job.compactEveryRuns || job.compactEveryMs > 0 && now2() - (job.lastCompactAt || Date.parse(job.createdAt)) >= job.compactEveryMs);
       return dispatch(scope, state, job, cadence ? "cadence" : kind);
     }
     await schedule(scope);
@@ -2267,7 +2280,7 @@ ${await policy.buildPrompt(scope.directory, job)}`, delivery: "queue", metadata:
         return result({ accepted: false, reason: "unsupported", blockers, error: blockers.join(" ") });
       const job = parsed.job;
       job.name = String(job.name || "default");
-      job.createdAt = new Date(now()).toISOString();
+      job.createdAt = new Date(now2()).toISOString();
       job.lastRunAt = 0;
       if (job.watchPaths?.length)
         job.watchSnapshot = await policy.snapshotPaths(scope.directory, job.watchPaths);
@@ -2281,7 +2294,7 @@ ${await policy.buildPrompt(scope.directory, job)}`, delivery: "queue", metadata:
       return result({ accepted: true, job });
     }
     if (event.name === "loop-status" || event.name === "loop-export") {
-      const status = formatOpenCode2LoopStatus(state, now());
+      const status = formatOpenCode2LoopStatus(state, now2());
       const text = event.name === "loop-export" ? JSON.stringify(state, null, 2) : status.text;
       await options.prompt({ sessionID: scope.sessionID, text, resume: false, metadata: { opencode_loop_v2: true } });
       return result({ accepted: true, status });
@@ -2300,7 +2313,7 @@ ${await policy.buildPrompt(scope.directory, job)}`, delivery: "queue", metadata:
         job.paused = false;
         delete job.pauseReason;
         if (event.name === "loop-now" || event.name === "loop-resume")
-          job.runNowRequestedAt = Math.max(1, now());
+          job.runNowRequestedAt = Math.max(1, now2());
       }
     }
     await save(scope, state);
@@ -2585,8 +2598,8 @@ var DEFAULT_SESSION_STALE_MS = 12 * 60 * 60 * 1000;
 function sessionKey(sessionID) {
   return String(sessionID || "").trim();
 }
-function createSessionRegistry({ now = Date.now, staleAfterMs = DEFAULT_SESSION_STALE_MS } = {}) {
-  if (typeof now !== "function")
+function createSessionRegistry({ now: now2 = Date.now, staleAfterMs = DEFAULT_SESSION_STALE_MS } = {}) {
+  if (typeof now2 !== "function")
     throw new TypeError("session registry requires a clock function");
   if (!Number.isFinite(staleAfterMs) || staleAfterMs < 0)
     throw new TypeError("session registry requires a non-negative staleAfterMs");
@@ -2595,7 +2608,7 @@ function createSessionRegistry({ now = Date.now, staleAfterMs = DEFAULT_SESSION_
     const key = sessionKey(sessionID);
     if (!key)
       throw new TypeError("session registry requires a session ID");
-    const seenAt = Number(now());
+    const seenAt = Number(now2());
     if (!Number.isFinite(seenAt))
       throw new TypeError("session registry clock must return a finite number");
     const entry = Object.freeze({ sessionID: key, runtime, seenAt });
@@ -2614,7 +2627,7 @@ function createSessionRegistry({ now = Date.now, staleAfterMs = DEFAULT_SESSION_
       return false;
     return sessions.delete(key);
   }
-  function pruneStale(at = now()) {
+  function pruneStale(at = now2()) {
     const timestamp = Number(at);
     if (!Number.isFinite(timestamp))
       throw new TypeError("session registry prune time must be finite");
@@ -2698,7 +2711,7 @@ function createRuntimeScope() {
 }
 
 // src/source/runtime/timers.js
-function createOwnedTimer(scope, callback, delay, repeat, api, ref) {
+function createOwnedTimer(scope, callback, delay2, repeat, api, ref) {
   if (!scope?.isActive?.())
     return;
   let active = true;
@@ -2713,7 +2726,7 @@ function createOwnedTimer(scope, callback, delay, repeat, api, ref) {
     }
     callback(...args);
   });
-  handle = repeat ? api.setInterval(invoke, delay) : api.setTimeout(invoke, delay);
+  handle = repeat ? api.setInterval(invoke, delay2) : api.setTimeout(invoke, delay2);
   release = scope.track(() => {
     if (repeat)
       api.clearInterval(handle);
@@ -2739,11 +2752,11 @@ function createOwnedTimer(scope, callback, delay, repeat, api, ref) {
 }
 function createRuntimeTimers(scope, api = globalThis) {
   return Object.freeze({
-    timeout(callback, delay, options = {}) {
-      return createOwnedTimer(scope, callback, delay, false, api, options.ref !== false);
+    timeout(callback, delay2, options = {}) {
+      return createOwnedTimer(scope, callback, delay2, false, api, options.ref !== false);
     },
-    interval(callback, delay, options = {}) {
-      return createOwnedTimer(scope, callback, delay, true, api, options.ref !== false);
+    interval(callback, delay2, options = {}) {
+      return createOwnedTimer(scope, callback, delay2, true, api, options.ref !== false);
     }
   });
 }
@@ -2768,14 +2781,14 @@ function validateRuntime(runtime, sessionID) {
   return runtime;
 }
 function createSessionRuntimeManager({
-  now = Date.now,
+  now: now2 = Date.now,
   staleAfterMs = DEFAULT_SESSION_STALE_MS,
   timerAPI = globalThis,
   runtimeFactory = defaultRuntimeFactory
 } = {}) {
   if (typeof runtimeFactory !== "function")
     throw new TypeError("session runtime manager requires a runtime factory");
-  const registry = createSessionRegistry({ now, staleAfterMs });
+  const registry = createSessionRegistry({ now: now2, staleAfterMs });
   let disposed = false;
   function observeExternal(sessionID) {
     if (disposed)
@@ -2805,7 +2818,7 @@ function createSessionRuntimeManager({
     current.runtime.dispose(reason);
     return true;
   }
-  function pruneStale(at = now()) {
+  function pruneStale(at = now2()) {
     const before = new Map(registry.entries().map((entry) => [entry.sessionID, entry.runtime]));
     const removed = registry.pruneStale(at);
     const errors = [];
@@ -3050,11 +3063,11 @@ function createOpenCode2EventBridge({
   function dispatch(raw) {
     if (stopped)
       return Promise.resolve(undefined);
-    const result = queue.then(() => process2(raw));
-    queue = result.catch(() => {
+    const result2 = queue.then(() => process2(raw));
+    queue = result2.catch(() => {
       return;
     });
-    return result;
+    return result2;
   }
   function callback(raw) {
     const pending = dispatch(raw);
@@ -3199,6 +3212,464 @@ async function initializeProgressFile(directory, argumentsText = "") {
   }
 }
 
+// src/source/opencode2/daemon-controller.js
+import path10 from "path";
+import { randomUUID as randomUUID3 } from "crypto";
+import { promises as fs6 } from "fs";
+
+// scripts/pulse-check.mjs
+import { promises as fs5 } from "fs";
+import path9 from "path";
+
+// src/source/runtime/companion-goal.js
+function dedicatedGoalOwnsContinuation(goal) {
+  return goal?.status === "active";
+}
+
+// scripts/pulse-check.mjs
+var LOCK_STALE_MS = 30000;
+var LOCK_RETRY_MS = 25;
+var LOCK_RETRIES = 80;
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+function pulseDirectory(project) {
+  return path9.join(project, ".opencode", "opencode-loop");
+}
+function pulseStateFile(project) {
+  return path9.join(pulseDirectory(project), "pulse-check.json");
+}
+function pulseLockDirectory(project) {
+  return path9.join(pulseDirectory(project), "pulse-check.lock");
+}
+function goalDirectory(project) {
+  return path9.join(project, ".opencode", "goals");
+}
+function timestamp(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+function revision(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+function goalFingerprint(goal) {
+  return [
+    String(goal?.status || "unknown"),
+    timestamp(goal?.updatedAt) ?? 0,
+    revision(goal?.progressRevision),
+    revision(goal?.revision),
+    revision(goal?.storageGeneration)
+  ].join(":");
+}
+function formatAge(ms) {
+  if (ms < 60000)
+    return `${Math.max(0, Math.round(ms / 1000))}s`;
+  if (ms < 3600000)
+    return `${Math.round(ms / 60000)}m`;
+  if (ms < 86400000)
+    return `${(ms / 3600000).toFixed(ms < 36000000 ? 1 : 0)}h`;
+  return `${(ms / 86400000).toFixed(ms < 864000000 ? 1 : 0)}d`;
+}
+function iso(value) {
+  const parsed = timestamp(value);
+  if (parsed === undefined)
+    return "unknown";
+  try {
+    return new Date(parsed).toISOString();
+  } catch {
+    return "unknown";
+  }
+}
+async function readJson(file, fallback) {
+  try {
+    return JSON.parse(await fs5.readFile(file, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT")
+      return fallback;
+    throw error;
+  }
+}
+async function writeJsonAtomic(file, value) {
+  await fs5.mkdir(path9.dirname(file), { recursive: true });
+  const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await fs5.writeFile(temporary, JSON.stringify(value, null, 2) + `
+`, "utf8");
+  try {
+    await fs5.rename(temporary, file);
+  } catch (error) {
+    try {
+      await fs5.rm(temporary, { force: true });
+    } catch {}
+    throw error;
+  }
+}
+async function acquireLock(project) {
+  const directory = pulseDirectory(project);
+  const lock = pulseLockDirectory(project);
+  await fs5.mkdir(directory, { recursive: true });
+  for (let attempt = 0;attempt < LOCK_RETRIES; attempt += 1) {
+    try {
+      await fs5.mkdir(lock);
+      return async () => {
+        try {
+          await fs5.rm(lock, { recursive: true, force: true });
+        } catch {}
+      };
+    } catch (error) {
+      if (error?.code !== "EEXIST")
+        throw error;
+      try {
+        const stat2 = await fs5.stat(lock);
+        if (Date.now() - stat2.mtimeMs > LOCK_STALE_MS) {
+          await fs5.rm(lock, { recursive: true, force: true });
+          continue;
+        }
+      } catch (statError) {
+        if (statError?.code !== "ENOENT")
+          throw statError;
+      }
+      await sleep(LOCK_RETRY_MS);
+    }
+  }
+  throw new Error("Goal pulse-check state is busy; another checker still holds the lock");
+}
+async function readGoalSnapshots(project, target) {
+  let names;
+  try {
+    names = await fs5.readdir(goalDirectory(project));
+  } catch (error) {
+    if (error?.code === "ENOENT")
+      return [];
+    throw error;
+  }
+  const goals = [];
+  for (const name of names.sort()) {
+    if (!name.endsWith(".json"))
+      continue;
+    try {
+      const goal = JSON.parse(await fs5.readFile(path9.join(goalDirectory(project), name), "utf8"));
+      if (!goal?.id || !goal?.sessionID)
+        continue;
+      if (target && goal.id !== target && goal.sessionID !== target)
+        continue;
+      goals.push(goal);
+    } catch {}
+  }
+  return goals;
+}
+async function checkGoalPulse(project, options = {}) {
+  const staleAfterMs = Number(options.staleAfterMs);
+  if (!Number.isFinite(staleAfterMs) || staleAfterMs < 0)
+    throw new Error("staleAfterMs must be a non-negative number");
+  const now2 = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
+  const target = options.target ? String(options.target) : undefined;
+  const sessionActivity = options.sessionActivity && typeof options.sessionActivity === "object" ? options.sessionActivity : {};
+  const release = await acquireLock(project);
+  try {
+    const goals = await readGoalSnapshots(project, target);
+    const stateFile = pulseStateFile(project);
+    const state = await readJson(stateFile, { schemaVersion: 1, goals: {} });
+    if (!state.goals || typeof state.goals !== "object")
+      state.goals = {};
+    const alerts = [];
+    for (const goal of goals) {
+      const id2 = String(goal.id);
+      const status = String(goal.status || "unknown");
+      const progressRevision = revision(goal.progressRevision);
+      const goalUpdatedAt = timestamp(goal.updatedAt) ?? now2;
+      const fingerprint = goalFingerprint(goal);
+      const previous = state.goals[id2];
+      const changed = !previous || previous.fingerprint !== fingerprint;
+      const statusChanged = Boolean(previous && previous.status !== status);
+      const progressChanged = Boolean(previous && Number(previous.progressRevision || 0) !== progressRevision);
+      const updatedAdvanced = Boolean(previous && goalUpdatedAt > Number(previous.goalUpdatedAt || 0));
+      let lastActivityAt;
+      if (!previous) {
+        lastActivityAt = goalUpdatedAt;
+      } else if (!changed) {
+        lastActivityAt = Number(previous.lastActivityAt || goalUpdatedAt);
+      } else if (updatedAdvanced) {
+        lastActivityAt = goalUpdatedAt;
+      } else if (statusChanged || progressChanged || Number(previous.revision || 0) !== revision(goal.revision)) {
+        lastActivityAt = now2;
+      } else {
+        lastActivityAt = Math.max(Number(previous.lastActivityAt || 0), goalUpdatedAt);
+      }
+      let alerted = changed ? false : Boolean(previous?.alerted);
+      let newAlert = false;
+      const active = dedicatedGoalOwnsContinuation(goal);
+      const ageMs = Math.max(0, now2 - lastActivityAt);
+      const sessionUpdatedAt = timestamp(sessionActivity[goal.sessionID]);
+      if (!active) {
+        alerted = false;
+      } else if (ageMs >= staleAfterMs && !alerted) {
+        alerted = true;
+        newAlert = true;
+        const message = [
+          "[opencode-loopd] GOAL PULSE STALLED",
+          `goal=${id2}`,
+          `session=${goal.sessionID}`,
+          `stale=${formatAge(ageMs)}`,
+          `goalUpdated=${iso(goalUpdatedAt)}`,
+          sessionUpdatedAt === undefined ? undefined : `sessionUpdated=${iso(sessionUpdatedAt)}`,
+          'action="/goal resume"'
+        ].filter(Boolean).join(" ");
+        alerts.push({
+          goalID: id2,
+          sessionID: String(goal.sessionID),
+          ageMs,
+          goalUpdatedAt,
+          sessionUpdatedAt,
+          progressRevision,
+          message
+        });
+      } else if (ageMs < staleAfterMs) {
+        alerted = false;
+      }
+      state.goals[id2] = {
+        fingerprint,
+        status,
+        progressRevision,
+        revision: revision(goal.revision),
+        goalUpdatedAt,
+        lastActivityAt,
+        alerted,
+        ...alerted ? { lastAlertAt: newAlert ? now2 : previous?.lastAlertAt } : {},
+        sessionID: String(goal.sessionID)
+      };
+    }
+    state.schemaVersion = 1;
+    state.updatedAt = now2;
+    await writeJsonAtomic(stateFile, state);
+    return {
+      alerts,
+      checked: goals.length,
+      stateFile
+    };
+  } finally {
+    await release();
+  }
+}
+
+// src/source/opencode2/daemon-controller.js
+var controllers = new Map;
+var DEFAULTS = Object.freeze({ autoStart: false, pulse: true });
+var CHECK_EVERY_MS = 60000;
+var parse = (s) => String(s || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+function createDaemonController({ directory, check = checkGoalPulse, everyMs = CHECK_EVERY_MS, onAlert = console.warn } = {}) {
+  if (!path10.isAbsolute(directory || ""))
+    throw new Error("Daemon requires an absolute project directory");
+  const root = path10.join(directory, ".opencode", "opencode-loop");
+  const file = path10.join(root, "daemon-control.json");
+  const lock = path10.join(root, "daemon-control.lock");
+  const nonce = randomUUID3();
+  let config = { ...DEFAULTS };
+  let running = false;
+  let disposed = false;
+  let timer, activeCheck, lastCheck, lastError;
+  let chain = Promise.resolve();
+  const queue = (fn) => {
+    const result2 = chain.then(fn);
+    chain = result2.catch(() => {});
+    return result2;
+  };
+  async function persist() {
+    await fs6.mkdir(root, { recursive: true });
+    const temporary = `${file}.${process.pid}.${nonce}.tmp`;
+    await fs6.writeFile(temporary, JSON.stringify({ schemaVersion: 1, ...config }, null, 2) + `
+`, "utf8");
+    try {
+      await fs6.rename(temporary, file);
+    } catch (error) {
+      await fs6.rm(temporary, { force: true }).catch(() => {});
+      throw error;
+    }
+  }
+  async function load() {
+    try {
+      const value = JSON.parse(await fs6.readFile(file, "utf8"));
+      if (value?.schemaVersion !== 1 || typeof value.autoStart !== "boolean" || typeof value.pulse !== "boolean") {
+        throw new Error("Invalid daemon preferences; refusing autostart");
+      }
+      config = { autoStart: value.autoStart, pulse: value.pulse };
+    } catch (error) {
+      if (error.code !== "ENOENT")
+        throw error;
+    }
+  }
+  async function lockOwner() {
+    try {
+      return JSON.parse(await fs6.readFile(path10.join(lock, "owner.json"), "utf8"));
+    } catch {
+      return;
+    }
+  }
+  async function takeLock() {
+    await fs6.mkdir(root, { recursive: true });
+    for (let attempt = 0;attempt < 2; attempt++) {
+      try {
+        await fs6.mkdir(lock);
+        await fs6.writeFile(path10.join(lock, "owner.json"), JSON.stringify({ pid: process.pid, nonce }) + `
+`);
+        return;
+      } catch (error) {
+        if (error.code !== "EEXIST")
+          throw error;
+        const owner = await lockOwner();
+        if (!owner || !Number.isSafeInteger(owner.pid) || owner.pid < 1)
+          throw new Error("Daemon lock owner unknown; manual review required");
+        let alive = true;
+        try {
+          process.kill(owner.pid, 0);
+        } catch (probe) {
+          if (probe.code === "ESRCH")
+            alive = false;
+        }
+        if (alive)
+          throw new Error("Daemon already owned by another OpenCode server");
+        await fs6.rm(lock, { recursive: true, force: true });
+      }
+    }
+    throw new Error("Daemon lock contention");
+  }
+  async function releaseLock() {
+    const owner = await lockOwner();
+    if (owner?.pid === process.pid && owner.nonce === nonce)
+      await fs6.rm(lock, { recursive: true, force: true });
+  }
+  async function tick() {
+    if (!running || !config.pulse || activeCheck)
+      return;
+    activeCheck = check(directory, { staleAfterMs: 30 * 60000 });
+    try {
+      const result2 = await activeCheck;
+      lastCheck = { at: Date.now(), checked: result2.checked, alerts: result2.alerts.length };
+      lastError = undefined;
+      for (const alert of result2.alerts)
+        onAlert(alert.message);
+    } catch (error) {
+      lastError = String(error?.message || error);
+      clearInterval(timer);
+      timer = undefined;
+      running = false;
+      await releaseLock();
+    } finally {
+      activeCheck = undefined;
+    }
+  }
+  async function start() {
+    if (running)
+      return;
+    if (disposed)
+      throw new Error("Daemon controller disposed");
+    await takeLock();
+    running = true;
+    timer = setInterval(() => {
+      tick();
+    }, everyMs);
+    timer.unref?.();
+    await tick();
+  }
+  async function stop() {
+    clearInterval(timer);
+    timer = undefined;
+    running = false;
+    if (activeCheck)
+      await activeCheck.catch(() => {});
+    await releaseLock();
+  }
+  const status = () => `Daemon: ${running ? "running" : "stopped"} (embedded in OpenCode server)
+Autostart: ${config.autoStart ? "on" : "off"}
+Goal pulse: ${config.pulse ? "on" : "off"}
+Interval: ${everyMs}ms
+Checked: ${lastCheck?.checked ?? "not yet"}; alerts: ${lastCheck?.alerts ?? 0}
+${lastError ? `Error: ${lastError}
+` : ""}No autonomous inference is started by this controller.`;
+  return {
+    async init() {
+      return queue(async () => {
+        try {
+          await load();
+          if (config.autoStart)
+            await start();
+        } catch (error) {
+          lastError = String(error?.message || error);
+          await stop();
+        }
+      });
+    },
+    async handle(command) {
+      return queue(async () => {
+        const args = parse(command);
+        const key = args.join(" ");
+        if (key === "" || key === "status")
+          return status();
+        if (key === "start")
+          await start();
+        else if (key === "stop") {
+          config.autoStart = false;
+          await persist();
+          await stop();
+        } else if (key === "restart") {
+          await stop();
+          await start();
+        } else if (key === "auto on" || key === "auto off") {
+          const enable = key.endsWith("on");
+          if (enable)
+            await start();
+          config.autoStart = enable;
+          await persist();
+        } else if (key === "pulse on" || key === "pulse off") {
+          config.pulse = key.endsWith("on");
+          await persist();
+          if (running && config.pulse)
+            await tick();
+        } else
+          throw new Error("Usage: /daemon [start|stop|restart|status|auto on|auto off|pulse on|pulse off]");
+        return status();
+      });
+    },
+    async dispose() {
+      return queue(async () => {
+        await stop();
+        disposed = true;
+      });
+    },
+    getStatus: status
+  };
+}
+async function acquireDaemonController(directory) {
+  const key = path10.resolve(directory).toLowerCase();
+  let entry = controllers.get(key);
+  if (!entry) {
+    const controller = createDaemonController({ directory });
+    entry = { controller, refs: 0, ready: controller.init() };
+    controllers.set(key, entry);
+  }
+  entry.refs++;
+  try {
+    await entry.ready;
+  } catch (error) {
+    if (--entry.refs === 0)
+      controllers.delete(key);
+    throw error;
+  }
+  let released = false;
+  return {
+    handle: (input) => entry.controller.handle(input),
+    async release() {
+      if (released)
+        return;
+      released = true;
+      if (--entry.refs === 0) {
+        controllers.delete(key);
+        await entry.controller.dispose();
+      }
+    }
+  };
+}
+
 // src/source/opencode2/native-plugin.js
 var HELP = `OpenCode Loop: native OpenCode 2 runtime
 /loop 0s <task> --max-runs 3
@@ -3211,6 +3682,7 @@ var HELP = `OpenCode Loop: native OpenCode 2 runtime
 Presets: /loop-dev, /loop-testfix, /loop-progress, /loop-safe-dev, /loop-ask, /loop-prompt, /loop-command, /loop-cmd, /loop-shell, /loop-compact.
 /loop-init [progress.md] creates a missing project-local progress file without overwriting existing data.
 Controls: /loop-now, /loop-pause, /loop-resume, /loop-stop, /loop-remove, /loop-clear, /loop-status, /loop-export.
+Embedded read-only Goal pulse: /daemon start|stop|restart|status|auto on|auto off|pulse on|pulse off.
 Preflight, postrun, notifications, stop files, completion markers, runtime/failure/run limits, branches and checkpoints are supported.
 Scheduled shell commands run as bounded local child processes managed by Loop; OpenCode 2's ctx.shell surface is a hook API, not a shell-execution method.
 Manual /loop-compact, --compact and --compact-every use public session.compact when the V2 host exposes it. Loop matches the admitted manual compaction inputID and waits for host completion; older hosts without this capability reject the job before creation. Automatic compaction stays host-owned.
@@ -3243,6 +3715,7 @@ var OpenCodeLoopNativePlugin = Object.freeze({
       workspaceID: ctx.location?.workspaceID,
       getSession: (input) => ctx.session.get(input)
     });
+    const daemon = await acquireDaemonController(directory);
     const registrations = [];
     const lifecycleAbort = new AbortController;
     const prompt = (request) => ctx.session.prompt({ ...request, delivery: request.delivery || "queue", metadata: { ...request.metadata, opencode_loop_v2: true } });
@@ -3285,7 +3758,7 @@ var OpenCodeLoopNativePlugin = Object.freeze({
           errors.push(error);
         });
         lifecycleAbort.abort();
-        for (const action of [() => runtime.dispose(), () => shellHost.dispose()]) {
+        for (const action of [() => runtime.dispose(), () => shellHost.dispose(), () => daemon.release()]) {
           try {
             await action();
           } catch (error) {
@@ -3312,13 +3785,18 @@ var OpenCodeLoopNativePlugin = Object.freeze({
         throw new Error("Native Loop cannot resolve this session in the plugin location; use its own project/worktree.");
       if (closed)
         throw new Error("Native Loop is disposed");
+      if (name === "daemon") {
+        const text3 = await daemon.handle(argumentsText);
+        await prompt({ sessionID, text: text3, resume: false });
+        return { handled: true, accepted: true };
+      }
       if (name === "loop-init") {
         const output = await initializeProgressFile(directory, argumentsText);
         await prompt({ sessionID, text: output.created ? `Created ${output.file}.` : `${output.file} already exists; preserved unchanged.`, resume: false });
         return { handled: true, accepted: true, ...output };
       }
       if (["loop-help", "loop-doctor", "loop-logs"].includes(name)) {
-        const text = name === "loop-logs" ? (await readSmallTextFile(path9.join(stateDir(directory), "loop.log"), 2000000)).split(`
+        const text3 = name === "loop-logs" ? (await readSmallTextFile(path11.join(stateDir(directory), "loop.log"), 2000000)).split(`
 `).slice(-60).join(`
 `) || "No Loop log entries." : name === "loop-doctor" ? `Native OpenCode Loop
 Host: ${ctx.app?.version || "unknown"}
@@ -3328,17 +3806,17 @@ Compaction ownership: native host
 Delivery: durable queue
 Scheduled timers: ${runtime.scheduledCount()}
 Use /loop-status for paused/admitted job state.` : HELP;
-        await prompt({ sessionID, text, resume: false });
+        await prompt({ sessionID, text: text3, resume: false });
         return { handled: true, accepted: true };
       }
       const event = { kind: "command", action: "executed", directory, sessionID, name, arguments: argumentsText };
-      const result = await runtime.onEvent(event);
-      if (result?.accepted === false)
-        throw new Error(result.error || result.blockers?.join(" ") || "Loop command rejected");
-      const shouldWake = result?.job ? result.job.immediate !== false : ["loop-now", "loop-resume"].includes(name);
-      if (result?.accepted && shouldWake)
+      const result2 = await runtime.onEvent(event);
+      if (result2?.accepted === false)
+        throw new Error(result2.error || result2.blockers?.join(" ") || "Loop command rejected");
+      const shouldWake = result2?.job ? result2.job.immediate !== false : ["loop-now", "loop-resume"].includes(name);
+      if (result2?.accepted && shouldWake)
         await runtime.wake(event);
-      return result;
+      return result2;
     }
     try {
       registrations.push(await ctx.session.hook("prompt", async (event) => {
@@ -3376,6 +3854,6 @@ Use /loop-status for paused/admitted job state.` : HELP;
   }
 });
 export {
-  OpenCodeLoopNativePlugin,
-  OpenCodeLoopNativePlugin as default
+  OpenCodeLoopNativePlugin as default,
+  OpenCodeLoopNativePlugin
 };

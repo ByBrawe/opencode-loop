@@ -4,6 +4,10 @@ export const OPENCODE_LOOP_V2_PRESET_NAMES = Object.freeze([
 ])
 
 export const OPENCODE_LOOP_V2_COMMANDS = Object.freeze({
+  daemon: Object.freeze({
+    description: "Control embedded read-only Goal monitor: /daemon status|start|stop|restart|auto on|auto off|pulse on|pulse off.",
+    template: "OpenCode Loop daemon control handled locally. Reply exactly: OK.",
+  }),
   loop: Object.freeze({
     description: "Start an OpenCode auto-continue loop. Usage: /loop 5m <task>",
     template: "OpenCode Loop local command handled. Reply exactly: OK.",
