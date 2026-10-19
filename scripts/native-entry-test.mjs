@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { readFileSync } from "node:fs"
+import { readFileSync, realpathSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
@@ -11,7 +11,9 @@ assert.ok(process.argv.length <= 3, "expected at most one consumer directory")
 const loop = pkg.name === "@bybrawe/opencode-loop"
 const cwd = process.argv[2] ? path.resolve(process.argv[2]) : root
 const packageRoot = process.argv[2] ? path.join(cwd, "node_modules", ...pkg.name.split("/")) : root
-const url = (relative) => pathToFileURL(path.join(packageRoot, relative)).href
+// Node resolves ESM file URLs to real paths on macOS, where /var aliases /private/var.
+// Guard and delegated V1 entry identities must use the same canonical URLs as the loader.
+const url = (relative) => pathToFileURL(realpathSync.native(path.join(packageRoot, relative))).href
 const legacyEntries = loop ? [url("src/v1.js"), url("src/source/v1.js")] : [url("dist/legacy-v1.js")]
 const blocked = loop
   ? [...legacyEntries, url("src/index.js"), url("src/source/legacy-v1.js")]
