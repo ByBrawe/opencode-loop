@@ -53,7 +53,7 @@ export function createNativeJobPolicy(options = {}) {
         return pause(job, "checklist-unavailable")
       }
       delete job.lastChecklistError
-      if (checklist.status === "complete" && (!job.verifyCommand || (job.lastVerifyAt > 0 && job.lastVerifyCode === 0))) {
+      if (checklist.status === "complete" && (!job.verifyCommand || (job.lastVerifyAt > 0 && job.lastVerifyCode === 0 && job.lastVerifyChecklistDigest === checklist.digest))) {
         job.enabled = false
         job.checklistCompletedAt = now()
         return pause(job, "checklist-complete")
@@ -86,11 +86,17 @@ export function createNativeJobPolicy(options = {}) {
       job.lastVerifyAt = now()
       job.lastVerifyOutput = `${result.stdout || ""}\n${result.stderr || ""}`.trim().slice(-8000)
       if (result.code !== 0) {
+        delete job.lastVerifyChecklistDigest
         job.failureCount = (job.failureCount || 0) + 1
         if (result.blocked || job.pauseOnVerifyFail || (job.maxFailures > 0 && job.failureCount >= job.maxFailures)) pause(job, "verification-failed")
         return
       }
       job.failureCount = 0
+      if (job.untilChecklistComplete) {
+        const verified = await inspectTaskChecklist(scope.directory, job.progressFile)
+        if (verified.status !== "unavailable") job.lastVerifyChecklistDigest = verified.digest
+        else delete job.lastVerifyChecklistDigest
+      }
     }
     if (!isCurrent()) return
     if (job.postrunCommand) {
