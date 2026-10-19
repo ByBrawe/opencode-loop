@@ -44,6 +44,8 @@ Short continuation prompts such as `continue`, `keep going`, and `devam et` rece
 
 **Plain `/loop devam et` is intentionally infinite.** A model saying "done" does not silently change that contract.
 
+`--progress-file TASK.md` is **context only**, even if it contains Markdown checkboxes. Marking all `- [ ]` lines as `- [x]` does not implicitly stop an idle job. The [Reddit checklist report](https://www.reddit.com/r/opencode/comments/1vzchjo/i_need_help_with_opencode/) is tracked in [#174](https://github.com/ByBrawe/opencode-loop/issues/174); opt-in checklist-completion stopping is **not implemented/published yet**. For unattended jobs, configure `--until`, `--stop-file`, `--max-runs` or `--max-runtime`. Asking the model to type `/loop-clear` in its chat response does not invoke the host command; use a real native `/loop-stop` or `/loop-clear` command. See [#175](https://github.com/ByBrawe/opencode-loop/issues/175).
+
 If you explicitly want **continue until the project is actually done**, say so:
 
 ```text
