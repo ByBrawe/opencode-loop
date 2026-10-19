@@ -6,6 +6,7 @@ import { toast as defaultToast } from "../opencode/host.js"
 import { writeGoalReport as defaultWriteGoalReport } from "./goal-runtime.js"
 import { dangerousShell as defaultDangerousShell } from "./job-workspace.js"
 import { applyTerminalContinuationGuard as defaultApplyTerminalContinuationGuard } from "./terminal-guard.js"
+import { inspectTaskChecklist } from "./checklist-completion.js"
 
 function requireFunction(value, label) {
   if (typeof value !== "function") throw new TypeError(`createRunFinalizationRuntime requires ${label}`)
@@ -49,8 +50,14 @@ export function createRunFinalizationRuntime(options = {}) {
       if (verify.code === 0) {
         job.failureCount = 0
         job.lastVerifyFailure = ""
+        if (job.untilChecklistComplete) {
+          const inspected = await inspectTaskChecklist(directory, job.progressFile)
+          if (inspected.status !== "unavailable") job.lastVerifyChecklistDigest = inspected.digest
+          else delete job.lastVerifyChecklistDigest
+        }
         await toast(client, "Loop verify passed: " + job.verifyCommand, "success")
       } else {
+        delete job.lastVerifyChecklistDigest
         job.failureCount = (job.failureCount || 0) + 1
         job.lastVerifyFailure = (job.verifyCommand + "\nexit=" + verify.code + "\n" + verify.stdout + "\n" + verify.stderr).slice(0, 4000)
         await toast(client, "Loop verify failed: " + job.verifyCommand, "warning")
