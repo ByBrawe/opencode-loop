@@ -1,5 +1,6 @@
 import { promises as fs, constants } from "node:fs"
 import path from "node:path"
+import { createHash } from "node:crypto"
 
 const MAX_CHECKLIST_BYTES = 256_000
 const EXCLUDED_PROJECT_DIRS = new Set([".opencode", ".git", "node_modules"])
@@ -102,7 +103,7 @@ export async function inspectTaskChecklist(directory, progressFile) {
       if (!after.isFile() || after.isSymbolicLink() || after.dev !== info.dev || after.ino !== info.ino) {
         return unavailable("file-changed-during-read")
       }
-      return summarizeTaskChecklist(content)
+      return { ...summarizeTaskChecklist(content), digest: createHash("sha256").update(content).digest("hex") }
     } finally {
       await handle.close()
     }
