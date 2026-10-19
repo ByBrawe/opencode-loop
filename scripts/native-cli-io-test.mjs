@@ -49,7 +49,7 @@ process.stdin.resume();
     if (mode === "pwd") {
       // macOS /var/folders is an alias of /private/var/folders; the V2 host
       // compares project PWD with the physical cwd, not the original alias.
-      const canonical = await realpath(project)
+      const canonical = process.platform === "win32" ? project : await realpath(project)
       for (const call of calls.filter(call => ["session", "run"].includes(call.args[0]))) {
         assert.equal(call.pwd, canonical, "native lookup and run must use the canonical selected project, not the caller's PWD")
         assert.equal(call.cwd, canonical)
