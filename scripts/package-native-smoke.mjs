@@ -35,6 +35,27 @@ try {
   // sometimes blocks inside npm for the entire 180-second subprocess deadline.
   // Bound the best-effort offline attempt; strict opt-in keeps the full gate.
   const offlineTimeout = process.platform === "win32" && !strictInstall ? 30_000 : 180_000
+  async function strictCleanOnlineInstall() {
+    // Busy Windows runners can stall fetching npm metadata even after npm ci.
+    // Retry once on subprocess ETIMEDOUT using a *new* empty consumer.
+    // This path never accepts the tar archive or CI-installed dependency tree
+    // as a substitute for a real npm install.
+    const maxAttempts = process.platform === "win32" ? 2 : 1
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const timeoutMs = process.platform === "win32" && attempt === 2 ? 270_000 : 180_000
+        run(process.execPath, [npmCLI, ...installArgs, "--prefer-offline", packedTarball], consumer, timeoutMs)
+        console.log("Strict clean npm tarball consumer install PASS")
+        return
+      } catch (error) {
+        if (attempt >= maxAttempts || error?.cause?.code !== "ETIMEDOUT") throw error
+        console.warn("Strict Windows npm install timed out; retrying once from a fresh empty consumer, not a fallback")
+        await rm(consumer, { recursive: true, force: true, maxRetries: 8, retryDelay: 150 })
+        await mkdir(consumer, { recursive: true })
+        await writeFile(path.join(consumer, "package.json"), JSON.stringify({ private: true, type: "module" }))
+      }
+    }
+  }
   try {
     // npm ci populated this job's npm cache from the lockfile. A cache-only
     // install remains an exact, clean npm consumer when all metadata is present.
@@ -46,7 +67,8 @@ try {
     if (!cacheMissing && !windowsOfflineTimeout) throw error
     if (process.platform !== "win32" || strictInstall) {
       console.warn("Offline cache incomplete: performing strict bounded online npm consumer install")
-      run(process.execPath, [npmCLI, ...installArgs, "--prefer-offline", packedTarball], consumer)
+      if (strictInstall) await strictCleanOnlineInstall()
+      else run(process.execPath, [npmCLI, ...installArgs, "--prefer-offline", packedTarball], consumer)
     } else {
       // GitHub Windows runners sporadically hang for minutes while npm fetches
       // transient dependency packuments. We still check the EXACT production
