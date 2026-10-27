@@ -56,3 +56,9 @@ jobs:
           test "$(node -p 'require("./node_modules/@opentui/solid/package.json").version')" = "${{ matrix.opentui }}"
       - name: Render the real TUI slot and test reactive session switching
         run: npm run test:tui-native
+      - name: Install independently published Goal and this OpenTUI runtime
+        shell: bash
+        run: |
+          npm install --no-save --package-lock=false --legacy-peer-deps @bybrawe/opencode-goal@1.3.49 @opentui/core@${{ matrix.opentui }} @opentui/solid@${{ matrix.opentui }} solid-js@1.9.12
+      - name: Verify actual Goal and Loop slots coexist on the same TUI renderer
+        run: npm run test:tui-pair
