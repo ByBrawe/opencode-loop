@@ -4,7 +4,7 @@
 
 No unreleased changes yet.
 
-## 0.6.9 - 2026-10-19
+## 0.6.9 - 2026-10-27
 
 - Fix #174: add opt-in `--until-checklist-complete` paired with `--progress-file TASK.md` so a host-verified Markdown checklist can stop Loop without an extra model iteration. The default plain idle Loop remains intentionally unlimited.
 - Validate task files strictly (project-scoped regular file, bounded size, symlink and control-plane protection); ignore Markdown code fences, block quotes and commented checkbox examples. Missing/unsafe/unreadable/no-task files pause visibly rather than report completion.
