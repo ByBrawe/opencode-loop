@@ -43,9 +43,16 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: node scripts/tui-status-test.mjs
-      - name: Install matching OpenTUI peer for this native host generation
+      - name: Switch to OpenTUI 0.7 (baseline 0.5.14 is pinned in npm ci)
+        if: matrix.opentui == '0.7.0'
         shell: bash
         run: |
-          npm install --no-save --package-lock=false --legacy-peer-deps @opentui/core@${{ matrix.opentui }} @opentui/solid@${{ matrix.opentui }} solid-js@1.9.12
+          npm install --no-save --package-lock=false --legacy-peer-deps @opentui/core@0.7.0 @opentui/solid@0.7.0 solid-js@1.9.12
+      - name: Verify OpenTUI modules are actually resolvable before painting
+        shell: bash
+        run: |
+          node -e 'console.log("OpenTUI:", require("./node_modules/@opentui/solid/package.json").version)'
+          node -e 'console.log("OpenTUI core:", require("./node_modules/@opentui/core/package.json").version)'
+          test "$(node -p 'require("./node_modules/@opentui/solid/package.json").version')" = "${{ matrix.opentui }}"
       - name: Render the real TUI slot and test reactive session switching
         run: npm run test:tui-native
