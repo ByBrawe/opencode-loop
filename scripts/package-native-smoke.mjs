@@ -120,14 +120,18 @@ try {
   assert.equal(resolved.status, 0, `${resolved.stdout || ""}${resolved.stderr || ""}`)
   assert.equal(resolved.stdout.trim(), "bybrawe-opencode-loop-status")
 
-  // The panel needs its UI peers from the TUI host. A clean consumer that could
-  // already import ./tui would mean those optional peers leaked somewhere else.
-  const tuiPeerProbe = spawnSync(
+  // The public TUI entry is deliberately lazy: importing its Plugin.define
+  // registration must succeed without eagerly importing @opentui/solid.
+  // Optional UI dependencies are resolved *only when the host invokes setup*.
+  // A bare import therefore MUST succeed even in a server-only consumer.
+  const tuiEntrypoint = await readFile(path.join(installed, "src", "source", "tui", "index.js"), "utf8")
+  assert.doesNotMatch(tuiEntrypoint, /@opentui\\/|solid-js/, "the public TUI entry must keep UI dependencies lazy")
+  const tuiImportProbe = spawnSync(
     process.execPath,
-    ["--input-type=module", "-e", 'await import("@bybrawe/opencode-loop/tui")'],
+    ["--input-type=module", "-e", 'const m = await import("@bybrawe/opencode-loop/tui"); if (m.default?.id !== "@bybrawe/opencode-loop") process.exit(1)'],
     { cwd: consumer, encoding: "utf8", timeout: 60_000, windowsHide: true },
   )
-  assert.notEqual(tuiPeerProbe.status, 0, "packed ./tui must require the host-provided UI peers")
+  assert.equal(tuiImportProbe.status, 0, `packed ./tui must expose lazy native registration: ${tuiImportProbe.stdout || ""}${tuiImportProbe.stderr || ""}`)
 
   console.log("Published ./tui and ./rpc contract, optional UI peers and UI-free server bundles PASS")
   console.log("Production tarball native entry isolation and lazy legacy delegation PASS")
