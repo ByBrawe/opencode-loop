@@ -344,7 +344,7 @@ The native V2 code under development adds `--until-checklist-complete` when `--p
 
 Users can stop any job directly with `/loop-stop` or `/loop-clear`. An assistant simply printing those strings in chat does **not** execute the host-native slash command; see [#175](https://github.com/ByBrawe/opencode-loop/issues/175).
 
-This feature is **not shipped in npm 0.6.8**. It is planned for verified Loop 0.6.9; install the published version only after its release gates pass.
+This feature is **not in npm 0.6.8**. It ships with the verified **0.6.9** release; check the npm registry for 0.6.9 availability before relying on it.
 
 ## Stopping and limits
 
