@@ -1,11 +1,12 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, readFile, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import plugin from "../src/source/opencode2/native-plugin.js"
+import { safeID } from "../src/source/core/args.js"
 
-function fixture(directory, { failCleanup = false, captureCommands = false } = {}) {
+function fixture(directory, { failCleanup = false, captureCommands = false, rpc } = {}) {
   const released = []
   const commands = new Map()
   const prompts = []
@@ -43,6 +44,7 @@ function fixture(directory, { failCleanup = false, captureCommands = false } = {
         } finally { streamClosed = true }
       })()
     } },
+    ...(rpc ? { rpc } : {}),
   }
   return { ctx, end, released, commands, prompts, signal: () => signal, streamClosed: () => streamClosed }
 }
@@ -134,6 +136,33 @@ test("native Loop never probes undocumented SessionDomain shell or inbox fields"
 
 test("native Loop uses the same public plugin identity as the package entry", () => {
   assert.equal(plugin.id, "@bybrawe/opencode-loop", "native entry must share canonical plugin identity")
+})
+
+test("an unavailable sidebar RPC removes only the panel and still admits Loop jobs", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "loop-v2-no-sidebar-rpc-"))
+  const host = fixture(directory, {
+    captureCommands: true,
+    rpc: { register: async () => { throw new Error("sidebar slot unavailable") } },
+  })
+  let dispose
+  try {
+    dispose = await plugin.setup(host.ctx)
+    assert.equal(typeof dispose, "function", "a failing sidebar RPC must not fail plugin setup")
+
+    const loop = host.commands.get("loop")
+    assert.equal(typeof loop, "function", "the panel must not remove the /loop command")
+    const result = await loop({ sessionID: "ses-no-rpc", arguments: "every 5m --name after-panel devam et" })
+    assert.equal(result.accepted, true, `job admission must survive a missing panel: ${result.error || ""}`)
+    assert.equal(result.job?.name, "after-panel")
+
+    const state = JSON.parse(await readFile(path.join(directory, ".opencode", "opencode-loop", `${safeID("ses-no-rpc")}.json`), "utf8"))
+    assert.equal(state.jobs.length, 1, "the job must be persisted while the panel is unavailable")
+    assert.equal(state.jobs[0].name, "after-panel")
+  } finally {
+    host.end()
+    await dispose?.().catch(() => {})
+    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+  }
 })
 
 test("native /loop-help reflects public V2 compaction rather than obsolete unsupported guidance", async () => {
