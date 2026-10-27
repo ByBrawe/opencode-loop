@@ -336,6 +336,8 @@ The new `@bybrawe/opencode-loop/tui` entry renders status only; the server's Loo
 
 **Release status:** this feature is under integration for a version **after 0.6.9**; it is **not included** in published 0.6.8 or the 0.6.9 release candidate. The `sidebar.content` API belongs to the native **CLI TUI**; it does **not** establish Windows Desktop/Web plugin UI support. OpenCode 2.0 and 2.1 OpenTUI compatibility and simultaneous Goal panel behavior are subject to real-host tests.
 
+**TUI discovery caveat (OpenCode 2.1):** actual rendering and plugin auto-loading are different checks. [Upstream OpenCode #55084](https://github.com/anomalyco/opencode/issues/55084) documents a silent skip when a TUI connects to a plugin-enabled server but the client has a **different npm package cache**, notably remote/split-cache setups. Normal shared-cache installs are not generally affected. If `/loop` works but the TUI panel is absent, inspect the active CLI/TUI plugin catalog and cache paths; on affected 2.1.x builds, adding the package to that version's separate `cli.json` plugin list is an upstream-reported workaround. Do not assume Desktop supports `ui.slot`. A real CLI/TUI reproduction is tracked in [#191](https://github.com/ByBrawe/opencode-loop/issues/191).
+
 ## Status and diagnostics
 
 `/loop-status` reports both the **schedule definition** and the **current scheduler state**. Examples:
