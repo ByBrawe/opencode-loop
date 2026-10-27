@@ -559,7 +559,15 @@ async function testStopsPreflightAndGoalLifecycle() {
     await h.command("loop", "5m --no-now --stop-file STOP continue")
     await fs.writeFile(path.join(h.directory, "STOP"), "stop", "utf8")
     await h.command("loop-now")
-    assert.equal((await h.readState()).jobs.length, 0)
+    // /loop-now dispatches through a 250ms idle-safe timer, not the
+    // synchronous command response. Busy Windows runners can take longer
+    // than the harness's 400ms delay to process the persisted stop-file.
+    const removed = await waitForValue(async () => {
+      const state = await h.readState()
+      return state.jobs.length === 0 ? state : undefined
+    }, 4_000, 20)
+    assert.ok(removed, "--stop-file must remove the job at the next safe scheduler boundary")
+    assert.equal(h.actionTexts().length, 0, "--stop-file must suppress prompts, not just hide a persisted job")
   } finally {
     await h.cleanup()
   }
