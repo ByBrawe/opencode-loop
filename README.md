@@ -17,7 +17,7 @@ Prompt/command timers, watch and stop conditions, verification, preflight/postru
 
 OpenCode Loop adds `/loop`, scheduled prompt/command/shell jobs, compact scheduling, verification/checkpoints, and the `opencode-loopd` background daemon.
 
-> **Release candidate: `0.6.9` (publishes only after verified release gates). Last published stable release: `0.6.8`.**
+> **Current native OpenCode 2 release: `0.6.9`.** The release workflow publishes this package only after all verified release gates pass. For a not-yet-published package, use the previously published `0.6.8` until the npm registry confirms `0.6.9`.
 
 ## Install or update
 
@@ -133,7 +133,7 @@ For project work, a continuation loop with an explicit progress file is:
 /loop --safe --ask-never --progress-file progress.md devam et
 ```
 
-**Important:** `--progress-file` supplies project context only; it is **not** a completion or stop condition. Checking every `- [ ]` task as `- [x]` in `progress.md` or `TASK.md` will **not automatically stop** an ordinary idle loop. This distinction is tracked in [#174](https://github.com/ByBrawe/opencode-loop/issues/174) following a [user report](https://www.reddit.com/r/opencode/comments/1vzchjo/i_need_help_with_opencode/). For unattended tasks that must stop, combine the progress file with a **host-observed** stop criterion such as `--max-runs`, `--max-runtime`, `--stop-file` or an explicit `--until` marker. If you want checklist-completion stop, that opt-in feature is **not shipped yet**; do not assume the progress file implements it.
+**Important:** `--progress-file` supplies project context only; it is **not** a completion or stop condition. Checking every `- [ ]` task as `- [x]` in `progress.md` or `TASK.md` will **not automatically stop** an ordinary idle loop. This distinction is tracked in [#174](https://github.com/ByBrawe/opencode-loop/issues/174) following a [user report](https://www.reddit.com/r/opencode/comments/1vzchjo/i_need_help_with_opencode/). For unattended tasks that must stop, combine the progress file with a **host-observed** stop criterion such as `--max-runs`, `--max-runtime`, `--stop-file` or an explicit `--until` marker. For checklist-completion stop in **0.6.9 or newer**, add **`--until-checklist-complete`** explicitly alongside `--progress-file`; this option is absent from 0.6.8. Do not assume a progress file by itself implements a stop condition.
 
 The **user**, not an AI-generated chat response, must invoke `/loop-stop` or `/loop-clear` as a native control command. Asking the model to type `/loop-clear` in conversation does not reliably execute that command. Use `/loop-status` to inspect current jobs and `/loop-stop` or `/loop-clear` to stop them. See [#175](https://github.com/ByBrawe/opencode-loop/issues/175) for improvements to host-owned stop UX.
 
@@ -489,7 +489,7 @@ For unattended work, avoid permanently allowing every shell command. Grant routi
 @bybrawe/opencode-loop
 ```
 
-Native OpenCode 2 is the default supported package path for `0.6.8`. The production dependency is pinned to `@opencode/plugin@2.0.22`; the explicit legacy V1 compatibility path retains `@opencode-ai/plugin >=1.4.0 <2`. Do **not** mistake the legacy V1 peer range for the V2 runtime API version.
+Native OpenCode 2 is the default supported package path for `0.6.9`. The production dependency is pinned to `@opencode/plugin@2.0.22`; the explicit legacy V1 compatibility path retains `@opencode-ai/plugin >=1.4.0 <2`. Do **not** mistake the legacy V1 peer range for the V2 runtime API version.
 
 Automated release gates cover native V2 packages, Windows/Linux regressions and real OpenCode 2 host command registration/coexistence with the separately installed Goal plugin. **Windows Desktop GUI slash-command discovery is not yet proven equivalent to CLI TUI**; see [#169](https://github.com/ByBrawe/opencode-loop/issues/169) and the [diagnostic guide](docs/OPENCODE2-DESKTOP-WINDOWS.md). Platform gaps are tracked in [#177](https://github.com/ByBrawe/opencode-loop/issues/177).
 
