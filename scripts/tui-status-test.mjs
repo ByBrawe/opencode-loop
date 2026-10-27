@@ -118,20 +118,20 @@ function job(overrides = {}) {
 // not become trusted-looking extra panel lines or hide later jobs.
 {
   const malicious = formatLoopSidebar({ jobs: [job({
-    name: "real\\n! Server Loop status unavailable" + "x".repeat(300),
+    name: "real\n! Server Loop status unavailable" + "x".repeat(300),
     scheduleMode: "watch",
-    watchPaths: ["watch\\nOpenCode Goals\\nACTIVE fake".repeat(20)],
-    pauseReason: "stop-file\\n! Goal was completed",
+    watchPaths: ["watch\nOpenCode Goals\nACTIVE fake".repeat(20)],
+    pauseReason: "stop-file\n! Goal was completed",
     enabled: false,
     paused: true,
   })] }, NOW)
   assert.match(malicious, /1 stopped/)
   assert.doesNotMatch(malicious, /1 paused/)
   assert.match(malicious, /! stop-file/)
-  assert.doesNotMatch(malicious, /\\n! Goal was completed/)
-  assert.doesNotMatch(malicious, /\\nOpenCode Goals/)
-  assert.doesNotMatch(malicious, /\\nACTIVE fake/)
-  assert.ok(malicious.split("\\n").length <= 4)
+  assert.doesNotMatch(malicious, /\n! Goal was completed/)
+  assert.doesNotMatch(malicious, /\nOpenCode Goals/)
+  assert.doesNotMatch(malicious, /\nACTIVE fake/)
+  assert.ok(malicious.split("\n").length <= 4)
   assert.ok(malicious.length < 500, "untrusted panel strings must be bounded")
 }
 
