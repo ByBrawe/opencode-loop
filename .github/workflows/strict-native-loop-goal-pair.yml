@@ -1,0 +1,94 @@
+name: Strict native Loop + Goal TUI packaged pair
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "src/**"
+      - "scripts/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/strict-native-loop-goal-pair.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: strict-native-loop-goal-pair-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  packed-pair:
+    name: Strict Loop+Goal OpenCode ${{ matrix.host }} OpenTUI ${{ matrix.opentui }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, host: '2.0.18', opentui: '0.5.14' }
+          - { os: windows-latest, host: '2.0.18', opentui: '0.5.14' }
+          - { os: ubuntu-latest, host: '2.1.4', opentui: '0.7.0' }
+          - { os: windows-latest, host: '2.1.4', opentui: '0.7.0' }
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      # A *pinned* and public Goal main commit includes the verified OpenTUI
+      # peer expansion (#287), which npm Goal 1.3.49 does not yet ship.
+      # This exercises source-packed release CANDIDATES, not published packages.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ByBrawe/opencode-goal
+          ref: de15109ad25afa876791ee68e201921dc1f5d957
+          path: upstream-goal
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.4.2'
+      - name: Build Loop source and verify generated bundles
+        run: |
+          npm ci
+          npm run check
+          npm run build:plugin
+          git diff --exit-code -- src/index.js src/server.js src/native.js
+      - name: Build independently pinned Goal candidate
+        working-directory: upstream-goal
+        run: |
+          npm install
+          npm run check
+          npm run build
+      - name: Strict clean npm install of both packed candidates and real Bun TUI render
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "This is an UNPUBLISHED Loop/Goal source candidate pair, not npm stable."
+          packages="$RUNNER_TEMP/loop-goal-tarballs"
+          consumer="$RUNNER_TEMP/loop-goal-strict-consumer"
+          mkdir -p "$packages" "$consumer"
+          npm pack --json --ignore-scripts --pack-destination "$packages" > "$RUNNER_TEMP/loop-pair-pack.json"
+          (cd upstream-goal && npm pack --json --ignore-scripts --pack-destination "$packages") > "$RUNNER_TEMP/goal-pair-pack.json"
+          loop_name="$(node -e 'const fs=require("node:fs");const x=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));if(x.length!==1)process.exit(2);process.stdout.write(x[0].filename)' "$RUNNER_TEMP/loop-pair-pack.json")"
+          goal_name="$(node -e 'const fs=require("node:fs");const x=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));if(x.length!==1)process.exit(2);process.stdout.write(x[0].filename)' "$RUNNER_TEMP/goal-pair-pack.json")"
+          test -f "$packages/$loop_name"
+          test -f "$packages/$goal_name"
+          printf '{"private":true,"type":"module"}\n' > "$consumer/package.json"
+          # No --force, --legacy-peer-deps, --omit=peer, tar extraction or
+          # checkout-local node_modules: this must be a strict npm consumer.
+          npm install --prefix "$consumer" --package-lock=false --no-audit --no-fund \
+            "$packages/$loop_name" "$packages/$goal_name" \
+            "@opencode/cli@${{ matrix.host }}" \
+            "@opentui/core@${{ matrix.opentui }}" "@opentui/solid@${{ matrix.opentui }}" solid-js@1.9.12
+          npm ls --prefix "$consumer" @opencode/cli @opencode/plugin @opencode-ai/plugin @bybrawe/opencode-loop @bybrawe/opencode-goal @opentui/core @opentui/solid solid-js
+          node -e 'const p=require(process.argv[1]);if(p.version!==process.argv[2])process.exit(1);console.log("Exact native CLI",p.version)' "$consumer/node_modules/@opencode/cli/package.json" "${{ matrix.host }}"
+          node -e 'const p=require(process.argv[1]);if(p.version!==process.argv[2])process.exit(1);console.log("Exact OpenTUI",p.version)' "$consumer/node_modules/@opentui/solid/package.json" "${{ matrix.opentui }}"
+          node -e 'const p=require(process.argv[1]);if(!p.exports["./tui"])process.exit(1);console.log("Packed Loop sidebar",p.version)' "$consumer/node_modules/@bybrawe/opencode-loop/package.json"
+          node -e 'const p=require(process.argv[1]);if(!p.exports["./tui"])process.exit(1);console.log("Packed Goal sidebar",p.version)' "$consumer/node_modules/@bybrawe/opencode-goal/package.json"
+          node -e 'const fs=require("node:fs");const p="scripts/native-tui-goal-pair-smoke.mjs";const s=fs.readFileSync(p,"utf8");const old="../src/source/tui/index.js";if(!s.includes(old))process.exit(2);fs.writeFileSync(process.argv[1],s.replace(old,"@bybrawe/opencode-loop/tui"))' "$consumer/pair-smoke.mjs"
+          (cd "$consumer" && bun --conditions=browser pair-smoke.mjs)
+          echo "Strict packed Loop+Goal OpenTUI pair on OpenCode ${{ matrix.host }} PASS"
