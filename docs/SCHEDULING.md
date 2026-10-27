@@ -332,7 +332,7 @@ If the desired contract is to stop when the project is demonstrably complete, ma
 /loop --safe --ask-never --progress-file progress.md devam et bitene kadar; projeyi bitir
 ```
 
-## Opt-in checklist completion guard (unreleased on main)
+## Opt-in checklist completion guard (0.6.9)
 
 The native V2 code under development adds `--until-checklist-complete` when `--progress-file` names the user-owned project Markdown checklist:
 
@@ -344,7 +344,7 @@ The native V2 code under development adds `--until-checklist-complete` when `--p
 
 Users can stop any job directly with `/loop-stop` or `/loop-clear`. An assistant simply printing those strings in chat does **not** execute the host-native slash command; see [#175](https://github.com/ByBrawe/opencode-loop/issues/175).
 
-This feature is **not shipped in npm 0.6.8**; verify the release notes of a later version before relying on it.
+This feature is **not in npm 0.6.8**. It ships with the verified **0.6.9** release; check the npm registry for 0.6.9 availability before relying on it.
 
 ## Stopping and limits
 

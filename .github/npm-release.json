@@ -1,11 +1,11 @@
 {
   "name": "@bybrawe/opencode-loop",
-  "version": "0.6.8",
-  "predecessor": "0.6.7",
+  "version": "0.6.9",
+  "predecessor": "0.6.8",
   "goal": {
     "version": "1.3.49",
     "sha": "0c834b06843d4f55aa3c6a1489d992adc70a5be4"
   },
-  "requestedAt": "2026-10-13",
-  "reason": "User-authorized native exFAT lock compatibility patch, Goal 1.3.49 independently installed, Windows/Linux and immutable native-host release validation. Preserve existing lock ownership, fail-closed state, legacy/V2 separation and release integrity."
+  "requestedAt": "2026-10-27",
+  "reason": "Host-verified Markdown checklist completion on native OpenCode 2 and V1 compatibility, source/build parity, Goal 1.3.49 independently installed, strict Windows/Linux and real-host consumer gates. Preserve existing unlimited defaults, completion evidence integrity, plugin ownership and Desktop GUI uncertainty."
 }

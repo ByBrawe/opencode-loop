@@ -4,6 +4,15 @@
 
 No unreleased changes yet.
 
+## 0.6.9 - 2026-10-27
+
+- Fix #174: add opt-in `--until-checklist-complete` paired with `--progress-file TASK.md` so a host-verified Markdown checklist can stop Loop without an extra model iteration. The default plain idle Loop remains intentionally unlimited.
+- Validate task files strictly (project-scoped regular file, bounded size, symlink and control-plane protection); ignore Markdown code fences, block quotes and commented checkbox examples. Missing/unsafe/unreadable/no-task files pause visibly rather than report completion.
+- If `--verify` is configured, require successful host verification of the **exact SHA-256 checklist file contents**, never accepting a stale test success after the file changes.
+- Preserve V1 and V2 semantics, update native help/status to clarify host-owned `/loop-stop` and `/loop-clear`, add regression tests and synchronize all shipped bundles.
+- Clarify OpenCode 2 native package support and Windows Desktop GUI limitations; enhance two-server Desktop diagnostics already on main. Do not claim Windows GUI slash discovery is fixed.
+- Keep dedicated Goal 1.3.49 separately installed and validated on real OpenCode 2 stable and pinned hosts. Track expanded macOS/platform canaries separately under #177.
+
 ## 0.6.8 - 2026-10-13
 
 - Fix #172: fall back to exclusive `wx` lock claims where exFAT/FAT or other volumes reject `fs.link()`, including the reported `EISDIR` error.
