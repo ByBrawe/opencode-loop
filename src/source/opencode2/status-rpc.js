@@ -1,5 +1,5 @@
 import path from "node:path"
-import { readState } from "../core/state.js"
+import { peekState } from "../core/state.js"
 import { LoopStatusRpc } from "../status-rpc.js"
 import { formatLoopSidebar } from "../tui/format.js"
 
@@ -54,7 +54,7 @@ export async function registerLoopStatusRpc(ctx) {
 
       let text
       try {
-        const state = await readState(actual, sessionID)
+        const state = await peekState(actual, sessionID)
         if (closed || context?.signal?.aborted) throw unavailable()
         text = formatLoopSidebar(state, Date.now())
       } catch (error) {
