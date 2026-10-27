@@ -658,7 +658,7 @@ async function withStateWriteLock(directory, sessionID, fn) {
     }
   }
 }
-async function readStateFile(directory, sessionID) {
+async function readStateFile(directory, sessionID, { backupCorrupt = true } = {}) {
   const target = statePath(directory, sessionID);
   await assertStatePathSafe(directory, target);
   const attempts = 5;
@@ -678,10 +678,12 @@ async function readStateFile(directory, sessionID) {
       await delay(25 * (attempt + 1));
     }
   }
-  try {
-    await ensureDir(stateDir(directory));
-    await fs.copyFile(target, `${target}.corrupt-${Date.now()}`);
-  } catch {}
+  if (backupCorrupt) {
+    try {
+      await ensureDir(stateDir(directory));
+      await fs.copyFile(target, `${target}.corrupt-${Date.now()}`);
+    } catch {}
+  }
   throw new Error(`OpenCode Loop state at ${target} could not be read; refusing to replace persisted jobs.`);
 }
 async function readState(directory, sessionID) {

@@ -1,0 +1,64 @@
+name: Native Loop Sidebar
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "src/**"
+      - "scripts/**"
+      - "package.json"
+      - ".github/workflows/native-sidebar.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-sidebar-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  render:
+    runs-on: ${{ matrix.os }}
+    name: OpenTUI ${{ matrix.opentui }} rendering (${{ matrix.os }})
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        opentui: ['0.5.14', '0.7.0']
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+      # OpenTUI's native FFI renderer is only reachable from Bun, so the slot
+      # render smoke cannot run under plain Node.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.2"
+      - run: npm ci
+      - run: npm run check
+      - run: node scripts/tui-status-test.mjs
+      - name: Switch to OpenTUI 0.7 (baseline 0.5.14 is pinned in npm ci)
+        if: matrix.opentui == '0.7.0'
+        shell: bash
+        run: |
+          npm install --no-save --package-lock=false --legacy-peer-deps @opentui/core@0.7.0 @opentui/solid@0.7.0 solid-js@1.9.12
+      - name: Verify OpenTUI modules are actually resolvable before painting
+        shell: bash
+        run: |
+          node -e 'console.log("OpenTUI:", require("./node_modules/@opentui/solid/package.json").version)'
+          node -e 'console.log("OpenTUI core:", require("./node_modules/@opentui/core/package.json").version)'
+          test "$(node -p 'require("./node_modules/@opentui/solid/package.json").version')" = "${{ matrix.opentui }}"
+      - name: Render the real TUI slot and test reactive session switching
+        run: npm run test:tui-native
+      - name: Install independently published Goal and this OpenTUI runtime
+        shell: bash
+        run: |
+          npm install --no-save --package-lock=false --legacy-peer-deps @bybrawe/opencode-goal@1.3.49 @opentui/core@${{ matrix.opentui }} @opentui/solid@${{ matrix.opentui }} solid-js@1.9.12
+      - name: Verify actual Goal and Loop slots coexist on the same TUI renderer
+        run: npm run test:tui-pair
