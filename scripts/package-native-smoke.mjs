@@ -125,7 +125,7 @@ try {
   // Optional UI dependencies are resolved *only when the host invokes setup*.
   // A bare import therefore MUST succeed even in a server-only consumer.
   const tuiEntrypoint = await readFile(path.join(installed, "src", "source", "tui", "index.js"), "utf8")
-  assert.doesNotMatch(tuiEntrypoint, /@opentui\\/|solid-js/, "the public TUI entry must keep UI dependencies lazy")
+  assert.doesNotMatch(tuiEntrypoint, /@opentui[/]|solid-js/, "the public TUI entry must keep UI dependencies lazy")
   const tuiImportProbe = spawnSync(
     process.execPath,
     ["--input-type=module", "-e", 'const m = await import("@bybrawe/opencode-loop/tui"); if (m.default?.id !== "@bybrawe/opencode-loop") process.exit(1)'],
