@@ -813,7 +813,7 @@ async function withStateWriteLock(directory, sessionID, fn) {
     }
   }
 }
-async function readStateFile(directory, sessionID) {
+async function readStateFile(directory, sessionID, { backupCorrupt = true } = {}) {
   const target = statePath(directory, sessionID);
   await assertStatePathSafe(directory, target);
   const attempts = 5;
@@ -833,11 +833,16 @@ async function readStateFile(directory, sessionID) {
       await delay(25 * (attempt + 1));
     }
   }
-  try {
-    await ensureDir(stateDir(directory));
-    await fs.copyFile(target, `${target}.corrupt-${Date.now()}`);
-  } catch {}
+  if (backupCorrupt) {
+    try {
+      await ensureDir(stateDir(directory));
+      await fs.copyFile(target, `${target}.corrupt-${Date.now()}`);
+    } catch {}
+  }
   throw new Error(`OpenCode Loop state at ${target} could not be read; refusing to replace persisted jobs.`);
+}
+async function peekState(directory, sessionID) {
+  return readStateFile(directory, sessionID, { backupCorrupt: false });
 }
 async function readState(directory, sessionID) {
   const state = await readStateFile(directory, sessionID);
@@ -3423,12 +3428,10 @@ function compactNumber(value) {
   return `${(n / 1e9).toFixed(2)}B`;
 }
 function jobName(job) {
-  const name = String(job?.name || "").trim();
-  return name || job?.id || "job";
+  return truncate(job?.name || job?.id || "job", MAX_NAME);
 }
 function failureReason(job) {
-  const reason = String(job?.lastFailureReason || "").trim();
-  return reason || "";
+  return truncate(job?.pauseReason || job?.lastFailureReason || "", 160);
 }
 function humanDuration(ms) {
   const value = Math.max(0, Math.round(Number(ms) || 0));
@@ -3465,7 +3468,7 @@ function describeScheduleState(job, current) {
 }
 function describeJob(job, current) {
   const parts = [];
-  parts.push(scheduleDescription(job));
+  parts.push(truncate(scheduleDescription(job), 90));
   const runnable = jobRunnable(job);
   const dueAt = jobDueAt(job, current);
   const overdueMs = runnable && Number.isFinite(dueAt) ? current - dueAt : Number.POSITIVE_INFINITY;
@@ -3489,7 +3492,7 @@ function formatLoopSidebar(state, current = Date.now()) {
     return `OpenCode Loop
 No loop jobs`;
   const active = jobs.filter((job) => jobRunnable(job));
-  const paused = jobs.filter((job) => job?.paused === true);
+  const paused = jobs.filter((job) => job?.enabled !== false && job?.paused === true);
   const stopped = jobs.length - active.length - paused.length;
   const summary = [`${jobs.length} job${jobs.length === 1 ? "" : "s"} \xB7 ${active.length} runnable`];
   if (paused.length)
@@ -3498,7 +3501,7 @@ No loop jobs`;
     summary.push(`${stopped} stopped`);
   const lines = ["OpenCode Loop", summary.join(" \xB7 ")];
   for (const job of jobs.slice(0, MAX_JOBS)) {
-    const mark = isGoalJob(job) ? `goal:${goalStatusText(job) || "unknown"}` : jobKindLabel(job);
+    const mark = isGoalJob(job) ? `goal:${truncate(goalStatusText(job) || "unknown", 20)}` : jobKindLabel(job);
     lines.push(`${jobName(job)} \xB7 ${mark} \xB7 ${describeJob(job, current)}`);
   }
   if (jobs.length > MAX_JOBS)
@@ -3548,7 +3551,7 @@ async function registerLoopStatusRpc(ctx) {
         throw unavailable2();
       let text;
       try {
-        const state = await readState(actual, sessionID);
+        const state = await peekState(actual, sessionID);
         if (closed || context?.signal?.aborted)
           throw unavailable2();
         text = formatLoopSidebar(state, Date.now());
