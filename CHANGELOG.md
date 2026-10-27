@@ -2,7 +2,7 @@
 
 ## Unreleased (main only)
 
-No unreleased changes yet.
+- Integrate native OpenCode 2 Loop TUI sidebar and read-only status RPC (contributed by [@zhek](https://github.com/zhek), [PR #165](https://github.com/ByBrawe/opencode-loop/pull/165)); source-only until OpenTUI 0.5/0.7 and Loop+Goal paired consumer CI pass. This is not part of npm 0.6.9.
 
 ## 0.6.9 - 2026-10-27
 
