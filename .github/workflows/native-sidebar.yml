@@ -21,11 +21,13 @@ concurrency:
 jobs:
   render:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    name: OpenTUI ${{ matrix.opentui }} rendering (${{ matrix.os }})
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+        opentui: ['0.5.14', '0.7.0']
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -41,4 +43,9 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: node scripts/tui-status-test.mjs
-      - run: npm run test:tui-native
+      - name: Install matching OpenTUI peer for this native host generation
+        shell: bash
+        run: |
+          npm install --no-save --package-lock=false --legacy-peer-deps @opentui/core@${{ matrix.opentui }} @opentui/solid@${{ matrix.opentui }} solid-js@1.9.12
+      - name: Render the real TUI slot and test reactive session switching
+        run: npm run test:tui-native
