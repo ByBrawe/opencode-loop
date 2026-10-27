@@ -71,7 +71,10 @@
     "solid-js": ">=1.9.0 <2"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "^1.18.15"
+    "@opencode-ai/plugin": "^1.18.15",
+    "@opentui/core": "0.5.14",
+    "@opentui/solid": "0.5.14",
+    "solid-js": "1.9.12"
   },
   "bin": {
     "opencode-loop": "scripts/install-with-goals.mjs",
