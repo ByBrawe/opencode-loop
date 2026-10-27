@@ -1,0 +1,52 @@
+# Temporary integration-only helper. Must be deleted before PR #190 merges.
+name: Native sidebar one-off pinned bundle regeneration
+
+on:
+  push:
+    branches:
+      - feat/integrate-zhek-native-sidebar-20261027
+
+permissions:
+  contents: read
+
+jobs:
+  regenerate:
+    if: github.repository == 'ByBrawe/opencode-loop' && github.ref == 'refs/heads/feat/integrate-zhek-native-sidebar-20261027'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.2"
+      - name: Build with the repo-pinned toolchain without access to write token
+        run: |
+          # Native sidebar adds explicit dev-only UI peers. Reconcile lockfile
+          # deterministically before npm ci so all consumer builds stay frozen.
+          npm ci
+          npm run build:plugin
+          node --check src/native.js
+          node scripts/tui-status-test.mjs
+      - name: Commit only generated native/V1/server bundles to integration branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json src/index.js src/server.js src/native.js
+          if git diff --cached --quiet; then
+            echo "Generated bundles already match the source"
+            exit 0
+          fi
+          git diff --cached --stat
+          git commit -m "build(loop): regenerate pinned Bun 1.4.2 sidebar bundles (PR #190)"
+          auth="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/feat/integrate-zhek-native-sidebar-20261027"
