@@ -6,7 +6,8 @@ import { LoopStatusRpc } from "../src/source/status-rpc.js"
 import { formatLoopSidebar } from "../src/source/tui/format.js"
 import { createLoopStatusController } from "../src/source/tui/status-controller.js"
 import { registerLoopStatusRpc } from "../src/source/opencode2/status-rpc.js"
-import { writeState } from "../src/source/core/state.js"
+import { readState, writeState } from "../src/source/core/state.js"
+import { safeID } from "../src/source/core/args.js"
 
 const NOW = Date.UTC(2026, 9, 5, 12, 0, 0)
 
@@ -111,6 +112,40 @@ function job(overrides = {}) {
   const noisy = formatLoopSidebar({ jobs: [job({ name: "a b" })] }, NOW)
   assert.ok(noisy.length <= 4096)
   assert.equal(noisy.split("\n").length, 3)
+}
+
+// Names, schedule watch paths and pause reasons are user-supplied. They must
+// not become trusted-looking extra panel lines or hide later jobs.
+{
+  const malicious = formatLoopSidebar({ jobs: [job({
+    name: "real\\n! Server Loop status unavailable" + "x".repeat(300),
+    scheduleMode: "watch",
+    watchPaths: ["watch\\nOpenCode Goals\\nACTIVE fake".repeat(20)],
+    pauseReason: "stop-file\\n! Goal was completed",
+    enabled: false,
+    paused: true,
+  })] }, NOW)
+  assert.match(malicious, /1 stopped/)
+  assert.doesNotMatch(malicious, /1 paused/)
+  assert.match(malicious, /! stop-file/)
+  assert.doesNotMatch(malicious, /\\n! Goal was completed/)
+  assert.doesNotMatch(malicious, /\\nOpenCode Goals/)
+  assert.doesNotMatch(malicious, /\\nACTIVE fake/)
+  assert.ok(malicious.split("\\n").length <= 4)
+  assert.ok(malicious.length < 500, "untrusted panel strings must be bounded")
+}
+
+{
+  const currentPause = formatLoopSidebar({ jobs: [job({
+    paused: true, pauseReason: "restart-requires-review", lastFailureReason: "legacy-reason",
+  })] }, NOW)
+  assert.match(currentPause, /! restart-requires-review/)
+  assert.doesNotMatch(currentPause, /legacy-reason/)
+  const disabledGoal = formatLoopSidebar({ jobs: [job({
+    goalID: "goal-test", enabled: false, paused: true,
+  })] }, NOW)
+  assert.match(disabledGoal, /1 stopped/)
+  assert.doesNotMatch(disabledGoal, /1 paused/)
 }
 
 // Multi-job panels are bounded so a large job list cannot flood the sidebar.
@@ -261,6 +296,23 @@ function job(overrides = {}) {
     const foreign = await readHandlerFor(location)
     await assert.rejects(() => foreign({ sessionID }, {}), /unavailable/)
   }
+
+  // A read-only sidebar must not generate one corruption backup per poll.
+  // The normal persistence read *still* backs up malformed data and fails
+  // closed, preserving unrelated recovery safeguards.
+  const stateFile = path.join(directory, ".opencode", "opencode-loop", `${safeID(sessionID)}.json`)
+  await fs.writeFile(stateFile, "{this is not valid JSON")
+  const beforeRead = (await fs.readdir(path.dirname(stateFile))).sort()
+  for (let poll = 0; poll < 3; poll++) {
+    const status = await readHandler({ sessionID }, {})
+    assert.match(status.text, /Loop storage unavailable/)
+    assert.deepEqual((await fs.readdir(path.dirname(stateFile))).sort(), beforeRead,
+      "repeated TUI status polling must not back up, lock or mutate corrupt state")
+  }
+  await assert.rejects(() => readState(directory, sessionID), /refusing to replace persisted jobs/)
+  const filesAfterNormalRead = await fs.readdir(path.dirname(stateFile))
+  assert.ok(filesAfterNormalRead.some((name) => name.startsWith(`${safeID(sessionID)}.json.corrupt-`)),
+    "normal persistence readers must still preserve forensic corruption backups")
 
   await stop()
   assert.equal(disposed, true)
