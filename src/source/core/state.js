@@ -250,7 +250,7 @@ async function withStateWriteLock(directory, sessionID, fn) {
   }
 }
 
-async function readStateFile(directory, sessionID) {
+async function readStateFile(directory, sessionID, { backupCorrupt = true } = {}) {
   const target = statePath(directory, sessionID)
   await assertStatePathSafe(directory, target)
   const attempts = 5
@@ -268,11 +268,22 @@ async function readStateFile(directory, sessionID) {
       await delay(25 * (attempt + 1))
     }
   }
-  try {
-    await ensureDir(stateDir(directory))
-    await fs.copyFile(target, `${target}.corrupt-${Date.now()}`)
-  } catch {}
+  // Normal read/write callers preserve a forensic backup, but a status
+  // display must be strictly read-only. Otherwise polling corrupt state
+  // repeatedly creates an unbounded number of .corrupt-* backups.
+  if (backupCorrupt) {
+    try {
+      await ensureDir(stateDir(directory))
+      await fs.copyFile(target, `${target}.corrupt-${Date.now()}`)
+    } catch {}
+  }
   throw new Error(`OpenCode Loop state at ${target} could not be read; refusing to replace persisted jobs.`)
+}
+
+// Cosmetic dashboard/read-only monitoring only: never generate backups,
+// create state, acquire locks, or attach a mutation baseline.
+export async function peekState(directory, sessionID) {
+  return readStateFile(directory, sessionID, { backupCorrupt: false })
 }
 
 export async function readState(directory, sessionID) {
