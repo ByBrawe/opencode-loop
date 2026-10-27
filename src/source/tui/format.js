@@ -37,13 +37,15 @@ function compactNumber(value) {
 }
 
 function jobName(job) {
-  const name = String(job?.name || "").trim()
-  return name || job?.id || "job"
+  // Names and IDs are user-controlled, including quoted multiline --name.
+  // Never allow them to impersonate an informational line in the TUI.
+  return truncate(job?.name || job?.id || "job", MAX_NAME)
 }
 
 function failureReason(job) {
-  const reason = String(job?.lastFailureReason || "").trim()
-  return reason || ""
+  // Current native jobs persist pauseReason. lastFailureReason is a
+  // legacy fallback; sanitize both for multi-line/error-text injection.
+  return truncate(job?.pauseReason || job?.lastFailureReason || "", 160)
 }
 
 // `durationToText` only names a unit when the value divides exactly, which suits
@@ -81,7 +83,8 @@ function describeScheduleState(job, current) {
 
 function describeJob(job, current) {
   const parts = []
-  parts.push(scheduleDescription(job))
+  // watchPaths can contain arbitrary filenames/newlines; keep one bounded line.
+  parts.push(truncate(scheduleDescription(job), 90))
   const runnable = jobRunnable(job)
 
   // An overdue runnable job is the highest-value signal: it is the state that
@@ -108,7 +111,7 @@ export function formatLoopSidebar(state, current = Date.now()) {
   if (!jobs.length) return "OpenCode Loop\nNo loop jobs"
 
   const active = jobs.filter((job) => jobRunnable(job))
-  const paused = jobs.filter((job) => job?.paused === true)
+  const paused = jobs.filter((job) => job?.enabled !== false && job?.paused === true)
   const stopped = jobs.length - active.length - paused.length
 
   const summary = [`${jobs.length} job${jobs.length === 1 ? "" : "s"} · ${active.length} runnable`]
@@ -117,7 +120,7 @@ export function formatLoopSidebar(state, current = Date.now()) {
 
   const lines = ["OpenCode Loop", summary.join(" · ")]
   for (const job of jobs.slice(0, MAX_JOBS)) {
-    const mark = isGoalJob(job) ? `goal:${goalStatusText(job) || "unknown"}` : jobKindLabel(job)
+    const mark = isGoalJob(job) ? `goal:${truncate(goalStatusText(job) || "unknown", 20)}` : jobKindLabel(job)
     lines.push(`${jobName(job)} · ${mark} · ${describeJob(job, current)}`)
   }
   if (jobs.length > MAX_JOBS) lines.push(`… +${jobs.length - MAX_JOBS} more`)
