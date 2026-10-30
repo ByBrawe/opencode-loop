@@ -365,7 +365,7 @@ For work that must continue after the TUI/session closes, use `opencode-loopd`.
 
 ## Loop and optional Goal features
 
-Loop works by itself. It does not install or manage other Goal plugins. **Do not run OpenCode 2.2.x's built-in `/goal` and a prompt-producing `/loop` in the same session yet.** The existing Loop reservation guard covers the separately installed ByBrawe Goal's on-disk state, **not** native OpenCode Goal's private storage/RPC. Native Goal overlap protection is tracked in [#195](https://github.com/ByBrawe/opencode-loop/issues/195). Recommended split:
+Loop works by itself. It does not install or manage other Goal plugins. **Use separate sessions for native `/goal` and prompt-producing `/loop` whenever practical.** On OpenCode 2.2.x, Loop checks the built-in Goal's **public, read-only `opencode.goal` RPC** before admitting an autonomous turn and again immediately before dispatch; an active/paused native Goal reserves the session. A separately installed ByBrawe Goal keeps its own guard, but orphaned ByBrawe Goal files no longer block Loop when that package is confirmed uninstalled. Unavailable/unrecognized ownership states fail closed. This is a safety guard, not a claim that two independently scheduled agents can run atomically without races; host-level integration remains tracked in [#195](https://github.com/ByBrawe/opencode-loop/issues/195). Recommended split:
 
 - use OpenCode's native **`/goal`** for a built-in objective workflow, or install ByBrawe Goal separately if its stronger evidence contracts are needed;
 - use **`/loop`**, `/loop-command`, `/loop-shell`, and `opencode-loopd` for scheduling/repetition/background infrastructure.

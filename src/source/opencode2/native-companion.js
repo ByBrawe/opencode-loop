@@ -22,3 +22,79 @@ export async function nativeGoalReservesSession(directory, sessionID) {
     return error?.code !== "ENOENT"
   }
 }
+
+// This is OpenCode's BUILT-IN Goal contract, not ByBrawe Goal's filesystem
+// contract. Cross-plugin storage is private. Use the public, read-only RPC.
+export const nativeGoalRPC = Object.freeze({
+  id: "opencode.goal",
+  methods: {
+    get: {
+      input: {
+        type: "object",
+        properties: { sessionID: { type: "string" } },
+        required: ["sessionID"],
+        additionalProperties: false,
+      },
+      output: { anyOf: [{ type: "null" }, { type: "object" }] },
+    },
+  },
+  events: {},
+})
+
+function expectsBuiltInGoal(version) {
+  const match = String(version || "").match(/(?:^|[^0-9])(\d+)\.(\d+)\.(\d+)(?:$|[^0-9])/)
+  if (!match) return false
+  const major = Number(match[1]), minor = Number(match[2]), patch = Number(match[3])
+  return major > 2 || (major === 2 && (minor > 2 || (minor === 2 && patch >= 1)))
+}
+
+export async function nativeOpenCodeGoalReservesSession(ctx, sessionID) {
+  // OpenCode <2.2.1 has no built-in Goal and some older hosts return generic
+  // RPC errors rather than rpc.unavailable. Never block a healthy older Loop.
+  const version = String(ctx?.app?.version || "")
+  const known = /(?:^|[^0-9])[0-9]+\.[0-9]+\.[0-9]+(?:$|[^0-9])/.test(version)
+  if (known && !expectsBuiltInGoal(version)) return false
+  // A newer host with missing/uncertain RPC is not proof of no owner.
+  if (typeof ctx?.rpc !== "function") return true
+  try {
+    const goal = await ctx.rpc(nativeGoalRPC).get({ sessionID })
+    if (goal === null) return false
+    if (!goal || typeof goal !== "object" || Array.isArray(goal)) return true
+    // Paused Goals still reserve the session; only an explicit completion
+    // releases it to Loop. An unknown state must never authorize takeover.
+    return goal.status !== "complete"
+  } catch (error) {
+    const type = error?.type || error?.data?.type || error?.error?.type
+    if (type !== "rpc.unavailable") return true
+    // The host may intentionally disable its built-in Goal. In that case
+    // the RPC is absent, and Loop is allowed to run normally.
+    if (typeof ctx?.plugin?.list !== "function") return expectsBuiltInGoal(ctx?.app?.version)
+    try {
+      const response = await ctx.plugin.list()
+      const plugins = Array.isArray(response) ? response : response?.data
+      if (!Array.isArray(plugins)) return true
+      return plugins.some((plugin) => plugin?.id === "opencode.goal")
+    } catch {
+      return true
+    }
+  }
+}
+
+export async function byBraweGoalPluginInstalled(ctx) {
+  // Old hosts lack a plugin inventory; retain the conservative filesystem
+  // reservation there. A known-empty modern inventory makes orphaned files
+  // harmless after the separate Goal plugin has been uninstalled.
+  if (typeof ctx?.plugin?.list !== "function") return true
+  try {
+    const response = await ctx.plugin.list()
+    const plugins = Array.isArray(response) ? response : response?.data
+    if (!Array.isArray(plugins)) return true
+    return plugins.some((plugin) =>
+      plugin?.id === "@bybrawe/opencode-goal" ||
+      plugin?.source?.target === "@bybrawe/opencode-goal" ||
+      String(plugin?.source?.target || "").startsWith("@bybrawe/opencode-goal@"))
+  } catch {
+    // An unreadable inventory is not proof of a clean removal.
+    return true
+  }
+}

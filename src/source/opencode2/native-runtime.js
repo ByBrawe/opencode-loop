@@ -35,6 +35,30 @@ export function createNativeLoopRuntime(options = {}) {
   const read = (scope) => readState(scope.directory, scope.sessionID)
   const save = (scope, state) => writeState(scope.directory, scope.sessionID, state)
   const report = (error) => { try { options.onError?.(error) } catch {} }
+  async function goalReserves(scope) {
+    try {
+      // A removed third-party Goal must not reserve sessions forever through
+      // orphaned .opencode/goals files. Unknown inventories keep the old guard.
+      if ((typeof options.dedicatedGoalInstalled !== "function" || await options.dedicatedGoalInstalled()) &&
+          await nativeGoalReservesSession(scope.directory, scope.sessionID)) return true
+      return typeof options.nativeGoalReservesSession === "function"
+        ? Boolean(await options.nativeGoalReservesSession(scope.sessionID))
+        : false
+    } catch (error) {
+      // An uncertain ownership query is not permission to enqueue a turn.
+      report(error)
+      return true
+    }
+  }
+  function deferForGoal(scope) {
+    clear(scope, "companionTimer")
+    if (!current(scope)) return
+    scope.companionTimer = setTimer(() => {
+      delete scope.companionTimer
+      return enqueue(scope, () => advance(scope)).catch(report)
+    }, 1000)
+    scope.companionTimer?.unref?.()
+  }
   function enqueue(scope, task) {
     const pending = scope.queue.catch(() => {}).then(async () => {
       if (!current(scope)) return result({ reason: "disposed" })
@@ -170,6 +194,12 @@ export function createNativeLoopRuntime(options = {}) {
       request = { sessionID: scope.sessionID, command: name, arguments: text || "", delivery: "queue" }
     }
     if (!isCurrent()) return result({ reason: "foreground-or-compaction" })
+    // Recheck after asynchronous prompt construction and preflight. A native
+    // /goal may have started while Loop was preparing this dispatch.
+    if (await goalReserves(scope)) {
+      deferForGoal(scope)
+      return result({ reason: "goal-owns-session" })
+    }
     if (job.dryRun) {
       policy.pause(job, "dry-run")
       await save(scope, state)
@@ -248,15 +278,9 @@ export function createNativeLoopRuntime(options = {}) {
     const state = await read(scope)
     clear(scope, "companionTimer")
     if (!(state.jobs || []).some(eligible)) return result()
-    if (await nativeGoalReservesSession(scope.directory, scope.sessionID)) {
-      if (current(scope)) {
-        scope.companionTimer = setTimer(() => {
-          delete scope.companionTimer
-          return enqueue(scope, () => advance(scope)).catch(report)
-        }, 1000)
-        scope.companionTimer?.unref?.()
-      }
-      return result({ reason: "dedicated-goal-owns-session" })
+    if (await goalReserves(scope)) {
+      deferForGoal(scope)
+      return result({ reason: "goal-owns-session" })
     }
     for (const job of state.jobs || []) {
       if (!eligible(job)) continue

@@ -1551,6 +1551,72 @@ async function nativeGoalReservesSession(directory, sessionID) {
     return error?.code !== "ENOENT";
   }
 }
+var nativeGoalRPC = Object.freeze({
+  id: "opencode.goal",
+  methods: {
+    get: {
+      input: {
+        type: "object",
+        properties: { sessionID: { type: "string" } },
+        required: ["sessionID"],
+        additionalProperties: false
+      },
+      output: { anyOf: [{ type: "null" }, { type: "object" }] }
+    }
+  },
+  events: {}
+});
+function expectsBuiltInGoal(version) {
+  const match = String(version || "").match(/(?:^|[^0-9])(\d+)\.(\d+)\.(\d+)(?:$|[^0-9])/);
+  if (!match)
+    return false;
+  const major = Number(match[1]), minor = Number(match[2]), patch = Number(match[3]);
+  return major > 2 || major === 2 && (minor > 2 || minor === 2 && patch >= 1);
+}
+async function nativeOpenCodeGoalReservesSession(ctx, sessionID) {
+  const version = String(ctx?.app?.version || "");
+  const known = /(?:^|[^0-9])[0-9]+\.[0-9]+\.[0-9]+(?:$|[^0-9])/.test(version);
+  if (known && !expectsBuiltInGoal(version))
+    return false;
+  if (typeof ctx?.rpc !== "function")
+    return true;
+  try {
+    const goal = await ctx.rpc(nativeGoalRPC).get({ sessionID });
+    if (goal === null)
+      return false;
+    if (!goal || typeof goal !== "object" || Array.isArray(goal))
+      return true;
+    return goal.status !== "complete";
+  } catch (error) {
+    const type = error?.type || error?.data?.type || error?.error?.type;
+    if (type !== "rpc.unavailable")
+      return true;
+    if (typeof ctx?.plugin?.list !== "function")
+      return expectsBuiltInGoal(ctx?.app?.version);
+    try {
+      const response = await ctx.plugin.list();
+      const plugins = Array.isArray(response) ? response : response?.data;
+      if (!Array.isArray(plugins))
+        return true;
+      return plugins.some((plugin) => plugin?.id === "opencode.goal");
+    } catch {
+      return true;
+    }
+  }
+}
+async function byBraweGoalPluginInstalled(ctx) {
+  if (typeof ctx?.plugin?.list !== "function")
+    return true;
+  try {
+    const response = await ctx.plugin.list();
+    const plugins = Array.isArray(response) ? response : response?.data;
+    if (!Array.isArray(plugins))
+      return true;
+    return plugins.some((plugin) => plugin?.id === "@bybrawe/opencode-goal" || plugin?.source?.target === "@bybrawe/opencode-goal" || String(plugin?.source?.target || "").startsWith("@bybrawe/opencode-goal@"));
+  } catch {
+    return true;
+  }
+}
 
 // src/source/opencode2/native-runtime.js
 init_jobs();
@@ -2100,6 +2166,26 @@ function createNativeLoopRuntime(options = {}) {
       options.onError?.(error);
     } catch {}
   };
+  async function goalReserves(scope) {
+    try {
+      if ((typeof options.dedicatedGoalInstalled !== "function" || await options.dedicatedGoalInstalled()) && await nativeGoalReservesSession(scope.directory, scope.sessionID))
+        return true;
+      return typeof options.nativeGoalReservesSession === "function" ? Boolean(await options.nativeGoalReservesSession(scope.sessionID)) : false;
+    } catch (error) {
+      report(error);
+      return true;
+    }
+  }
+  function deferForGoal(scope) {
+    clear(scope, "companionTimer");
+    if (!current(scope))
+      return;
+    scope.companionTimer = setTimer(() => {
+      delete scope.companionTimer;
+      return enqueue(scope, () => advance(scope)).catch(report);
+    }, 1000);
+    scope.companionTimer?.unref?.();
+  }
   function enqueue(scope, task) {
     const pending = scope.queue.catch(() => {}).then(async () => {
       if (!current(scope))
@@ -2265,6 +2351,10 @@ ${await policy.buildPrompt(scope.directory, job)}`, delivery: "queue", metadata:
     }
     if (!isCurrent())
       return result({ reason: "foreground-or-compaction" });
+    if (await goalReserves(scope)) {
+      deferForGoal(scope);
+      return result({ reason: "goal-owns-session" });
+    }
     if (job.dryRun) {
       policy.pause(job, "dry-run");
       await save(scope, state);
@@ -2358,15 +2448,9 @@ ${await policy.buildPrompt(scope.directory, job)}`, delivery: "queue", metadata:
     clear(scope, "companionTimer");
     if (!(state.jobs || []).some(eligible))
       return result();
-    if (await nativeGoalReservesSession(scope.directory, scope.sessionID)) {
-      if (current(scope)) {
-        scope.companionTimer = setTimer(() => {
-          delete scope.companionTimer;
-          return enqueue(scope, () => advance(scope)).catch(report);
-        }, 1000);
-        scope.companionTimer?.unref?.();
-      }
-      return result({ reason: "dedicated-goal-owns-session" });
+    if (await goalReserves(scope)) {
+      deferForGoal(scope);
+      return result({ reason: "goal-owns-session" });
     }
     for (const job of state.jobs || []) {
       if (!eligible(job))
@@ -3654,11 +3738,11 @@ Preflight, postrun, notifications, stop files, completion markers, runtime/failu
 Invoke /loop-stop or /loop-clear as native USER commands. Having an assistant print the slash command does not execute it.
 Scheduled shell commands run as bounded local child processes managed by Loop; OpenCode 2's ctx.shell surface is a hook API, not a shell-execution method.
 Manual /loop-compact, --compact and --compact-every use public session.compact when the V2 host exposes it. Loop matches the admitted manual compaction inputID and waits for host completion; older hosts without this capability reject the job before creation. Automatic compaction stays host-owned.
-An unfinished dedicated Goal reserves its session; Loop will not override it.
+An unfinished native OpenCode /goal or separately installed ByBrawe Goal reserves its session; Loop will not override it.
 --timeout pauses future iterations without aborting the current native model/tool/compaction operation.
 --safe is a command heuristic, not a sandbox. --dry-run does not dispatch or run hooks.
 Native sessions stay serialized; --allow-overlap is rejected.
-Use @bybrawe/opencode-goal and /goal for native Goal contracts. Legacy Loop Goal state is not silently migrated.
+OpenCode 2.2.x provides native /goal; ByBrawe Goal is optional and separately managed. Legacy Loop Goal state is not silently migrated.
 An uncertain admission after a restart is paused for review instead of being replayed automatically.`;
 async function cleanup(value) {
   if (typeof value === "function")
@@ -3711,6 +3795,8 @@ var OpenCodeLoopNativePlugin = Object.freeze({
     const runtime = createNativeLoopRuntime({
       directory,
       scopeAllowed: (scope) => ownsSession(scope.sessionID),
+      nativeGoalReservesSession: (sessionID) => nativeOpenCodeGoalReservesSession(ctx, sessionID),
+      dedicatedGoalInstalled: () => byBraweGoalPluginInstalled(ctx),
       prompt,
       command: typeof ctx.session.command === "function" ? (request) => ctx.session.command(request) : undefined,
       wait: typeof ctx.session.wait === "function" ? (request) => ctx.session.wait(request) : undefined,
