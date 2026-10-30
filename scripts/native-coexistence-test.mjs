@@ -3,7 +3,7 @@ import { createHash } from "node:crypto"
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
-import { nativeGoalReservesSession } from "../src/source/opencode2/native-companion.js"
+import { nativeGoalReservesSession, nativeOpenCodeGoalReservesSession, nativeGoalRPC } from "../src/source/opencode2/native-companion.js"
 import { createNativeLoopRuntime } from "../src/source/opencode2/native-runtime.js"
 
 const directory = await mkdtemp(path.join(os.tmpdir(), "native-coexist-"))
@@ -31,6 +31,74 @@ try {
   await runtime.wake(scope)
   assert.equal(prompts, 1, "completed Goal can release continuation to an explicitly configured Loop")
   assert.equal(await nativeGoalReservesSession(directory, "another-session"), false)
+
+  const nativeSessionID = "native-built-in-goal-session"
+  let nativeStatus = "active"
+  let nativeReads = 0
+  const rpc = (definition) => {
+    assert.equal(definition.id, "opencode.goal")
+    assert.equal(definition.methods.get.input.properties.sessionID.type, "string")
+    return {
+      get: async (input) => {
+        assert.equal(input.sessionID, nativeSessionID)
+        nativeReads++
+        return nativeStatus === null ? null : { id: "native-goal", status: nativeStatus }
+      },
+    }
+  }
+  const ctx = { app: { version: "2.2.4" }, rpc }
+  assert.equal(nativeGoalRPC.id, "opencode.goal")
+  for (const [status, expected] of [[null, false], ["active", true], ["paused", true], ["complete", false], ["invalid", true]]) {
+    nativeStatus = status
+    assert.equal(await nativeOpenCodeGoalReservesSession(ctx, nativeSessionID), expected, String(status))
+  }
+  assert.equal(nativeReads, 5)
+  assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "2.0.18" } }, nativeSessionID), false, "old V2 hosts never had native Goal")
+  assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "2.2.4" } }, nativeSessionID), true, "modern host without Goal RPC must fail closed")
+  const unavailable = () => ({ get: async () => { throw { type: "rpc.unavailable" } } })
+  assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "2.2.4" }, rpc: unavailable, plugin: { list: async () => [] } }, nativeSessionID), false, "disabled native Goal should not block Loop")
+  assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "2.2.4" }, rpc: unavailable, plugin: { list: async () => [{ id: "opencode.goal" }] } }, nativeSessionID), true, "Goal registered but RPC unavailable must block")
+  assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "2.2.4" }, rpc: unavailable, plugin: { list: async () => { throw Error("offline") } } }, nativeSessionID), true, "unverified Goal state fails closed")
+  assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "2.2.4" }, rpc: () => ({ get: async () => { throw Error("transient error") } }) }, nativeSessionID), true)
+
+  let nativePrompts = 0
+  const nativeScope = { directory, sessionID: nativeSessionID }
+  const nativeLoop = createNativeLoopRuntime({
+    directory,
+    nativeGoalReservesSession: (id) => nativeOpenCodeGoalReservesSession(ctx, id),
+    prompt: async (request) => { nativePrompts++; return { id: request.id } },
+  })
+  try {
+    nativeStatus = "active"
+    await nativeLoop.onEvent({ ...nativeScope, kind: "command", action: "executed", name: "loop", arguments: "0s separate task --max-runs 1" })
+    await nativeLoop.wake(nativeScope)
+    assert.equal(nativePrompts, 0, "active built-in Goal must stop Loop turn admission")
+    nativeStatus = "paused"
+    await nativeLoop.wake(nativeScope)
+    assert.equal(nativePrompts, 0, "paused built-in Goal still reserves the session")
+    nativeStatus = "complete"
+    await nativeLoop.wake(nativeScope)
+    assert.equal(nativePrompts, 1, "completed native Goal releases independently scheduled Loop")
+  } finally {
+    await nativeLoop.dispose()
+  }
+
+  let checks = 0
+  let racedPrompts = 0
+  const racedSessionID = "native-goal-race-session"
+  const raced = createNativeLoopRuntime({
+    directory,
+    nativeGoalReservesSession: async () => ++checks >= 2,
+    prompt: async (request) => { racedPrompts++; return { id: request.id } },
+  })
+  try {
+    await raced.onEvent({ directory, sessionID: racedSessionID, kind: "command", action: "executed", name: "loop", arguments: "0s task --max-runs 1" })
+    await raced.wake({ directory, sessionID: racedSessionID })
+    assert.ok(checks >= 2, "ownership must be rechecked just before dispatch")
+    assert.equal(racedPrompts, 0, "a newly armed native Goal must win the last admission check")
+  } finally {
+    await raced.dispose()
+  }
   console.log("Native Goal/Loop ownership tests passed")
 } finally {
   await runtime.dispose()
