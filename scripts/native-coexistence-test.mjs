@@ -3,7 +3,7 @@ import { createHash } from "node:crypto"
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
-import { nativeGoalReservesSession, nativeOpenCodeGoalReservesSession, nativeGoalRPC } from "../src/source/opencode2/native-companion.js"
+import { nativeGoalReservesSession, nativeOpenCodeGoalReservesSession, byBraweGoalPluginInstalled, nativeGoalRPC } from "../src/source/opencode2/native-companion.js"
 import { createNativeLoopRuntime } from "../src/source/opencode2/native-runtime.js"
 
 const directory = await mkdtemp(path.join(os.tmpdir(), "native-coexist-"))
@@ -81,6 +81,31 @@ try {
     assert.equal(nativePrompts, 1, "completed native Goal releases independently scheduled Loop")
   } finally {
     await nativeLoop.dispose()
+  }
+
+  const absentGoal = { plugin: { list: async () => [] } }
+  assert.equal(await byBraweGoalPluginInstalled(absentGoal), false, "standalone Loop has no separate Goal plugin")
+  assert.equal(await byBraweGoalPluginInstalled({ plugin: { list: async () => [{ id: "@bybrawe/opencode-goal" }] } }), true)
+  assert.equal(await byBraweGoalPluginInstalled({ plugin: { list: async () => [{ source: { target: "@bybrawe/opencode-goal@1.3.49" } }] } }), true)
+  assert.equal(await byBraweGoalPluginInstalled({}), true, "older hosts retain conservative disk guard")
+  assert.equal(await byBraweGoalPluginInstalled({ plugin: { list: async () => { throw Error("catalog offline") } } }), true)
+
+  const orphanSessionID = "orphaned-bybrawe-goal-shard"
+  const orphanPath = path.join(root, `${createHash("sha256").update(orphanSessionID).digest("hex").slice(0, 32)}.json`)
+  await writeFile(orphanPath, JSON.stringify({ schemaVersion: 1, id: "retired-goal", sessionID: orphanSessionID, status: "paused" }))
+  let orphanPrompts = 0
+  const orphan = createNativeLoopRuntime({
+    directory,
+    dedicatedGoalInstalled: () => byBraweGoalPluginInstalled(absentGoal),
+    nativeGoalReservesSession: async () => false,
+    prompt: async (request) => { orphanPrompts++; return { id: request.id } },
+  })
+  try {
+    await orphan.onEvent({ directory, sessionID: orphanSessionID, kind: "command", action: "executed", name: "loop", arguments: "0s independent task --max-runs 1" })
+    await orphan.wake({ directory, sessionID: orphanSessionID })
+    assert.equal(orphanPrompts, 1, "a removed Goal must not block independent Loop via orphaned state")
+  } finally {
+    await orphan.dispose()
   }
 
   let checks = 0
