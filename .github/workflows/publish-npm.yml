@@ -44,7 +44,7 @@ jobs:
           OPENCODE_PACKAGE_SMOKE_REQUIRE_INSTALL: '1'
         run: npm run package:smoke
 
-  real-native-pair:
+  real-native-loop:
     if: github.repository == 'ByBrawe/opencode-loop' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -56,52 +56,25 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
-      - name: Validate and resolve immutable release companion
-        id: release
-        shell: bash
-        run: |
-          node scripts/native-release.mjs validate
-          node --input-type=module <<'JS'
-          import { readFileSync, appendFileSync } from 'node:fs'
-          const release = JSON.parse(readFileSync('.github/npm-release.json', 'utf8'))
-          if (!/^[a-f0-9]{40}$/.test(release.goal.sha)) throw new Error('Invalid Goal source identity')
-          appendFileSync(process.env.GITHUB_OUTPUT, `goal_sha=${release.goal.sha}\n`)
-          JS
       - run: npm ci
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          repository: ByBrawe/opencode-goal
-          ref: ${{ steps.release.outputs.goal_sha }}
-          path: companion-goal
-          persist-credentials: false
-      - name: Build the declared Goal companion
-        shell: bash
-        run: |
-          test "$(git -C companion-goal rev-parse HEAD)" = "$(node -p "require('./.github/npm-release.json').goal.sha")"
-          (cd companion-goal && npm install --no-save --legacy-peer-deps @opencode/plugin@2.0.22 && node -e "if (require('./node_modules/@opencode/plugin/package.json').version !== '2.0.22') process.exit(1)" && npm run build)
-      - name: Install actual production tarballs and exact native host
+      - name: Install actual Loop tarball and exact native host without Goal
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/packed" "$RUNNER_TEMP/consumer"
           npm pack --pack-destination "$RUNNER_TEMP/packed"
-          (cd companion-goal && npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/packed")
-          (cd "$RUNNER_TEMP/consumer" && npm init -y >/dev/null && npm install --omit=dev --omit=peer --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP/packed/bybrawe-opencode-loop-0.6.9.tgz" "$RUNNER_TEMP/packed/bybrawe-opencode-goal-1.3.49.tgz")
+          (cd "$RUNNER_TEMP/consumer" && npm init -y >/dev/null && npm install --omit=dev --omit=peer --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP/packed/bybrawe-opencode-loop-0.6.9.tgz")
           npm install --prefix "$RUNNER_TEMP/native-host" --package-lock=false @opencode/cli@2.0.18
-      - name: Real OpenCode with both installed packages, command presets and daemon
+      - name: Real OpenCode with standalone Loop commands and daemon
         shell: bash
         run: |
           export OPENCODE2_BINARY="$RUNNER_TEMP/native-host/node_modules/.bin/opencode2"
           test "$("$OPENCODE2_BINARY" --version)" = 'opencode v2.0.18'
-          export OPENCODE_GOAL_INSTALLER="$RUNNER_TEMP/consumer/node_modules/@bybrawe/opencode-goal/dist/install.js"
-          export OPENCODE_GOAL_V2_PLUGIN_URL="file://$RUNNER_TEMP/consumer/node_modules/@bybrawe/opencode-goal/dist/server.js"
           export OPENCODE2_CURRENT_COMMAND_FIELDS=1 OPENCODE2_NATIVE_REQUIRED=1
-          node "$RUNNER_TEMP/consumer/node_modules/@bybrawe/opencode-loop/scripts/native-install-pair-test.mjs"
           node "$RUNNER_TEMP/consumer/node_modules/@bybrawe/opencode-loop/scripts/opencode2-loop-canary.mjs"
           node "$RUNNER_TEMP/consumer/node_modules/@bybrawe/opencode-loop/scripts/native-cli-host-canary.mjs"
-          (cd companion-goal && node scripts/opencode2-unit-handoff-canary.mjs && node scripts/native-status-host-canary.mjs)
 
   publish:
-    needs: [native-regressions, real-native-pair]
+    needs: [native-regressions, real-native-loop]
     if: github.repository == 'ByBrawe/opencode-loop' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -152,21 +125,19 @@ jobs:
             test "$attempt" != 60
             sleep 10
           done
-      - name: Clean published consumer and actual host
+      - name: Clean published Loop-only consumer and actual host
         shell: bash
         run: |
           VERIFY_DIR="$(mktemp -d)"
           trap 'rm -rf "$VERIFY_DIR"' EXIT
           (cd "$VERIFY_DIR" && npm init -y >/dev/null)
-          # The registry's version URL can become readable before npm's
-          # install-facing packument/CDN mirrors converge. A clean consumer
-          # must still pass; retry with a fresh npm cache, never skip this gate.
+          # A released version may reach registry metadata before tarballs converge.
           for attempt in {1..12}; do
-            if (cd "$VERIFY_DIR" && npm install --omit=dev --omit=peer --ignore-scripts --no-audit --no-fund --prefer-online --cache "$VERIFY_DIR/npm-cache-$attempt" @bybrawe/opencode-loop@0.6.9 @bybrawe/opencode-goal@1.3.49); then
+            if (cd "$VERIFY_DIR" && npm install --omit=dev --omit=peer --ignore-scripts --no-audit --no-fund --prefer-online --cache "$VERIFY_DIR/npm-cache-$attempt" @bybrawe/opencode-loop@0.6.9); then
               break
             fi
             if [ "$attempt" -eq 12 ]; then
-              echo "Published Loop+Goal clean-install validation did not converge after 12 attempts" >&2
+              echo "Published Loop standalone clean-install validation did not converge after 12 attempts" >&2
               exit 1
             fi
             rm -rf "$VERIFY_DIR/node_modules" "$VERIFY_DIR/package-lock.json"
@@ -174,13 +145,10 @@ jobs:
           done
           npm install --prefix "$VERIFY_DIR/host" --package-lock=false @opencode/cli@2.0.18
           export OPENCODE2_BINARY="$VERIFY_DIR/host/node_modules/.bin/opencode2"
-          export OPENCODE_GOAL_INSTALLER="$VERIFY_DIR/node_modules/@bybrawe/opencode-goal/dist/install.js"
-          export OPENCODE_GOAL_V2_PLUGIN_URL="file://$VERIFY_DIR/node_modules/@bybrawe/opencode-goal/dist/server.js"
           export OPENCODE2_CURRENT_COMMAND_FIELDS=1 OPENCODE2_NATIVE_REQUIRED=1
-          node "$VERIFY_DIR/node_modules/@bybrawe/opencode-loop/scripts/native-install-pair-test.mjs"
           node "$VERIFY_DIR/node_modules/@bybrawe/opencode-loop/scripts/opencode2-loop-canary.mjs"
           node "$VERIFY_DIR/node_modules/@bybrawe/opencode-loop/scripts/native-cli-host-canary.mjs"
-          echo 'PUBLISHED_NATIVE_PAIR_PASS Loop 0.6.9 + Goal 1.3.49 on OpenCode 2.0.18'
+          echo 'PUBLISHED_NATIVE_LOOP_PASS Loop 0.6.9 on OpenCode 2.0.18'
 
   github-release:
     name: Create tag and GitHub release

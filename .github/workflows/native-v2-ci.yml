@@ -59,8 +59,8 @@ jobs:
           console.log('Canonical native entry loads independently of V1 SDK imports')
           JS
 
-  latest-native-pair:
-    name: Latest OpenCode 2 with Loop main and Goal latest
+  latest-native-loop:
+    name: Latest OpenCode 2 with standalone Loop
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -75,31 +75,26 @@ jobs:
           bun-version: '1.4.2'
       - run: npm ci
       - run: npm run build:plugin
-      - name: Install moving OpenCode 2 and Goal targets
+      - name: Install current OpenCode 2 without a Goal package
         shell: bash
         run: |
           host="$RUNNER_TEMP/opencode2-latest"
-          npm install --prefix "$host" --package-lock=false @opencode/cli@latest @bybrawe/opencode-goal@latest
+          npm install --prefix "$host" --package-lock=false @opencode/cli@latest
           bin="$host/node_modules/.bin/opencode2"
           if [ ! -x "$bin" ]; then bin="$host/node_modules/.bin/opencode"; fi
           test -x "$bin"
-          goal_entry="$host/node_modules/@bybrawe/opencode-goal/dist/server.js"
-          test -f "$goal_entry"
-          goal_url="$(node --input-type=module -e 'import { pathToFileURL } from "node:url"; console.log(pathToFileURL(process.argv[1]).href)' "$goal_entry")"
           echo "OPENCODE2_BINARY=$bin" >> "$GITHUB_ENV"
-          echo "OPENCODE_GOAL_V2_PLUGIN_URL=$goal_url" >> "$GITHUB_ENV"
           node -e 'console.log("OpenCode CLI", require(process.argv[1]).version)' "$host/node_modules/@opencode/cli/package.json"
-          node -e 'console.log("Goal", require(process.argv[1]).version)' "$host/node_modules/@bybrawe/opencode-goal/package.json"
           "$bin" --version
-      - name: Real latest V2 host with both native plugins
+      - name: Real latest V2 host with standalone Loop
         env:
           OPENCODE2_CURRENT_COMMAND_FIELDS: '1'
           OPENCODE2_NATIVE_REQUIRED: '1'
           OPENCODE2_NATIVE_COMPACT_CANARY: '1'
         run: node scripts/opencode2-loop-canary.mjs
 
-  real-native-pair:
-    name: OpenCode 2.0.18 with Loop and Goal
+  pinned-native-loop:
+    name: OpenCode 2.0.18 standalone Loop
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -110,61 +105,23 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci
-      - name: Resolve immutable Goal companion
-        id: goal
-        shell: bash
-        run: |
-          node --input-type=module <<'JS'
-          import { existsSync, readFileSync, appendFileSync } from 'node:fs'
-          const request = '.github/npm-release.json'
-          const sha = existsSync(request) ? JSON.parse(readFileSync(request, 'utf8')).goal.sha : 'e414660b74e3cc1fbc645ab9c79888dd54971a4a'
-          if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error('Invalid companion commit')
-          appendFileSync(process.env.GITHUB_OUTPUT, `sha=${sha}\n`)
-          JS
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          repository: ByBrawe/opencode-goal
-          ref: ${{ steps.goal.outputs.sha }}
-          path: companion-goal
-          persist-credentials: false
-      - name: Build exact Goal companion
-        working-directory: companion-goal
-        run: npm install --no-save --legacy-peer-deps @opencode/plugin@2.0.18 && node -e "if (require('./node_modules/@opencode/plugin/package.json').version !== '2.0.18') process.exit(1)" && npm run build
-      - name: Verify native joint installer without network package resolution
-        env:
-          OPENCODE_GOAL_INSTALLER: ${{ github.workspace }}/companion-goal/dist/install.js
-        run: node scripts/native-install-pair-test.mjs
-      - name: Install exact OpenCode host
+      - name: Install exact OpenCode host without Goal
         run: npm install --prefix /tmp/native-host --package-lock=false @opencode/cli@2.0.18
-      - name: Real host with both shipped plugin entries
+      - name: Real host with Loop-only native plugin
         env:
           OPENCODE2_BINARY: /tmp/native-host/node_modules/.bin/opencode2
           OPENCODE2_CURRENT_COMMAND_FIELDS: '1'
           OPENCODE2_NATIVE_REQUIRED: '1'
         run: |
           test "$("$OPENCODE2_BINARY" --version)" = 'opencode v2.0.18'
-          export OPENCODE_GOAL_V2_PLUGIN_URL="file://$GITHUB_WORKSPACE/companion-goal/dist/server.js"
           node scripts/opencode2-loop-canary.mjs
       - name: Real native CLI daemon keeps two turns in one session
         env:
           OPENCODE2_BINARY: /tmp/native-host/node_modules/.bin/opencode2
         run: node scripts/native-cli-host-canary.mjs
-      - name: Three-session Goal handoff preserves full native context
-        working-directory: companion-goal
-        shell: bash
-        env:
-          OPENCODE2_BINARY: /tmp/native-host/node_modules/.bin/opencode2
-        run: |
-          node scripts/opencode2-unit-handoff-canary.mjs > "$RUNNER_TEMP/handoff.log" 2>&1 || { tail -100 "$RUNNER_TEMP/handoff.log"; exit 1; }
-          head -48 "$RUNNER_TEMP/handoff.log"
-      - name: Native Goal status RPC rejects foreign session locations
-        working-directory: companion-goal
-        env:
-          OPENCODE2_BINARY: /tmp/native-host/node_modules/.bin/opencode2
-        run: node scripts/native-status-host-canary.mjs
 
-  pinned-v2-1-4-native-pair:
-    name: OpenCode 2.1.4 native Loop + Goal (${{ matrix.os }})
+  pinned-v2-1-4-native-loop:
+    name: OpenCode 2.1.4 standalone Loop (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     strategy:
@@ -185,23 +142,17 @@ jobs:
       - run: npm run build:plugin
       - name: Ensure source and native bundles match
         run: git diff --exit-code -- src/index.js src/server.js src/native.js
-      - name: Install exact 2.1.4 OpenCode host and independently published Goal
+      - name: Install exact 2.1.4 OpenCode host without Goal
         shell: bash
         run: |
-          host="$RUNNER_TEMP/opencode2-2.1.4-pair"
-          npm install --prefix "$host" --package-lock=false @opencode/cli@2.1.4 @bybrawe/opencode-goal@1.3.49
+          host="$RUNNER_TEMP/opencode2-2.1.4"
+          npm install --prefix "$host" --package-lock=false @opencode/cli@2.1.4
           bin="$host/node_modules/.bin/opencode2"
           if [ ! -x "$bin" ]; then bin="$host/node_modules/.bin/opencode"; fi
           test -x "$bin"
-          goal_entry="$host/node_modules/@bybrawe/opencode-goal/dist/server.js"
-          test -f "$goal_entry"
-          goal_url="$(node --input-type=module -e 'import { pathToFileURL } from "node:url"; console.log(pathToFileURL(process.argv[1]).href)' "$goal_entry")"
           echo "OPENCODE2_BINARY=$bin" >> "$GITHUB_ENV"
-          echo "OPENCODE_GOAL_V2_PLUGIN_URL=$goal_url" >> "$GITHUB_ENV"
-          node -e 'console.log("OpenCode CLI", require(process.argv[1]).version)' "$host/node_modules/@opencode/cli/package.json"
-          node -e 'console.log("Goal", require(process.argv[1]).version)' "$host/node_modules/@bybrawe/opencode-goal/package.json"
           test "$("$bin" --version)" = 'opencode v2.1.4'
-      - name: Real OpenCode 2.1.4 native command, idle and compaction lifecycle
+      - name: Real OpenCode 2.1.4 native Loop and compaction lifecycle
         env:
           OPENCODE2_NATIVE_REQUIRED: '1'
           OPENCODE2_MACOS_NATIVE_CANARY: '1'

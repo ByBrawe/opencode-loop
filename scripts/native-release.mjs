@@ -12,8 +12,6 @@ export function validateRelease(request, pkg, env) {
   assert.equal(pkg.name, request.name)
   assert.equal(pkg.version, request.version)
   assert.equal(request.predecessor, "0.6.8")
-  assert.equal(request.goal?.version, "1.3.49")
-  assert.match(request.goal?.sha ?? "", /^[a-f0-9]{40}$/)
   return request
 }
 
@@ -31,23 +29,6 @@ export function releaseDecision(status, manifest, request, sha, latest) {
   assert.equal(status, 404, "registry failure is not proof that a version is unpublished")
   assert.equal(latest, request.predecessor, "npm latest differs from the predecessor; refuse out-of-order publication")
   return true
-}
-
-export async function waitForPublishedGoal(goal, options = {}) {
-  const request = options.request ?? fetch
-  const sleep = options.sleep ?? delay
-  const attempts = options.attempts ?? 60
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    const response = await request("https://registry.npmjs.org/" + encodeURIComponent("@bybrawe/opencode-goal") + "/" + goal.version, { signal: AbortSignal.timeout(20000) })
-    if (response.ok) {
-      const manifest = await response.json()
-      assertPublishedSource(manifest, "@bybrawe/opencode-goal", goal.version, goal.sha)
-      return manifest
-    }
-    assert.equal(response.status, 404, "Goal registry transport/auth errors cannot authorize the joint release")
-    if (attempt + 1 < attempts) await sleep(10000)
-  }
-  throw new Error("Declared Goal release is not published; Loop publication refused")
 }
 
 async function json(url, headers = {}) {
@@ -93,13 +74,12 @@ async function main() {
   if (mode === "decide") {
     // Wait only for an absent, concurrently publishing companion. A different
     // immutable source or an actual registry error fails immediately.
-    const goal = await waitForPublishedGoal(request.goal)
     const exact = await fetch(base + "/" + request.version, { signal: AbortSignal.timeout(20000) })
     const existing = exact.ok ? await exact.json() : null
     const latest = exact.status === 404 ? await json(base + "/latest") : null
     const publish = releaseDecision(exact.status, existing, request, sha, latest?.version)
     await appendFile(process.env.GITHUB_OUTPUT, `publish=${publish}\n`)
-    console.log(JSON.stringify({ publish, loop: request.version, goal: goal.version, goalSHA: goal.gitHead }))
+    console.log(JSON.stringify({ publish, loop: request.version }))
     return
   }
   if (mode === "verify") {

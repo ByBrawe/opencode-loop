@@ -12,8 +12,8 @@ const version = JSON.parse(await readFile(path.join(root, "package.json"), "utf8
 const spec = `@bybrawe/opencode-loop@${version}`
 let cases = 0
 const exists = async (file) => { try { await access(file); return true } catch { return false } }
-function run(config, args = [], expected = 0) {
-  const result = spawnSync(process.execPath, [installer, ...args], { cwd: root, env: { ...process.env, OPENCODE_CONFIG_DIR: config }, encoding: "utf8", timeout: 20_000 })
+function run(config, args = [], expected = 0, overrides = {}) {
+  const result = spawnSync(process.execPath, [installer, ...args], { cwd: root, env: { ...process.env, OPENCODE_CONFIG_DIR: config, ...overrides }, encoding: "utf8", timeout: 20_000 })
   assert.equal(result.status, expected, `${result.stdout}\n${result.stderr}\n${result.error || ""}`)
   return result
 }
@@ -135,6 +135,23 @@ try {
   run(obj, ["--uninstall"])
   run(upgrade, ["--uninstall"])
   assert.equal(await exists(path.join(upgrade, "commands/loop-help.md")), true)
+  cases++
+
+  const overrideDir = await config("custom-environment-dir", { plugins: ["other-plugin", spec] })
+  const overrideFile = path.join(temp, "external-config", "active.jsonc")
+  await mkdir(path.dirname(overrideFile), { recursive: true })
+  const overrideBefore = '{\n  // keep user notes\n  "plugin": ["@bybrawe/opencode-loop@old", "other-legacy"],\n  "plugins": [{"package":"@bybrawe/opencode-loop@0.6.8","options":{"quiet":true}}, "@bybrawe/opencode-goal@1.3.49"]\n}\n'
+  await writeFile(overrideFile, overrideBefore)
+  const overrideResult = run(overrideDir, ["--uninstall"], 0, { OPENCODE_CONFIG: overrideFile })
+  assert.match(overrideResult.stdout, /inspected 5 candidate path/)
+  assert.deepEqual((await readConfig(overrideDir)).plugins, ["other-plugin"])
+  const overrideAfter = await readFile(overrideFile, "utf8")
+  assert.match(overrideAfter, /keep user notes/)
+  assert.ok(!overrideAfter.includes("@bybrawe/opencode-loop"), "uninstall must remove the OpenCode custom config registration")
+  assert.ok(overrideAfter.includes("@bybrawe/opencode-goal@1.3.49"), "uninstall must not remove Goal")
+  const cleanupAgain = run(overrideDir, ["--uninstall"], 0, { OPENCODE_CONFIG: overrideFile })
+  assert.match(cleanupAgain.stdout, /from 0 OpenCode config file/)
+  assert.equal(await readFile(overrideFile, "utf8"), overrideAfter)
   cases++
 
   const info = path.join(temp, "informational-no-mutation")

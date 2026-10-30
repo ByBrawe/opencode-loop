@@ -9,13 +9,10 @@ import { fileURLToPath } from "node:url"
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const loopInstaller = join(root, "scripts", "install-node.mjs")
 const config = process.env.OPENCODE_CONFIG_DIR || join(homedir(), ".config", "opencode")
-const goalPackageSpec = "@bybrawe/opencode-goal@latest"
 const rawArgs = process.argv.slice(2)
-const withGoals = rawArgs.includes("--with-goals")
 const loopOnly = rawArgs.includes("--loop-only")
-const withLoopGoals = rawArgs.includes("--with-loop-goals")
 const withoutLoopGoals = rawArgs.includes("--without-loop-goals")
-const loopArgs = rawArgs.filter((arg) => !["--with-goals", "--loop-only", "--with-loop-goals", "--without-loop-goals"].includes(arg))
+const loopArgs = rawArgs.filter((arg) => !["--loop-only", "--without-loop-goals"].includes(arg))
 const commandArgs = loopArgs.filter((arg) => arg !== "--legacy-v1")
 const uninstallRequested = commandArgs.length === 1 && ["--uninstall", "uninstall", "--remove"].includes(commandArgs[0] || "")
 const helpRequested = loopArgs.some((arg) => ["--help", "-h"].includes(arg))
@@ -51,38 +48,24 @@ function runLoopInstaller() {
   })
 }
 
-function runGoalInstaller() {
-  const npmExecPath = process.env.npm_execpath
-  const command = npmExecPath ? process.execPath : (process.platform === "win32" ? "npm.cmd" : "npm")
-  const args = npmExecPath
-    ? [npmExecPath, "exec", "--yes", `--package=${goalPackageSpec}`, "--", "opencode-goal"]
-    : ["exec", "--yes", `--package=${goalPackageSpec}`, "--", "opencode-goal"]
-
-  return spawnSync(command, args, {
-    cwd: root,
-    // This is a target-dialect hint, not a claim about an installed binary.
-    // Older Goal installers already understand this variable, unlike new CLI flags.
-    env: {
-      ...process.env,
-      OPENCODE_CONFIG_DIR: config,
-      OPENCODE_GOAL_HOST_VERSION: rawArgs.includes("--legacy-v1") ? "1.0.0" : "2.0.0",
-    },
-    stdio: "inherit",
-    windowsHide: true,
-    timeout: 180_000,
-  })
-}
-
 function statusCode(result) {
   if (Number.isInteger(result?.status)) return result.status
   return result?.error ? 1 : 0
 }
 
-function printCompanionHelp() {
-  console.log(`\nOpenCode Goal options:\n  --with-goals          Explicitly install/update @bybrawe/opencode-goal@latest after Loop.\n  --loop-only           Explicit alias for the default: install/update Loop only and never touch Goal.\n  --with-loop-goals     Also install Loop's legacy experimental /loop-goal* command files (not recommended).\n  --without-loop-goals  Compatibility alias for the default: omit/remove legacy /loop-goal* commands.\n\nDefault install/update touches only OpenCode Loop. Recommended setup: install OpenCode Goal separately with: npx -y @bybrawe/opencode-goal@latest. Loop uninstall never removes Goal.`)
+function printLoopHelp() {
+  console.log("\nOpenCode Loop installs and uninstalls only @bybrawe/opencode-loop.\n  --loop-only           Compatibility alias for the default Loop-only install.\n  --without-loop-goals  Compatibility alias for removing old Loop Goal command files.\n\nThe old --with-goals and --with-loop-goals options have been removed.\nIf you choose to use @bybrawe/opencode-goal, manage it with its own installer.\nLoop never invokes, installs, updates or removes the Goal package.")
 }
 
 async function main() {
+  // Refuse discontinued Goal installation modes *before* any installer or diagnostic
+  // can mutate the config; never interpret them as a successful Loop-only install.
+  const removed = rawArgs.filter((arg) => arg === "--with-goals" || arg === "--with-loop-goals")
+  if (removed.length) {
+    console.error(`Unsupported Loop option(s): ${removed.join(", ")}. Loop now installs only Loop. Manage Goal separately if needed; nothing was changed.`)
+    process.exitCode = 2
+    return
+  }
   if (rawArgs[0] === "--desktop-diagnostics") {
     // Diagnostic mode must not run either installer or modify any configuration.
     const { runDesktopDiagnosticCli } = await import("./desktop-command-diagnostics.mjs")
@@ -94,17 +77,6 @@ async function main() {
     process.exitCode = 2
     return
   }
-  if (withGoals && loopOnly) {
-    console.error("Use either --with-goals or --loop-only, not both.")
-    process.exitCode = 2
-    return
-  }
-  if (withLoopGoals && withoutLoopGoals) {
-    console.error("Use either --with-loop-goals or --without-loop-goals, not both.")
-    process.exitCode = 2
-    return
-  }
-
   const loopResult = runLoopInstaller()
   if (loopResult.error) {
     console.error(`OpenCode Loop installer failed to start: ${loopResult.error.message}`)
@@ -118,33 +90,20 @@ async function main() {
   }
 
   if (informational) {
-    if (helpRequested) printCompanionHelp()
+    if (helpRequested) printLoopHelp()
     return
   }
   if (uninstallRequested) return
 
-  if (!withLoopGoals) {
-    const removed = await removeLoopGoalCommands()
-    const reason = withoutLoopGoals ? "--without-loop-goals" : "default Loop-only command surface"
-    console.log(`Omitted ${removed} packaged experimental /loop-goal* command file(s) (${reason}).`)
-  }
+  // Clean only Loop-owned, packaged legacy /loop-goal* commands; preserve
+  // user-owned files and do not touch any Goal package registration or state.
+  const removedLegacy = await removeLoopGoalCommands()
+  const reason = withoutLoopGoals ? "--without-loop-goals" : "standalone Loop install"
+  console.log(`Omitted ${removedLegacy} packaged experimental /loop-goal* command file(s) (${reason}).`)
+  console.log(loopOnly
+    ? "Installed/updated OpenCode Loop only (--loop-only)."
+    : "Installed/updated OpenCode Loop only. Goal is installed and managed separately.")
 
-  if (!withGoals) {
-    if (loopOnly) console.log("Installed/updated OpenCode Loop only (--loop-only).")
-    else console.log("Installed/updated OpenCode Loop only. Recommended companion install (separate command): npx -y @bybrawe/opencode-goal@latest")
-    return
-  }
-
-  const goalResult = runGoalInstaller()
-  const goalCode = statusCode(goalResult)
-  if (goalCode === 0) {
-    console.log(`Installed/updated OpenCode Goals via ${goalPackageSpec}.`)
-    return
-  }
-
-  const detail = goalResult.error?.message || `exit code ${goalCode}`
-  console.error(`OpenCode Goals companion install/update failed (${detail}).`)
-  process.exitCode = goalCode || 1
 }
 
 main().catch((error) => {

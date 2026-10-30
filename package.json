@@ -1,7 +1,7 @@
 {
   "name": "@bybrawe/opencode-loop",
   "version": "0.6.9",
-  "description": "Idle-safe /loop scheduling and background automation for OpenCode, with optional legacy Loop Goal compatibility and a separately installable OpenCode Goal companion.",
+  "description": "Idle-safe /loop scheduling and background automation for OpenCode; standalone installation without Goal package dependencies.",
   "type": "module",
   "main": "src/plugin.js",
   "exports": {
@@ -66,7 +66,6 @@
     "url": "https://github.com/ByBrawe/opencode-loop/issues"
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": ">=1.4.0 <2",
     "@opentui/core": ">=0.5.14 <0.8",
     "@opentui/solid": ">=0.5.14 <0.8",
     "solid-js": ">=1.9.0 <2"

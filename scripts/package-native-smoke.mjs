@@ -96,6 +96,28 @@ try {
   console.log(run(process.execPath, [path.join(root, "scripts/native-entry-test.mjs"), consumer], root).trim())
   const installed = path.join(consumer, "node_modules", "@bybrawe", "opencode-loop")
   const manifest = JSON.parse(await readFile(path.join(installed, "package.json"), "utf8"))
+  // Exercise the actual packaged npx bin target, not only the source installer.
+  // A no-op or the wrong config directory would leave the registration behind.
+  const uninstallConfig = path.join(temp, "packaged uninstall")
+  await mkdir(uninstallConfig)
+  const unregisterFile = path.join(uninstallConfig, "opencode.json")
+  await writeFile(unregisterFile, JSON.stringify({ plugins: [
+    "@bybrawe/opencode-loop@0.6.9",
+    "@bybrawe/opencode-goal@1.3.49",
+    "other-plugin",
+  ] }))
+  const uninstallCli = path.join(installed, manifest.bin["opencode-loop"])
+  const uninstaller = spawnSync(process.execPath, [uninstallCli, "--uninstall"], {
+    cwd: consumer, encoding: "utf8", windowsHide: true, timeout: 30_000,
+    env: { ...process.env, OPENCODE_CONFIG_DIR: uninstallConfig },
+  })
+  assert.equal(uninstaller.status, 0, [uninstaller.stdout, uninstaller.stderr].join("\\n"))
+  assert.deepEqual(JSON.parse(await readFile(unregisterFile, "utf8")).plugins, [
+    "@bybrawe/opencode-goal@1.3.49",
+    "other-plugin",
+  ], "the published Loop CLI must unregister itself without touching Goal")
+  console.log("Packaged Loop bin --uninstall PASS")
+
 
   // A new subpath export only reaches a consumer if package.json files ships
   // its target; the manifest can look correct while the packed archive is not.

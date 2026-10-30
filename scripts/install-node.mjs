@@ -2,7 +2,7 @@
 import { isDeepStrictEqual } from "node:util"
 import { copyFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
-import { dirname, join } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -16,6 +16,12 @@ const packageName = "@bybrawe/opencode-loop"
 const packageVersion = JSON.parse(await readFile(join(root, "package.json"), "utf8")).version
 const packageSpec = `${packageName}@${packageVersion}`
 const configCandidates = ["opencode.json", "opencode.jsonc", "config.json", "config.jsonc"]
+// OpenCode also supports OPENCODE_CONFIG as an explicit single-file override.
+// Uninstall must inspect it, even when it lives outside the global config directory.
+const uninstallCandidates = () => [...new Set([
+  ...configCandidates.map((name) => join(config, name)),
+  ...(process.env.OPENCODE_CONFIG?.trim() ? [resolve(process.env.OPENCODE_CONFIG.trim())] : []),
+])]
 const rawInstallerArgs = process.argv.slice(2)
 const legacyV1 = rawInstallerArgs.includes("--legacy-v1")
 const installerArgs = rawInstallerArgs.filter((arg) => arg !== "--legacy-v1")
@@ -430,8 +436,7 @@ async function removePackagedFiles(sourceDir, targetDir) {
 
 async function uninstall() {
   const plans = []
-  for (const name of configCandidates) {
-    const target = join(config, name)
+  for (const target of uninstallCandidates()) {
     try {
       const source = await readFile(target, "utf8")
       const parsed = parseJsonc(source)
@@ -451,7 +456,8 @@ async function uninstall() {
   await removePackagedFiles(join(root, "commands"), commandDir)
   await removePackagedFiles(join(root, "agents"), agentDir)
   const changed = plans.filter((plan) => plan.source !== plan.updated).length
-  console.log(`Removed ${packageName} registrations from ${changed} OpenCode config file(s).`)
+  console.log(`Removed ${packageName} registrations from ${changed} OpenCode config file(s); inspected ${uninstallCandidates().length} candidate path(s).`)
+  if (changed === 0) console.warn(`No Loop package registration found in ${config} or the OPENCODE_CONFIG override. Project-local configs and other OpenCode hosts are not changed.`)
   console.log("Removed known local Loop plugin and managed legacy command/agent files; custom files are preserved.")
   console.log("Project state under .opencode/opencode-loop is preserved.")
   console.log("Restart OpenCode to finish unloading OpenCode Loop.")
