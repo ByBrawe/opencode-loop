@@ -49,9 +49,13 @@ function expectsBuiltInGoal(version) {
 }
 
 export async function nativeOpenCodeGoalReservesSession(ctx, sessionID) {
-  // OpenCode 2.0/2.1 never shipped built-in Goal. A modern host missing the
-  // public RPC cannot safely prove that no native Goal owns this session.
-  if (typeof ctx?.rpc !== "function") return expectsBuiltInGoal(ctx?.app?.version)
+  // OpenCode <2.2.1 has no built-in Goal and some older hosts return generic
+  // RPC errors rather than rpc.unavailable. Never block a healthy older Loop.
+  const version = String(ctx?.app?.version || "")
+  const known = /(?:^|[^0-9])[0-9]+\.[0-9]+\.[0-9]+(?:$|[^0-9])/.test(version)
+  if (known && !expectsBuiltInGoal(version)) return false
+  // A newer host with missing/uncertain RPC is not proof of no owner.
+  if (typeof ctx?.rpc !== "function") return true
   try {
     const goal = await ctx.rpc(nativeGoalRPC).get({ sessionID })
     if (goal === null) return false
