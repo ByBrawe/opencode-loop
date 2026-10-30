@@ -1594,7 +1594,8 @@ async function nativeOpenCodeGoalReservesSession(ctx, sessionID) {
     if (typeof ctx?.plugin?.list !== "function")
       return expectsBuiltInGoal(ctx?.app?.version);
     try {
-      const plugins = await ctx.plugin.list();
+      const response = await ctx.plugin.list();
+      const plugins = Array.isArray(response) ? response : response?.data;
       if (!Array.isArray(plugins))
         return true;
       return plugins.some((plugin) => plugin?.id === "opencode.goal");
@@ -1607,7 +1608,8 @@ async function byBraweGoalPluginInstalled(ctx) {
   if (typeof ctx?.plugin?.list !== "function")
     return true;
   try {
-    const plugins = await ctx.plugin.list();
+    const response = await ctx.plugin.list();
+    const plugins = Array.isArray(response) ? response : response?.data;
     if (!Array.isArray(plugins))
       return true;
     return plugins.some((plugin) => plugin?.id === "@bybrawe/opencode-goal" || plugin?.source?.target === "@bybrawe/opencode-goal" || String(plugin?.source?.target || "").startsWith("@bybrawe/opencode-goal@"));
