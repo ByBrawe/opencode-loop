@@ -104,7 +104,7 @@ try {
   const existing = await runInstaller(existingConfig, [], { FAKE_NPM_LOG: existingLog })
   assert.equal(existing.code, 0, existing.stderr)
   assert.deepEqual(await calls(existingLog), [], "default Loop updates must not refresh an installed Goal package")
-  assert.match(existing.stdout, /Recommended companion install \(separate command\)/)
+  assert.match(existing.stdout, /Goal is installed and managed separately/)
 
   const localConfig = path.join(temporaryRoot, "local-goal")
   const localLog = path.join(temporaryRoot, "local-goal.log")
