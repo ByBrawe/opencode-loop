@@ -467,7 +467,7 @@ For unattended work, avoid permanently allowing every shell command. Grant routi
 
 Native OpenCode 2 is the default supported package path for `0.6.9`. The production dependency is pinned to `@opencode/plugin@2.0.22`; the explicit legacy V1 compatibility path retains `@opencode-ai/plugin >=1.4.0 <2`. Do **not** mistake the legacy V1 peer range for the V2 runtime API version.
 
-Automated release gates cover native V2 packages, Windows/Linux regressions and real OpenCode 2 host command registration/coexistence with the separately installed Goal plugin. **Windows Desktop GUI slash-command discovery is not yet proven equivalent to CLI TUI**; see [#169](https://github.com/ByBrawe/opencode-loop/issues/169) and the [diagnostic guide](docs/OPENCODE2-DESKTOP-WINDOWS.md). Platform gaps are tracked in [#177](https://github.com/ByBrawe/opencode-loop/issues/177).
+Automated release gates cover standalone native V2 packaging, Windows/Linux regressions, and real OpenCode 2 host command registration. Separate legacy ByBrawe Goal coexistence remains an optional compatibility test: it is **not** a Loop runtime, installation, update, or npm publication dependency. Native OpenCode 2.2+ `/goal` is checked read-only via the public Goal RPC immediately before autonomous Loop admission. **Windows Desktop GUI slash-command discovery is not yet proven equivalent to CLI TUI**; see [#169](https://github.com/ByBrawe/opencode-loop/issues/169) and the [diagnostic guide](docs/OPENCODE2-DESKTOP-WINDOWS.md). Platform gaps are tracked in [#177](https://github.com/ByBrawe/opencode-loop/issues/177).
 
 See [docs/SCHEDULING.md](./docs/SCHEDULING.md) for the scheduling contract and [CHANGELOG.md](./CHANGELOG.md) for release history.
 

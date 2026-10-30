@@ -1,8 +1,13 @@
 # Changelog
 
-## Unreleased (main only)
+## 0.6.10 — 2026-10-30
 
-- Integrate native OpenCode 2 Loop TUI sidebar and read-only status RPC (contributed by [@zhek](https://github.com/zhek), [PR #165](https://github.com/ByBrawe/opencode-loop/pull/165)); source-only until OpenTUI 0.5/0.7 and Loop+Goal paired consumer CI pass. This is not part of npm 0.6.9.
+- Ship the read-only native OpenCode 2 Loop **TUI sidebar** and status RPC, originally contributed by [@zhek](https://github.com/zhek) ([#165](https://github.com/ByBrawe/opencode-loop/pull/165)), integrated with attribution in [#190](https://github.com/ByBrawe/opencode-loop/pull/190). Tests cover OpenTUI 0.5.14 and 0.7.0 rendering, session isolation and cleanup. Real remote/split-cache TUI auto-discovery remains unverified ([#191](https://github.com/ByBrawe/opencode-loop/issues/191)).
+- Make Loop **independently installable and releasable**: remove the old `--with-goals` and `--with-loop-goals` coupled modes; leave separately installed ByBrawe Goal untouched; eliminate Goal package dependency from Loop's npm release gates ([#194](https://github.com/ByBrawe/opencode-loop/pull/194)).
+- Fix Loop uninstallation for explicitly selected `OPENCODE_CONFIG` files, preserve unrelated plugins/JSONC comments and keep project Loop history. Validate the actual shipped npm CLI's `--uninstall` behavior.
+- On OpenCode 2.2+, use the built-in native Goal's read-only `opencode.goal` RPC to reserve active/paused sessions before Loop prompt admission. Preserve safety on unreadable Goal state; ignore orphaned ByBrawe Goal history when its plugin is confirmed absent ([#195](https://github.com/ByBrawe/opencode-loop/issues/195), [#196](https://github.com/ByBrawe/opencode-loop/pull/196)). Continue to recommend separate sessions for concurrent workflows.
+- Remove unneeded V1 SDK *npm peer* from the standalone native V2 package, preventing dependency-resolution conflicts in clean npm installs; V1 compatibility remains explicitly tested through dev dependencies.
+- **Scope:** Windows Desktop/Web GUI slash-command discovery ([#169](https://github.com/ByBrawe/opencode-loop/issues/169)), remote OpenTUI split-cache discovery (#191), and fully atomic native Goal/Loop scheduling are **not claimed resolved**.
 
 ## 0.6.9 - 2026-10-27
 

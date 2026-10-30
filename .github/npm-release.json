@@ -1,11 +1,7 @@
 {
   "name": "@bybrawe/opencode-loop",
-  "version": "0.6.9",
-  "predecessor": "0.6.8",
-  "goal": {
-    "version": "1.3.49",
-    "sha": "0c834b06843d4f55aa3c6a1489d992adc70a5be4"
-  },
-  "requestedAt": "2026-10-27",
-  "reason": "Host-verified Markdown checklist completion on native OpenCode 2 and V1 compatibility, source/build parity, Goal 1.3.49 independently installed, strict Windows/Linux and real-host consumer gates. Preserve existing unlimited defaults, completion evidence integrity, plugin ownership and Desktop GUI uncertainty. Verified Windows strict package consumer retry on a fresh tree after ETIMEDOUT (#189) and bounded async stop-file test (#188) are on main; release remains blocked unless all exact-main gates succeed. Experimental @zhek TUI sidebar remains in PR #190 for the next release."
+  "version": "0.6.10",
+  "predecessor": "0.6.9",
+  "requestedAt": "2026-10-30",
+  "reason": "Final standalone Loop stability release after #194, #195/#196, with native read-only TUI contributed by @zhek (#165/#190). Keep Goal separately managed; require source/bundle parity, exact-main CI, Windows/Linux/macOS and clean npm consumer gates. Windows Desktop GUI and remote split-cache TUI discovery remain unverified (#169/#191)."
 }
