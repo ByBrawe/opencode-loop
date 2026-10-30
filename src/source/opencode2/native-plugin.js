@@ -2,7 +2,7 @@ import path from "node:path"
 import { createNativeSessionLocationGuard } from "./session-location.js"
 import { createNativeShellHost } from "./native-shell.js"
 import { createNativeLoopRuntime } from "./native-runtime.js"
-import { nativeOpenCodeGoalReservesSession } from "./native-companion.js"
+import { nativeOpenCodeGoalReservesSession, byBraweGoalPluginInstalled } from "./native-companion.js"
 import { createOpenCode2EventBridge } from "./event-bridge.js"
 import { registerOpenCode2LoopCommands, OPENCODE_LOOP_V2_PRESET_NAMES, commandArguments } from "./commands.js"
 import { registerLoopStatusRpc } from "./status-rpc.js"
@@ -81,6 +81,7 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
       directory,
       scopeAllowed: (scope) => ownsSession(scope.sessionID),
       nativeGoalReservesSession: (sessionID) => nativeOpenCodeGoalReservesSession(ctx, sessionID),
+      dedicatedGoalInstalled: () => byBraweGoalPluginInstalled(ctx),
       prompt,
       command: typeof ctx.session.command === "function" ? (request) => ctx.session.command(request) : undefined,
       wait: typeof ctx.session.wait === "function" ? (request) => ctx.session.wait(request) : undefined,
