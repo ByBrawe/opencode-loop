@@ -2,6 +2,7 @@ import path from "node:path"
 import { createNativeSessionLocationGuard } from "./session-location.js"
 import { createNativeShellHost } from "./native-shell.js"
 import { createNativeLoopRuntime } from "./native-runtime.js"
+import { nativeOpenCodeGoalReservesSession } from "./native-companion.js"
 import { createOpenCode2EventBridge } from "./event-bridge.js"
 import { registerOpenCode2LoopCommands, OPENCODE_LOOP_V2_PRESET_NAMES, commandArguments } from "./commands.js"
 import { registerLoopStatusRpc } from "./status-rpc.js"
@@ -26,11 +27,11 @@ Preflight, postrun, notifications, stop files, completion markers, runtime/failu
 Invoke /loop-stop or /loop-clear as native USER commands. Having an assistant print the slash command does not execute it.
 Scheduled shell commands run as bounded local child processes managed by Loop; OpenCode 2's ctx.shell surface is a hook API, not a shell-execution method.
 Manual /loop-compact, --compact and --compact-every use public session.compact when the V2 host exposes it. Loop matches the admitted manual compaction inputID and waits for host completion; older hosts without this capability reject the job before creation. Automatic compaction stays host-owned.
-An unfinished dedicated Goal reserves its session; Loop will not override it.
+An unfinished native OpenCode /goal or separately installed ByBrawe Goal reserves its session; Loop will not override it.
 --timeout pauses future iterations without aborting the current native model/tool/compaction operation.
 --safe is a command heuristic, not a sandbox. --dry-run does not dispatch or run hooks.
 Native sessions stay serialized; --allow-overlap is rejected.
-Use @bybrawe/opencode-goal and /goal for native Goal contracts. Legacy Loop Goal state is not silently migrated.
+OpenCode 2.2.x provides native /goal; ByBrawe Goal is optional and separately managed. Legacy Loop Goal state is not silently migrated.
 An uncertain admission after a restart is paused for review instead of being replayed automatically.`
 
 async function cleanup(value) {
@@ -79,6 +80,7 @@ export const OpenCodeLoopNativePlugin = Object.freeze({
     const runtime = createNativeLoopRuntime({
       directory,
       scopeAllowed: (scope) => ownsSession(scope.sessionID),
+      nativeGoalReservesSession: (sessionID) => nativeOpenCodeGoalReservesSession(ctx, sessionID),
       prompt,
       command: typeof ctx.session.command === "function" ? (request) => ctx.session.command(request) : undefined,
       wait: typeof ctx.session.wait === "function" ? (request) => ctx.session.wait(request) : undefined,
