@@ -1574,8 +1574,12 @@ function expectsBuiltInGoal(version) {
   return major > 2 || major === 2 && (minor > 2 || minor === 2 && patch >= 1);
 }
 async function nativeOpenCodeGoalReservesSession(ctx, sessionID) {
+  const version = String(ctx?.app?.version || "");
+  const known = /(?:^|[^0-9])[0-9]+\.[0-9]+\.[0-9]+(?:$|[^0-9])/.test(version);
+  if (known && !expectsBuiltInGoal(version))
+    return false;
   if (typeof ctx?.rpc !== "function")
-    return expectsBuiltInGoal(ctx?.app?.version);
+    return true;
   try {
     const goal = await ctx.rpc(nativeGoalRPC).get({ sessionID });
     if (goal === null)
