@@ -1599,6 +1599,18 @@ async function nativeOpenCodeGoalReservesSession(ctx, sessionID) {
     }
   }
 }
+async function byBraweGoalPluginInstalled(ctx) {
+  if (typeof ctx?.plugin?.list !== "function")
+    return true;
+  try {
+    const plugins = await ctx.plugin.list();
+    if (!Array.isArray(plugins))
+      return true;
+    return plugins.some((plugin) => plugin?.id === "@bybrawe/opencode-goal" || plugin?.source?.target === "@bybrawe/opencode-goal" || String(plugin?.source?.target || "").startsWith("@bybrawe/opencode-goal@"));
+  } catch {
+    return true;
+  }
+}
 
 // src/source/opencode2/native-runtime.js
 init_jobs();
@@ -2150,7 +2162,7 @@ function createNativeLoopRuntime(options = {}) {
   };
   async function goalReserves(scope) {
     try {
-      if (await nativeGoalReservesSession(scope.directory, scope.sessionID))
+      if ((typeof options.dedicatedGoalInstalled !== "function" || await options.dedicatedGoalInstalled()) && await nativeGoalReservesSession(scope.directory, scope.sessionID))
         return true;
       return typeof options.nativeGoalReservesSession === "function" ? Boolean(await options.nativeGoalReservesSession(scope.sessionID)) : false;
     } catch (error) {
@@ -3778,6 +3790,7 @@ var OpenCodeLoopNativePlugin = Object.freeze({
       directory,
       scopeAllowed: (scope) => ownsSession(scope.sessionID),
       nativeGoalReservesSession: (sessionID) => nativeOpenCodeGoalReservesSession(ctx, sessionID),
+      dedicatedGoalInstalled: () => byBraweGoalPluginInstalled(ctx),
       prompt,
       command: typeof ctx.session.command === "function" ? (request) => ctx.session.command(request) : undefined,
       wait: typeof ctx.session.wait === "function" ? (request) => ctx.session.wait(request) : undefined,
