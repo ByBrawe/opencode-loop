@@ -10,7 +10,7 @@ V2 prompt admission and durable inbox/execution/compaction events own scheduling
 
 Automatic compaction remains host-owned. On OpenCode 2 versions exposing public `session.compact`, Loop's explicit native compaction is capability-gated and waits for its own manual `session.compaction.started` input ID, compaction completion, and a session terminal event. Older hosts reject unsupported compaction before scheduling.
 
-Prompt/command timers, watch and stop conditions, verification, preflight/postrun, notifications, checkpoints and diagnostic commands use the V2 runtime. Uncertain restart admissions pause for review rather than replaying potentially admitted work. The dedicated `@bybrawe/opencode-goal` plugin owns `/goal`; legacy Loop Goal records are preserved and are not silently reinterpreted as new Goal contracts.
+Prompt/command timers, watch and stop conditions, verification, preflight/postrun, notifications, checkpoints and diagnostic commands use the V2 runtime. Uncertain restart admissions pause for review rather than replaying potentially admitted work. OpenCode 2.2.x includes a native `/goal` feature. Loop does not install or maintain the separate `@bybrawe/opencode-goal` plugin; older Loop Goal records remain on disk and are not reinterpreted as native Goal contracts.
 
 
 **Idle-safe auto-continue, scheduled OpenCode work, and background loops.**
@@ -23,49 +23,21 @@ OpenCode Loop adds `/loop`, scheduled prompt/command/shell jobs, compact schedul
 
 ### Recommended OpenCode 2 setup
 
-Install **both packages separately**:
+Install **OpenCode Loop alone**:
 
 ```bash
 npx -y @bybrawe/opencode-loop@latest
-npx -y @bybrawe/opencode-goal@latest
 ```
 
-This is the recommended setup. The two installers stay independent:
+Loop installs, updates, and removes **only Loop**. It never invokes, installs, upgrades, or uninstalls `@bybrawe/opencode-goal`. OpenCode 2.2.x already has a native `/goal`; the separate ByBrawe Goal plugin is not required for Loop.
 
-- the Loop command installs or updates **OpenCode Loop only**;
-- the Goal command installs or updates the dedicated **OpenCode Goal** plugin;
-- Loop does **not** install, detect, refresh, migrate, or otherwise modify `@bybrawe/opencode-goal` during a normal install/update;
-- Loop omits/removes its older experimental `/loop-goal*` command files by default.
-
-OpenCode Goal owns `/goal`, durable objective state, evidence, verification, restart recovery, and semantic completion. See [OpenCode Goal](https://github.com/ByBrawe/opencode-goal).
-
-A combined `--with-goals` path remains only as a compatibility/convenience option; the recommended setup is the two separate commands above:
-
-```bash
-npx -y @bybrawe/opencode-loop@latest --with-goals
-```
-
-If you explicitly need Loop's **legacy experimental** `/loop-goal*` commands for compatibility, opt in with:
-
-```bash
-npx -y @bybrawe/opencode-loop@latest --with-loop-goals
-```
-
-Those legacy commands are not recommended for new setups; prefer the dedicated Goal plugin instead.
-
-`--loop-only` remains as an explicit alias for the new default Loop-only behavior, and `--without-loop-goals` remains as a compatibility alias for the new default clean command surface.
+The old `--with-goals` and `--with-loop-goals` installation modes have been **removed**; both now fail before changing configuration. `--loop-only` and `--without-loop-goals` remain accepted as compatibility aliases for the standalone default. Loop preserves any previously installed Goal package, user-owned commands, and project history.
 
 Run the relevant install command again to update that package. Then **fully restart OpenCode** and verify:
 
 ```text
 /loop-help
 /loop-doctor
-```
-
-If you installed Goal too:
-
-```text
-/goal status
 ```
 
 If both native commands work in terminal TUI but are missing from Windows Desktop, follow the [Windows Desktop command-registry diagnostic guide](docs/OPENCODE2-DESKTOP-WINDOWS.md). Do not replace native commands with legacy Markdown bridges.
@@ -391,11 +363,11 @@ A new OpenCode session does not silently inherit another session's jobs. `/loop-
 
 For work that must continue after the TUI/session closes, use `opencode-loopd`.
 
-## Loop and dedicated OpenCode Goals
+## Loop and optional Goal features
 
-They can be installed together. Recommended split:
+Loop works by itself. It can also coexist with independently installed Goal solutions, but does not install or manage them. Recommended split:
 
-- use **`/goal`** for durable outcome-driven work, evidence, verification, restart recovery, and semantic completion;
+- use OpenCode's native **`/goal`** for a built-in objective workflow, or install ByBrawe Goal separately if its stronger evidence contracts are needed;
 - use **`/loop`**, `/loop-command`, `/loop-shell`, and `opencode-loopd` for scheduling/repetition/background infrastructure.
 
 A prompt-producing Loop and an active dedicated `/goal` should not both own autonomous continuation of the **same session**. The runtime therefore blocks a new prompt Loop when it detects an active dedicated Goal for that session.
@@ -408,13 +380,7 @@ Recommended choices are to finish/pause the Goal or use a separate session. Adva
 
 That escape hatch can create competing autonomous turns; use it only when that is intentional.
 
-Loop's older experimental `/loop-goal*` commands are omitted by default. They remain available only as an explicit compatibility opt-in with `--with-loop-goals`. For new strongly verified Goal work, use the separate [OpenCode Goal](https://github.com/ByBrawe/opencode-goal) plugin:
-
-```bash
-npx -y @bybrawe/opencode-goal@latest
-```
-
-## Recommended development loop
+Loop's older experimental `/loop-goal*` commands are omitted by default. The former `--with-loop-goals` mode is no longer supported. Existing Goal state is preserved; no automatic migration or deletion is performed.\n\n## Recommended development loop
 
 ```text
 /loop --name dev --ask-never --safe --no-overlap --batch 5 --compact-every 200m --checkpoint-only --progress-file progress.md Treat progress.md as the project state. Continue with the next unfinished TODO, implement it, mark completed items, add useful follow-up TODOs, run tests/lint/build when available, and keep going while work remains.
