@@ -37,7 +37,10 @@ export function createNativeLoopRuntime(options = {}) {
   const report = (error) => { try { options.onError?.(error) } catch {} }
   async function goalReserves(scope) {
     try {
-      if (await nativeGoalReservesSession(scope.directory, scope.sessionID)) return true
+      // A removed third-party Goal must not reserve sessions forever through
+      // orphaned .opencode/goals files. Unknown inventories keep the old guard.
+      if ((typeof options.dedicatedGoalInstalled !== "function" || await options.dedicatedGoalInstalled()) &&
+          await nativeGoalReservesSession(scope.directory, scope.sessionID)) return true
       return typeof options.nativeGoalReservesSession === "function"
         ? Boolean(await options.nativeGoalReservesSession(scope.sessionID))
         : false
