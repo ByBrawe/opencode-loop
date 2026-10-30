@@ -54,7 +54,7 @@ assert.strictEqual(validateRelease(request, pkg, env), request)
 for (const change of [{ GITHUB_REPOSITORY: "someone/fork" }, { GITHUB_REF: "refs/heads/release" }, { GITHUB_SHA: "main" }]) assert.throws(() => validateRelease(request, pkg, { ...env, ...change }))
 assert.throws(() => validateRelease({ ...request, version: "9.0.0" }, pkg, env))
 assert.throws(() => validateRelease(request, { ...pkg, version: "0.6.5" }, env))
-assert.equal(releaseDecision(404, null, request, sha, "0.6.9", true)
+assert.equal(releaseDecision(404, null, request, sha, "0.6.9"), true)
 for (const status of [401, 403, 429, 500, 503]) assert.throws(() => releaseDecision(status, null, request, sha, "0.6.0"))
 assert.throws(() => releaseDecision(404, null, request, sha, "0.7.0"))
 const manifest = { ...pkg, gitHead: sha }
