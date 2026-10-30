@@ -70,7 +70,8 @@ export async function nativeOpenCodeGoalReservesSession(ctx, sessionID) {
     // the RPC is absent, and Loop is allowed to run normally.
     if (typeof ctx?.plugin?.list !== "function") return expectsBuiltInGoal(ctx?.app?.version)
     try {
-      const plugins = await ctx.plugin.list()
+      const response = await ctx.plugin.list()
+      const plugins = Array.isArray(response) ? response : response?.data
       if (!Array.isArray(plugins)) return true
       return plugins.some((plugin) => plugin?.id === "opencode.goal")
     } catch {
@@ -85,7 +86,8 @@ export async function byBraweGoalPluginInstalled(ctx) {
   // harmless after the separate Goal plugin has been uninstalled.
   if (typeof ctx?.plugin?.list !== "function") return true
   try {
-    const plugins = await ctx.plugin.list()
+    const response = await ctx.plugin.list()
+    const plugins = Array.isArray(response) ? response : response?.data
     if (!Array.isArray(plugins)) return true
     return plugins.some((plugin) =>
       plugin?.id === "@bybrawe/opencode-goal" ||
