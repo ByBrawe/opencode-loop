@@ -59,6 +59,7 @@ try {
   assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "2.2.4" } }, nativeSessionID), true, "modern host without Goal RPC must fail closed")
   const unavailable = () => ({ get: async () => { throw { type: "rpc.unavailable" } } })
   assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "2.2.4" }, rpc: unavailable, plugin: { list: async () => [] } }, nativeSessionID), false, "disabled native Goal should not block Loop")
+  assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "2.2.4" }, rpc: unavailable, plugin: { list: async () => ({ location: { directory }, data: [] }) } }, nativeSessionID), false, "official wrapped plugin catalog with no native Goal must not block Loop")
   assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "2.2.4" }, rpc: unavailable, plugin: { list: async () => [{ id: "opencode.goal" }] } }, nativeSessionID), true, "Goal registered but RPC unavailable must block")
   assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "2.2.4" }, rpc: unavailable, plugin: { list: async () => { throw Error("offline") } } }, nativeSessionID), true, "unverified Goal state fails closed")
   assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "2.2.4" }, rpc: () => ({ get: async () => { throw Error("transient error") } }) }, nativeSessionID), true)
@@ -87,7 +88,9 @@ try {
 
   const absentGoal = { plugin: { list: async () => [] } }
   assert.equal(await byBraweGoalPluginInstalled(absentGoal), false, "standalone Loop has no separate Goal plugin")
+  assert.equal(await byBraweGoalPluginInstalled({ plugin: { list: async () => ({ location: { directory }, data: [] }) } }), false, "official wrapped catalog must release orphaned ByBrawe Goal shards")
   assert.equal(await byBraweGoalPluginInstalled({ plugin: { list: async () => [{ id: "@bybrawe/opencode-goal" }] } }), true)
+  assert.equal(await byBraweGoalPluginInstalled({ plugin: { list: async () => ({ location: { directory }, data: [{ id: "@bybrawe/opencode-goal" }] }) } }), true)
   assert.equal(await byBraweGoalPluginInstalled({ plugin: { list: async () => [{ source: { target: "@bybrawe/opencode-goal@1.3.49" } }] } }), true)
   assert.equal(await byBraweGoalPluginInstalled({}), true, "older hosts retain conservative disk guard")
   assert.equal(await byBraweGoalPluginInstalled({ plugin: { list: async () => { throw Error("catalog offline") } } }), true)
