@@ -9,14 +9,6 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const installer = path.join(root, "scripts", "install-with-goals.mjs")
 const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-loop-goal-companion-"))
 const fakeNpm = path.join(temporaryRoot, "fake-npm.mjs")
-const expectedGoalExec = [
-  "exec",
-  "--yes",
-  "--package=@bybrawe/opencode-goal@latest",
-  "--",
-  "opencode-goal",
-]
-
 await fs.writeFile(fakeNpm, `
 import { appendFileSync } from "node:fs"
 const log = process.env.FAKE_NPM_LOG
@@ -136,25 +128,16 @@ try {
   assert.equal(commented.code, 0, commented.stderr)
   assert.deepEqual(await calls(commentedLog), [], "a package name mentioned only in JSONC comments must not trigger a network update")
 
-  const explicitConfig = path.join(temporaryRoot, "explicit")
-  const explicitLog = path.join(temporaryRoot, "explicit.log")
-  const explicit = await runInstaller(explicitConfig, ["--with-goals"], { FAKE_NPM_LOG: explicitLog })
-  assert.equal(explicit.code, 0, explicit.stderr)
-  assert.deepEqual(await calls(explicitLog), [expectedGoalExec], "--with-goals must install the companion even when it is absent")
-
-  const explicitCleanConfig = path.join(temporaryRoot, "explicit-clean")
-  const explicitCleanLog = path.join(temporaryRoot, "explicit-clean.log")
-  const explicitClean = await runInstaller(explicitCleanConfig, ["--with-goals", "--without-loop-goals"], { FAKE_NPM_LOG: explicitCleanLog })
-  assert.equal(explicitClean.code, 0, explicitClean.stderr)
-  assert.deepEqual(await calls(explicitCleanLog), [expectedGoalExec], "the clean command surface option must compose with --with-goals")
-  assert.deepEqual(await loopGoalCommands(explicitCleanConfig), [], "combined install must keep the stronger Goals plugin without legacy Loop Goal command clutter")
-
-  const legacyGoalConfig = path.join(temporaryRoot, "legacy-loop-goals")
-  const legacyGoalLog = path.join(temporaryRoot, "legacy-loop-goals.log")
-  const legacyGoal = await runInstaller(legacyGoalConfig, ["--with-loop-goals"], { FAKE_NPM_LOG: legacyGoalLog })
-  assert.equal(legacyGoal.code, 0, legacyGoal.stderr)
-  assert.deepEqual(await calls(legacyGoalLog), [], "--with-loop-goals must not install the dedicated Goal package")
-  assert.ok((await loopGoalCommands(legacyGoalConfig)).length > 0, "--with-loop-goals must explicitly restore the legacy experimental command surface")
+  // Removed combined installer modes must fail before touching a config.
+  for (const flag of ["--with-goals", "--with-loop-goals"]) {
+    const config = path.join(temporaryRoot, "rejected-" + flag.slice(2))
+    const log = config + ".log"
+    const rejected = await runInstaller(config, [flag], { FAKE_NPM_LOG: log })
+    assert.equal(rejected.code, 2, flag + " must be explicitly rejected")
+    assert.match(rejected.stderr, /Unsupported Loop option/)
+    assert.deepEqual(await calls(log), [], "rejected mode must not spawn an npm Goal installer")
+    assert.equal(await exists(path.join(config, "opencode.json")), false, "rejected mode must not change config")
+  }
 
   const optOutConfig = path.join(temporaryRoot, "opt-out")
   const optOutLog = path.join(temporaryRoot, "opt-out.log")
@@ -171,29 +154,19 @@ try {
   assert.equal(untouched.code, 0, untouched.stderr)
   assert.deepEqual(await calls(untouchedLog), [], "default Loop update must perform zero Goal network work even when Goal is already installed")
 
-  const explicitFailureConfig = path.join(temporaryRoot, "explicit-failure")
-  const explicitFailureLog = path.join(temporaryRoot, "explicit-failure.log")
-  const explicitFailure = await runInstaller(explicitFailureConfig, ["--with-goals"], { FAKE_NPM_LOG: explicitFailureLog, FAKE_NPM_EXIT: "9" })
-  assert.equal(explicitFailure.code, 9, "an explicitly requested companion install must fail closed")
-  assert.match(explicitFailure.stderr, /companion install\/update failed/)
-
-  const conflicting = await runInstaller(path.join(temporaryRoot, "conflicting"), ["--with-goals", "--loop-only"])
-  assert.equal(conflicting.code, 2)
-  assert.match(conflicting.stderr, /either --with-goals or --loop-only/)
-
   const helpLog = path.join(temporaryRoot, "help.log")
-  const help = await runInstaller(path.join(temporaryRoot, "help"), ["--with-goals", "--help"], { FAKE_NPM_LOG: helpLog })
+  const help = await runInstaller(path.join(temporaryRoot, "help"), ["--help"], { FAKE_NPM_LOG: helpLog })
   assert.equal(help.code, 0, help.stderr)
   assert.match(help.stdout, /OpenCode Loop installer\/updater/)
-  assert.match(help.stdout, /--with-goals/)
+  assert.match(help.stdout, /old --with-goals/)
   assert.match(help.stdout, /--loop-only/)
   assert.match(help.stdout, /--with-loop-goals/)
   assert.match(help.stdout, /--without-loop-goals/)
-  assert.match(help.stdout, /Default install\/update touches only OpenCode Loop/)
-  assert.match(help.stdout, /Loop uninstall never removes Goal/)
+  assert.match(help.stdout, /Loop installs and uninstalls only/)
+  assert.match(help.stdout, /Loop never invokes, installs, updates or removes the Goal package/)
   assert.deepEqual(await calls(helpLog), [], "help/version flows must never install companion packages")
 
-  console.log("OpenCode Loop Goals companion installer test passed")
+  console.log("OpenCode Loop standalone installer regression test passed")
 } finally {
   await fs.rm(temporaryRoot, { recursive: true, force: true })
 }
