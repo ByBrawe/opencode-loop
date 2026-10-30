@@ -74,3 +74,21 @@ export async function nativeOpenCodeGoalReservesSession(ctx, sessionID) {
     }
   }
 }
+
+export async function byBraweGoalPluginInstalled(ctx) {
+  // Old hosts lack a plugin inventory; retain the conservative filesystem
+  // reservation there. A known-empty modern inventory makes orphaned files
+  // harmless after the separate Goal plugin has been uninstalled.
+  if (typeof ctx?.plugin?.list !== "function") return true
+  try {
+    const plugins = await ctx.plugin.list()
+    if (!Array.isArray(plugins)) return true
+    return plugins.some((plugin) =>
+      plugin?.id === "@bybrawe/opencode-goal" ||
+      plugin?.source?.target === "@bybrawe/opencode-goal" ||
+      String(plugin?.source?.target || "").startsWith("@bybrawe/opencode-goal@"))
+  } catch {
+    // An unreadable inventory is not proof of a clean removal.
+    return true
+  }
+}
