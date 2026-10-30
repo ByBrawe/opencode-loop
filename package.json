@@ -1,6 +1,6 @@
 {
   "name": "@bybrawe/opencode-loop",
-  "version": "0.6.9",
+  "version": "0.6.10",
   "description": "Idle-safe /loop scheduling and background automation for OpenCode; standalone installation without Goal package dependencies.",
   "type": "module",
   "main": "src/plugin.js",
