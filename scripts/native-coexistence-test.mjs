@@ -54,6 +54,8 @@ try {
   }
   assert.equal(nativeReads, 5)
   assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "2.0.18" } }, nativeSessionID), false, "old V2 hosts never had native Goal")
+  assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "2.1.4" }, rpc: () => ({ get: async () => { throw Error("legacy host RPC error") } }) }, nativeSessionID), false, "legacy RPC errors cannot block a pre-native-Goal host")
+  assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "opencode v2.0.11" }, rpc: () => ({ get: async () => { throw { type: "rpc.method_not_found" } } }) }, nativeSessionID), false, "old host must bypass Goal RPC entirely")
   assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "2.2.4" } }, nativeSessionID), true, "modern host without Goal RPC must fail closed")
   const unavailable = () => ({ get: async () => { throw { type: "rpc.unavailable" } } })
   assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "2.2.4" }, rpc: unavailable, plugin: { list: async () => [] } }, nativeSessionID), false, "disabled native Goal should not block Loop")
