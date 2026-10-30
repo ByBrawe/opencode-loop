@@ -88,6 +88,9 @@
     "@opencode/plugin": "2.0.22"
   },
   "peerDependenciesMeta": {
+    "@opencode-ai/plugin": {
+      "optional": true
+    },
     "@opentui/core": {
       "optional": true
     },
