@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — OpenTUI 0.8 compatibility source update
+
+- Extend optional `@opentui/core` and `@opentui/solid` peer support to 0.8.x while preserving 0.5.14–0.7.x; raise the Solid peer minimum to upstream 1.9.12 (recommend 1.9.16+ for the security update).
+- Synchronize the npm lockfile's root manifest with package version 0.6.10 and new peer constraints. No bundled renderer, server entry, or scheduler authority changes.
+- Keep the existing strict packaged-consumer peer assertion and provide manual Bun rendering validation for OpenTUI 0.8.1 before claiming runtime verification. CI/Actions and automatic npm releases remain disabled; npm 0.6.10 is unchanged.
+
 ## 0.6.10 — 2026-10-30
 
 - Ship the read-only native OpenCode 2 Loop **TUI sidebar** and status RPC, originally contributed by [@zhek](https://github.com/zhek) ([#165](https://github.com/ByBrawe/opencode-loop/pull/165)), integrated with attribution in [#190](https://github.com/ByBrawe/opencode-loop/pull/190). Tests cover OpenTUI 0.5.14 and 0.7.0 rendering, session isolation and cleanup. Real remote/split-cache TUI auto-discovery remains unverified ([#191](https://github.com/ByBrawe/opencode-loop/issues/191)).

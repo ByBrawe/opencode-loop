@@ -1,6 +1,6 @@
 # OpenCode Loop
 
-## Native OpenCode 2 (0.6.9)
+## Native OpenCode 2 (0.6.10)
 
 The npm and V2 entrypoints use the official `@opencode/plugin` `Plugin.define()` contract. The installer now registers the exact `@bybrawe/opencode-loop` package in OpenCode's plural `plugins` configuration instead of copying a loose global plugin directory. OpenCode therefore resolves `@opencode/plugin` from Loop's own production dependency graph; explicit `--legacy-v1` remains a separate compatibility path.
 
@@ -17,7 +17,9 @@ Prompt/command timers, watch and stop conditions, verification, preflight/postru
 
 OpenCode Loop adds `/loop`, scheduled prompt/command/shell jobs, compact scheduling, verification/checkpoints, and the `opencode-loopd` background daemon.
 
-> **Current native OpenCode 2 release: `0.6.9`.** The release workflow publishes this package only after all verified release gates pass. For a not-yet-published package, use the previously published `0.6.8` until the npm registry confirms `0.6.9`.
+> **Current published native OpenCode 2 release: `0.6.10`.** GitHub Actions workflows have been removed; future releases require an explicit, separately verified manual publication.
+
+**OpenTUI 0.8 source update (not published):** The `main` package manifest now permits optional 0.8.x peers alongside 0.5–0.7. The published npm 0.6.10 still declares its older peer range until a new release is made. OpenCode 2.2.3+ requires matching OpenTUI 0.8.x core/Solid; use `solid-js >=1.9.16` to avoid the older Seroval dependency advisory. The actual 0.8 Bun render has not yet been run in this environment. No Actions will be started.
 
 ## Install or update
 
