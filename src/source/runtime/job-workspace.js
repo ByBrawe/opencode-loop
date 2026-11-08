@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs"
 import path from "node:path"
 import { safeID } from "../core/args.js"
 import { decoratePrompt, isGoalJob } from "../core/jobs.js"
-import { stateDir, ensureDir } from "../core/state.js"
+import { stateDir, ensureDir, ensureStateDir } from "../core/state.js"
 import { appendLoopLog as defaultAppendLoopLog, readSmallTextFile as defaultReadSmallTextFile, runProcess as defaultRunProcess } from "../core/process.js"
 import { buildGoalPrompt as defaultBuildGoalPrompt } from "./goal-runtime.js"
 
@@ -133,6 +133,7 @@ export function createJobWorkspaceRuntime(options = {}) {
     if (!status.stdout.trim()) return
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-")
     const checkpointDir = path.join(stateDir(directory), "checkpoints", safeID(sessionID))
+    await ensureStateDir(directory)
     await ensureDir(checkpointDir)
     const diff = await runProcess("git", ["diff", "--binary"], directory, 120_000)
     const staged = await runProcess("git", ["diff", "--cached", "--binary"], directory, 120_000)

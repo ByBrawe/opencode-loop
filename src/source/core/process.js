@@ -1,11 +1,11 @@
 import { promises as fs } from "node:fs"
 import path from "node:path"
 import { spawn } from "node:child_process"
-import { stateDir, ensureDir } from "./state.js"
+import { stateDir, ensureStateDir } from "./state.js"
 
 export async function appendLoopLog(directory, line, extra = {}) {
   try {
-    await ensureDir(stateDir(directory))
+    await ensureStateDir(directory)
     await fs.appendFile(path.join(stateDir(directory), "loop.log"), JSON.stringify({ time: new Date().toISOString(), line, ...extra }) + "\n")
   } catch {}
 }

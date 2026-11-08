@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs"
 import path from "node:path"
 import { dedicatedGoalOwnsContinuation } from "../src/source/runtime/companion-goal.js"
+import { ensureStateDir } from "../src/source/core/state.js"
 
 const LOCK_STALE_MS = 30_000
 const LOCK_RETRY_MS = 25
@@ -96,9 +97,8 @@ async function writeJsonAtomic(file, value) {
 }
 
 async function acquireLock(project) {
-  const directory = pulseDirectory(project)
   const lock = pulseLockDirectory(project)
-  await fs.mkdir(directory, { recursive: true })
+  await ensureStateDir(project)
 
   for (let attempt = 0; attempt < LOCK_RETRIES; attempt += 1) {
     try {
