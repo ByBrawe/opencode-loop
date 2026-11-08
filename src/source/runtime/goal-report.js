@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs"
 import path from "node:path"
 import { DEFAULT_GOAL_MAX_NO_PROGRESS, safeID } from "../core/args.js"
 import { isGoalJob, goalStatusText } from "../core/jobs.js"
-import { stateDir, ensureDir } from "../core/state.js"
+import { stateDir, ensureDir, ensureStateDir } from "../core/state.js"
 
 const GOAL_REPORT_DIR = "goals"
 
@@ -47,6 +47,7 @@ export function goalReportText(job) {
 export async function writeGoalReport(directory, sessionID, job) {
   if (!isGoalJob(job)) return
   const target = job.goalEvidenceFile ? path.resolve(directory, job.goalEvidenceFile) : goalReportPath(directory, sessionID, job)
+  if (!job.goalEvidenceFile) await ensureStateDir(directory)
   await ensureDir(path.dirname(target))
   await fs.writeFile(target, goalReportText(job), "utf8")
 }
