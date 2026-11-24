@@ -1,11 +1,12 @@
 # Changelog
 
-## Unreleased — OpenTUI 0.8 compatibility source update
+## Unreleased — OpenCode 2.4 compatibility and maintenance
 
-- Create `.opencode/opencode-loop/.gitignore` containing an explanatory comment and `*` whenever Loop first creates its state directory, so runtime state, checkpoints, and logs cannot be committed accidentally. An existing `.gitignore` is never overwritten.
-- Extend optional `@opentui/core` and `@opentui/solid` peer support to 0.8.x while preserving 0.5.14–0.7.x; raise the Solid peer minimum to upstream 1.9.12 (recommend 1.9.16+ for the security update).
-- Synchronize the npm lockfile's root manifest with package version 0.6.10 and new peer constraints. No bundled renderer, server entry, or scheduler authority changes.
-- Keep the existing strict packaged-consumer peer assertion and provide manual Bun rendering validation for OpenTUI 0.8.1 before claiming runtime verification. CI/Actions and automatic npm releases remain disabled; npm 0.6.10 is unchanged.
+- Integrate @zhek's PR #198: create an exclusive .gitignore for Loop runtime state while preserving user rules. Check the state directory's project-local path before and after creation; reject existing symbolic links/junctions on that path.
+- Accept optional OpenTUI 0.8.x and 0.9.x alongside 0.5.14–0.7.x; synchronize the lockfile's root peer metadata. The pinned SDK baseline is unchanged pending real-host verification. OpenTUI 0.9.4 is the OpenCode 2.4.1 renderer target, not yet a proven runtime.
+- Treat OpenCode 2.4+ partial plugin catalogs as uncertain: a missing built-in Goal RPC cannot authorize Loop admission, and a possibly loaded dedicated Goal's unfinished state remains reserved. Successful native Goal absence/completion still releases that guard. This is deliberately conservative when a Goal is disabled or uninstalled and stale state remains.
+- Remove the obsolete YAML-dependent release assertions and Actions polling, preserving offline immutable-source checks. Document manual releases only; no CI workflow is restored.
+- Published npm 0.6.10 remains unchanged; source changes require a new, locally verified release.
 
 ## 0.6.10 — 2026-10-30
 

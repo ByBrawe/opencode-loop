@@ -1,7 +1,6 @@
 import assert from "node:assert/strict"
 import { readFile, appendFile } from "node:fs/promises"
 import { pathToFileURL } from "node:url"
-import { setTimeout as delay } from "node:timers/promises"
 
 export function validateRelease(request, pkg, env) {
   assert.equal(env.GITHUB_REPOSITORY, "ByBrawe/opencode-loop", "wrong release repository")
@@ -49,36 +48,16 @@ async function main() {
     return
   }
   if (mode === "ci") {
-    const headers = { Accept: "application/vnd.github+json" }
-    if (process.env.GH_TOKEN) headers.Authorization = `Bearer ${process.env.GH_TOKEN}`
-    const deadline = Date.now() + 15 * 60_000
-    while (Date.now() < deadline) {
-      const runs = []
-      for (let page = 1; page <= 10; page++) {
-        const result = await json(`https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/actions/runs?head_sha=${sha}&per_page=100&page=${page}`, headers)
-        runs.push(...result.workflow_runs)
-        if (runs.length >= result.total_count || result.workflow_runs.length < 100) break
-        if (page === 10) throw new Error("Cannot safely paginate release checks")
-      }
-      const gates = ["CI", "Native V2 CI"].map((name) => {
-        const run = runs.filter((item) => item.name === name && item.head_sha === sha && item.head_branch === "main" && item.event === "push" && item.repository?.full_name === process.env.GITHUB_REPOSITORY).sort((a, b) => Number(b.id) - Number(a.id))[0]
-        return { name, id: run?.id, status: run?.status, conclusion: run?.conclusion }
-      })
-      console.log(JSON.stringify({ sha, gates }))
-      if (gates.some((gate) => gate.status === "completed" && gate.conclusion !== "success")) throw new Error("Exact-main CI failed; npm publication refused")
-      if (gates.every((gate) => gate.status === "completed" && gate.conclusion === "success")) return
-      await delay(15000)
-    }
-    throw new Error("Timed out waiting for exact-main CI")
+    throw new Error("Automatic Actions publication is disabled; see RELEASING.md for manual release checks.")
   }
   if (mode === "decide") {
-    // Wait only for an absent, concurrently publishing companion. A different
-    // immutable source or an actual registry error fails immediately.
+    // An existing version must belong to the exact source. Registry errors
+    // fail closed; no companion package is required.
     const exact = await fetch(base + "/" + request.version, { signal: AbortSignal.timeout(20000) })
     const existing = exact.ok ? await exact.json() : null
     const latest = exact.status === 404 ? await json(base + "/latest") : null
     const publish = releaseDecision(exact.status, existing, request, sha, latest?.version)
-    await appendFile(process.env.GITHUB_OUTPUT, `publish=${publish}\n`)
+    if (process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT, `publish=${publish}\n`)
     console.log(JSON.stringify({ publish, loop: request.version }))
     return
   }

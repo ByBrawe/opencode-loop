@@ -66,8 +66,8 @@
     "url": "https://github.com/ByBrawe/opencode-loop/issues"
   },
   "peerDependencies": {
-    "@opentui/core": ">=0.5.14 <0.9",
-    "@opentui/solid": ">=0.5.14 <0.9",
+    "@opentui/core": ">=0.5.14 <0.10",
+    "@opentui/solid": ">=0.5.14 <0.10",
     "solid-js": ">=1.9.12 <2"
   },
   "devDependencies": {

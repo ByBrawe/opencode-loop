@@ -1,8 +1,8 @@
 import assert from "node:assert/strict"
-import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile, symlink } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { readState, writeState, stateDir } from "../src/source/core/state.js"
+import { readState, writeState, stateDir, ensureStateDir } from "../src/source/core/state.js"
 
 // An unreadable existing session is not a new/empty session. The old fallback
 // silently returned zero jobs and let the next ordinary write replace all work.
@@ -29,6 +29,14 @@ try {
   await writeFile(ignoreFile, "custom-ignore\n")
   await writeState(root, sessionID, oldSnapshot)
   assert.equal(await readFile(ignoreFile, "utf8"), "custom-ignore\n", "an existing .gitignore must never be overwritten")
+
+  const linkedProject = path.join(root, "linked-project")
+  const outside = path.join(root, "outside")
+  await mkdir(linkedProject)
+  await mkdir(outside)
+  await symlink(outside, path.join(linkedProject, ".opencode"), process.platform === "win32" ? "junction" : "dir")
+  await assert.rejects(ensureStateDir(linkedProject), /unsafe_path/)
+  assert.deepEqual(await readdir(outside), [], "state setup must not create .gitignore outside its project")
 
   const corrupt = '{"version":4,"jobs":['
   await mkdir(stateDir(root), { recursive: true })

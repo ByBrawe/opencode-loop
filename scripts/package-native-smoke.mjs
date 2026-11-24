@@ -155,7 +155,7 @@ try {
     assert.ok(manifest.peerDependencies?.[peer], `missing peer ${peer}`)
     assert.equal(manifest.peerDependenciesMeta?.[peer]?.optional, true, `${peer} must be optional`)
     if (peer === "@opentui/core" || peer === "@opentui/solid") {
-      assert.equal(manifest.peerDependencies[peer], ">=0.5.14 <0.9", "native sidebar must accept the OpenTUI 0.8 host without dropping 0.5/0.7")
+      assert.equal(manifest.peerDependencies[peer], ">=0.5.14 <0.10", "native sidebar must accept OpenTUI 0.8/0.9 without dropping 0.5/0.7")
     }
     if (peer === "solid-js") assert.equal(manifest.peerDependencies[peer], ">=1.9.12 <2")
   }

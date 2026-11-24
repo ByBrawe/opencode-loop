@@ -1,50 +1,8 @@
 import assert from "node:assert/strict"
-import { readFile } from "node:fs/promises"
-import path from "node:path"
-import { fileURLToPath } from "node:url"
 import { validateRelease, releaseDecision, assertPublishedSource } from "./native-release.mjs"
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
-const workflow = await readFile(path.join(repoRoot, ".github/workflows/publish-npm.yml"), "utf8")
-const nativeV2Workflow = await readFile(path.join(repoRoot, ".github/workflows/native-v2-ci.yml"), "utf8")
-assert.match(workflow, /ref:\s*\$\{\{ github\.sha \}\}/, "checkout must use the immutable trigger SHA")
-assert.doesNotMatch(workflow, /ref:\s*main\b/, "publication cannot checkout moving main")
-assert.match(workflow, /git merge-base --is-ancestor "\$GITHUB_SHA" origin\/main/)
-assert.match(workflow, /COMMIT_SHA="\$GITHUB_SHA"/)
-assert.match(workflow, /group:\s*npm-release/)
-assert.match(workflow, /cancel-in-progress:\s*false/)
-assert.match(workflow, /branches:\s*\[main\]/)
-assert.match(workflow, /paths:\s*\[\.github\/npm-release\.json\]/)
-assert.doesNotMatch(workflow, /release\/npm-v|git push|Remove one-shot release branch/, "main-only publication must not create or delete branches")
-assert.match(workflow, /needs:\s*\[native-regressions, real-native-loop\]/)
-assert.match(workflow, /node scripts\/native-release\.mjs ci/)
-assert.match(workflow, /git diff --exit-code -- src\/index.js src\/server.js src\/native.js/)
-assert.match(workflow, /npm run package:smoke/)
-assert.match(workflow, /OPENCODE_PACKAGE_SMOKE_REQUIRE_INSTALL:\s*\x271\x27/, "Windows/Linux npm release gate must require a strict clean consumer install, never a tarball fallback")
-assert.match(workflow, /windows-latest/)
-assert.match(workflow, /Decide whether npm publish is needed/)
-assert.match(workflow, /steps\.npm-state\.outputs\.publish == 'true'/)
-assert.match(workflow, /for attempt in \{1\.\.60\}/)
-assert.doesNotMatch(workflow, /npm view @bybrawe\/opencode-loop@latest/, "direct registry verification already checks latest; do not add a stale npm-view cache gate")
-assert.match(workflow, /native-release\.mjs verify/)
-assert.match(workflow, /node_modules\/@bybrawe\/opencode-loop\/scripts\/opencode2-loop-canary.mjs/)
-assert.doesNotMatch(workflow, /companion-goal|OPENCODE_GOAL_INSTALLER|@bybrawe\/opencode-goal@/, "Loop publication must never require Goal")
-assert.doesNotMatch(nativeV2Workflow, /npm install .*@bybrawe\/opencode-goal@/, "Loop CI must not install Goal")
-assert.doesNotMatch(workflow, /secrets\.NPM_TOKEN/)
-
-const publishIndex = workflow.indexOf("npm publish --access public")
-const verifyIndex = workflow.indexOf("Verify published version is readable from npm")
-const tagIndex = workflow.indexOf("Create tag and GitHub release")
-assert.ok(publishIndex >= 0 && verifyIndex > publishIndex)
-assert.ok(tagIndex > verifyIndex)
-assert.match(workflow.slice(tagIndex), /needs:\s*publish/, "GitHub release must depend on verified publication")
-for (const block of workflow.split(/- uses: actions\/checkout@/).slice(1)) assert.match(block.split(/\n\s*- (?:uses|name|run):/)[0], /persist-credentials:\s*false/)
-const publisher = workflow.slice(workflow.indexOf("  publish:\n"), workflow.indexOf("  github-release:\n"))
-assert.doesNotMatch(publisher, /contents:\s*write/, "OIDC publisher must not gain repository mutation privileges")
-
-assert.match(workflow, /for attempt in \{1\.\.12\}/, "clean published npm consumer must retry version propagation")
-assert.ok(workflow.includes('--prefer-online --cache "$VERIFY_DIR/npm-cache-$attempt"'), "consumer retries must not reuse a stale npm cache")
-assert.ok(workflow.includes("Published Loop standalone clean-install validation did not converge"), "clean Loop consumer must remain a hard release gate")
+// Only offline release/source identity regressions remain. The GitHub Actions
+// publisher and its workflow YAML were intentionally removed.
 
 const sha = "a".repeat(40)
 const request = { name: "@bybrawe/opencode-loop", version: "0.6.10", predecessor: "0.6.9" }
@@ -62,4 +20,4 @@ assert.equal(releaseDecision(200, manifest, request, sha), false)
 assert.throws(() => releaseDecision(200, { ...manifest, gitHead: "b".repeat(40) }, request, sha))
 assert.throws(() => assertPublishedSource({ ...manifest, gitHead: undefined }, pkg.name, pkg.version, sha))
 
-console.log("main-only publish workflow, source identity and registry failure regressions passed")
+console.log("Manual release source identity and registry failure regressions passed")

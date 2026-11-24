@@ -48,6 +48,15 @@ function expectsBuiltInGoal(version) {
   return major > 2 || (major === 2 && (minor > 2 || (minor === 2 && patch >= 1)))
 }
 
+// OpenCode 2.4+ may report a partial plugin inventory during activation.
+// An absent entry is not definitive evidence that a plugin is disabled.
+function usesAsyncPluginCatalog(version) {
+  const match = String(version || "").match(/(?:^|[^0-9])(\d+)\.(\d+)\.(\d+)(?:$|[^0-9])/)
+  if (!match) return false
+  const major = Number(match[1]), minor = Number(match[2])
+  return major > 2 || (major === 2 && minor >= 4)
+}
+
 export async function nativeOpenCodeGoalReservesSession(ctx, sessionID) {
   // OpenCode <2.2.1 has no built-in Goal and some older hosts return generic
   // RPC errors rather than rpc.unavailable. Never block a healthy older Loop.
@@ -66,7 +75,10 @@ export async function nativeOpenCodeGoalReservesSession(ctx, sessionID) {
   } catch (error) {
     const type = error?.type || error?.data?.type || error?.error?.type
     if (type !== "rpc.unavailable") return true
-    // The host may intentionally disable its built-in Goal. In that case
+    // In 2.4+ the inventory can be incomplete. Retain the reservation until
+    // a successful RPC reports no Goal or completion; do not race startup.
+    if (!known || usesAsyncPluginCatalog(version)) return true
+    // On older hosts, the host may intentionally disable its built-in Goal. In that case
     // the RPC is absent, and Loop is allowed to run normally.
     if (typeof ctx?.plugin?.list !== "function") return expectsBuiltInGoal(ctx?.app?.version)
     try {
@@ -81,9 +93,10 @@ export async function nativeOpenCodeGoalReservesSession(ctx, sessionID) {
 }
 
 export async function byBraweGoalPluginInstalled(ctx) {
-  // Old hosts lack a plugin inventory; retain the conservative filesystem
-  // reservation there. A known-empty modern inventory makes orphaned files
-  // harmless after the separate Goal plugin has been uninstalled.
+  // A partial 2.4+ inventory cannot prove the separate Goal is uninstalled.
+  // Keep the filesystem reservation if a live shard exists. Older hosts
+  // retain their inventory-based orphan cleanup behavior.
+  if (usesAsyncPluginCatalog(ctx?.app?.version)) return true
   if (typeof ctx?.plugin?.list !== "function") return true
   try {
     const response = await ctx.plugin.list()

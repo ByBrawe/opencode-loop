@@ -19,7 +19,9 @@ export async function ensureDir(directory) { await fs.mkdir(directory, { recursi
 // customized .gitignore survives updates.
 export async function ensureStateDir(directory) {
   const target = stateDir(directory)
+  await assertStatePathSafe(directory, target)
   await ensureDir(target)
+  await assertStatePathSafe(directory, target)
   try { await fs.writeFile(path.join(target, STATE_IGNORE_FILE), STATE_IGNORE_CONTENT, { flag: "wx" }) }
   catch (error) { if (error?.code !== "EEXIST") throw error }
   return target

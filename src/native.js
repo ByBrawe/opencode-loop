@@ -569,7 +569,9 @@ async function ensureDir(directory) {
 }
 async function ensureStateDir(directory) {
   const target = stateDir(directory);
+  await assertStatePathSafe(directory, target);
   await ensureDir(target);
+  await assertStatePathSafe(directory, target);
   try {
     await fs.writeFile(path3.join(target, STATE_IGNORE_FILE), STATE_IGNORE_CONTENT, { flag: "wx" });
   } catch (error) {
@@ -1587,6 +1589,13 @@ function expectsBuiltInGoal(version) {
   const major = Number(match[1]), minor = Number(match[2]), patch = Number(match[3]);
   return major > 2 || major === 2 && (minor > 2 || minor === 2 && patch >= 1);
 }
+function usesAsyncPluginCatalog(version) {
+  const match = String(version || "").match(/(?:^|[^0-9])(\d+)\.(\d+)\.(\d+)(?:$|[^0-9])/);
+  if (!match)
+    return false;
+  const major = Number(match[1]), minor = Number(match[2]);
+  return major > 2 || major === 2 && minor >= 4;
+}
 async function nativeOpenCodeGoalReservesSession(ctx, sessionID) {
   const version = String(ctx?.app?.version || "");
   const known = /(?:^|[^0-9])[0-9]+\.[0-9]+\.[0-9]+(?:$|[^0-9])/.test(version);
@@ -1605,6 +1614,8 @@ async function nativeOpenCodeGoalReservesSession(ctx, sessionID) {
     const type = error?.type || error?.data?.type || error?.error?.type;
     if (type !== "rpc.unavailable")
       return true;
+    if (!known || usesAsyncPluginCatalog(version))
+      return true;
     if (typeof ctx?.plugin?.list !== "function")
       return expectsBuiltInGoal(ctx?.app?.version);
     try {
@@ -1619,6 +1630,8 @@ async function nativeOpenCodeGoalReservesSession(ctx, sessionID) {
   }
 }
 async function byBraweGoalPluginInstalled(ctx) {
+  if (usesAsyncPluginCatalog(ctx?.app?.version))
+    return true;
   if (typeof ctx?.plugin?.list !== "function")
     return true;
   try {

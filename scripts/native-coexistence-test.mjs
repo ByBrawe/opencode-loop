@@ -58,6 +58,14 @@ try {
   assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "opencode v2.0.11" }, rpc: () => ({ get: async () => { throw { type: "rpc.method_not_found" } } }) }, nativeSessionID), false, "old host must bypass Goal RPC entirely")
   assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "2.2.4" } }, nativeSessionID), true, "modern host without Goal RPC must fail closed")
   const unavailable = () => ({ get: async () => { throw { type: "rpc.unavailable" } } })
+  // The 2.4+ catalog loads asynchronously. An empty list must not release
+  // a session before the native Goal RPC is registered.
+  for (const version of ["2.4.0", "2.4.1", "2.5.0", "3.0.0", "dev"]) {
+    assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version }, rpc: unavailable, plugin: { list: async () => [] } }, nativeSessionID), true)
+  }
+  assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "2.4.1" }, rpc: () => ({ get: async () => null }) }, nativeSessionID), false)
+  assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "2.4.1" }, rpc: () => ({ get: async () => ({ status: "complete" }) }) }, nativeSessionID), false)
+  assert.equal(await byBraweGoalPluginInstalled({ app: { version: "2.4.1" }, plugin: { list: async () => [] } }), true)
   assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "2.2.4" }, rpc: unavailable, plugin: { list: async () => [] } }, nativeSessionID), false, "disabled native Goal should not block Loop")
   assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "2.2.4" }, rpc: unavailable, plugin: { list: async () => ({ location: { directory }, data: [] }) } }, nativeSessionID), false, "official wrapped plugin catalog with no native Goal must not block Loop")
   assert.equal(await nativeOpenCodeGoalReservesSession({ app: { version: "2.2.4" }, rpc: unavailable, plugin: { list: async () => [{ id: "opencode.goal" }] } }, nativeSessionID), true, "Goal registered but RPC unavailable must block")
