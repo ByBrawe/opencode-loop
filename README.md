@@ -455,7 +455,7 @@ Patch checkpoints:
 .opencode/opencode-loop/checkpoints/
 ```
 
-Add `.opencode/opencode-loop/` to `.gitignore` if runtime state should not be committed.
+Loop automatically creates `.opencode/opencode-loop/.gitignore` containing an explanatory comment and `*` when it first creates the state directory, so runtime state, checkpoints, and logs are not committed by accident. An existing `.gitignore` in that directory is left untouched.
 
 ## Permissions
 

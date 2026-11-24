@@ -567,6 +567,17 @@ function statePath(directory, sessionID) {
 async function ensureDir(directory) {
   await fs.mkdir(directory, { recursive: true });
 }
+async function ensureStateDir(directory) {
+  const target = stateDir(directory);
+  await ensureDir(target);
+  try {
+    await fs.writeFile(path3.join(target, STATE_IGNORE_FILE), STATE_IGNORE_CONTENT, { flag: "wx" });
+  } catch (error) {
+    if (error?.code !== "EEXIST")
+      throw error;
+  }
+  return target;
+}
 function stateLockError(kind, detail) {
   const error = new Error(`OpenCode Loop state lock ${kind}: ${detail}`);
   error.code = "OPENCODE_LOOP_STATE_LOCK";
@@ -743,7 +754,7 @@ async function recoverDeadStateProcessLock(directory, canonical, stale, depth = 
 async function acquireStateProcessLock(directory, sessionID) {
   const targetDirectory = stateDir(directory);
   await assertStatePathSafe(directory, targetDirectory);
-  await ensureDir(targetDirectory);
+  await ensureStateDir(directory);
   await assertStatePathSafe(directory, targetDirectory);
   const target = statePath(directory, sessionID);
   const canonical = `${target}.lock`;
@@ -835,7 +846,7 @@ async function readStateFile(directory, sessionID, { backupCorrupt = true } = {}
   }
   if (backupCorrupt) {
     try {
-      await ensureDir(stateDir(directory));
+      await ensureStateDir(directory);
       await fs.copyFile(target, `${target}.corrupt-${Date.now()}`);
     } catch {}
   }
@@ -999,7 +1010,9 @@ async function removeState(directory, sessionID) {
     }
   });
 }
-var STATE_DIR = ".opencode/opencode-loop", STATE_BASELINE, stateWriteLocks, STATE_PROCESS_LOCK_TIMEOUT_MS = 5000, STATE_PROCESS_LOCK_POLL_MS = 20;
+var STATE_DIR = ".opencode/opencode-loop", STATE_IGNORE_FILE = ".gitignore", STATE_IGNORE_CONTENT = `# OpenCode Loop runtime state and logs; do not commit this directory.
+*
+`, STATE_BASELINE, stateWriteLocks, STATE_PROCESS_LOCK_TIMEOUT_MS = 5000, STATE_PROCESS_LOCK_POLL_MS = 20;
 var init_state = __esm(() => {
   STATE_BASELINE = Symbol("opencode-loop-state-baseline");
   stateWriteLocks = new Map;
@@ -1011,7 +1024,7 @@ import path4 from "path";
 import { spawn as spawn2 } from "child_process";
 async function appendLoopLog(directory, line, extra = {}) {
   try {
-    await ensureDir(stateDir(directory));
+    await ensureStateDir(directory);
     await fs2.appendFile(path4.join(stateDir(directory), "loop.log"), JSON.stringify({ time: new Date().toISOString(), line, ...extra }) + `
 `);
   } catch {}
@@ -1339,6 +1352,7 @@ ${text.trim().slice(0, 20000)}`);
       return;
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const checkpointDir = path6.join(stateDir(directory), "checkpoints", safeID(sessionID));
+    await ensureStateDir(directory);
     await ensureDir(checkpointDir);
     const diff = await runProcess2("git", ["diff", "--binary"], directory, 120000);
     const staged = await runProcess2("git", ["diff", "--cached", "--binary"], directory, 120000);

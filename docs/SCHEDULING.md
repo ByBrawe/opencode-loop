@@ -266,6 +266,8 @@ Normal plugin Loop jobs are session-bound and persist under:
 .opencode/opencode-loop/<session-id>.json
 ```
 
+The state directory is created with a `.gitignore` containing an explanatory comment and `*`, so session state, logs, and checkpoints stay out of the repository automatically. An existing `.gitignore` is never overwritten.
+
 Starting a new OpenCode session does not move old Loop jobs into the new session.
 
 `/loop-doctor` reports:

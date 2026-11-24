@@ -5,12 +5,26 @@ import path from "node:path"
 import { safeID } from "./args.js"
 
 const STATE_DIR = ".opencode/opencode-loop"
+const STATE_IGNORE_FILE = ".gitignore"
+const STATE_IGNORE_CONTENT = "# OpenCode Loop runtime state and logs; do not commit this directory.\n*\n"
 const STATE_BASELINE = Symbol("opencode-loop-state-baseline")
 const stateWriteLocks = new Map()
 
 export function stateDir(directory) { return path.join(directory, STATE_DIR) }
 function statePath(directory, sessionID) { return path.join(stateDir(directory), `${safeID(sessionID)}.json`) }
 export async function ensureDir(directory) { await fs.mkdir(directory, { recursive: true }) }
+
+// Keep runtime state and logs out of the project repository. The ignore file is
+// created only when it is missing and is never overwritten, so a user-owned or
+// customized .gitignore survives updates.
+export async function ensureStateDir(directory) {
+  const target = stateDir(directory)
+  await ensureDir(target)
+  try { await fs.writeFile(path.join(target, STATE_IGNORE_FILE), STATE_IGNORE_CONTENT, { flag: "wx" }) }
+  catch (error) { if (error?.code !== "EEXIST") throw error }
+  return target
+}
+
 export async function pathExists(filePath) { try { await fs.access(filePath); return true } catch { return false } }
 
 const STATE_PROCESS_LOCK_TIMEOUT_MS = 5_000
@@ -183,7 +197,7 @@ async function recoverDeadStateProcessLock(directory, canonical, stale, depth = 
 async function acquireStateProcessLock(directory, sessionID) {
   const targetDirectory = stateDir(directory)
   await assertStatePathSafe(directory, targetDirectory)
-  await ensureDir(targetDirectory)
+  await ensureStateDir(directory)
   await assertStatePathSafe(directory, targetDirectory)
   const target = statePath(directory, sessionID)
   const canonical = `${target}.lock`
@@ -273,7 +287,7 @@ async function readStateFile(directory, sessionID, { backupCorrupt = true } = {}
   // repeatedly creates an unbounded number of .corrupt-* backups.
   if (backupCorrupt) {
     try {
-      await ensureDir(stateDir(directory))
+      await ensureStateDir(directory)
       await fs.copyFile(target, `${target}.corrupt-${Date.now()}`)
     } catch {}
   }

@@ -20,6 +20,16 @@ try {
   assert.equal(oldSnapshot.jobs.length, 1)
   assert.equal(oldSnapshot.jobs[0].runCount, 7)
 
+  const ignoreFile = path.join(stateDir(root), ".gitignore")
+  assert.equal(
+    await readFile(ignoreFile, "utf8"),
+    "# OpenCode Loop runtime state and logs; do not commit this directory.\n*\n",
+    "state dir must ignore its runtime files automatically with an explanatory comment",
+  )
+  await writeFile(ignoreFile, "custom-ignore\n")
+  await writeState(root, sessionID, oldSnapshot)
+  assert.equal(await readFile(ignoreFile, "utf8"), "custom-ignore\n", "an existing .gitignore must never be overwritten")
+
   const corrupt = '{"version":4,"jobs":['
   await mkdir(stateDir(root), { recursive: true })
   await writeFile(file, corrupt)
